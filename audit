@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
+
+RED="\033[31m"
+YELLOW="\033[33m"
+GREEN="\033[32m"
+DIM="\033[2m"
+RESET="\033[0m"
+BOLD="\033[1m"
+CYAN="\033[36m"
+
+issues=()
+fixes=()
+
+echo -e "${BOLD}pyr${RESET} ${DIM}audit${RESET}"
+echo ""
+
+uncommitted=$(git status --short 2>/dev/null || true)
+if [ -n "$uncommitted" ]; then
+  staged=$(git diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
+  unstaged=$(git diff --name-only 2>/dev/null | wc -l | tr -d ' ')
+  untracked=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
+  parts=()
+  [ "$staged" -gt 0 ] && parts+=("${staged} staged")
+  [ "$unstaged" -gt 0 ] && parts+=("${unstaged} modified")
+  [ "$untracked" -gt 0 ] && parts+=("${untracked} untracked")
+  issues+=("${YELLOW}uncommitted: $(IFS=', '; echo "${parts[*]}")${RESET}")
+  fixes+=("${CYAN}git add -A && git commit${RESET}")
+fi
+
+unpushed=$(git log --oneline @{u}..HEAD 2>/dev/null | wc -l | tr -d ' ')
+if [ "$unpushed" -gt 0 ]; then
+  issues+=("${YELLOW}${unpushed} unpushed commit(s)${RESET}")
+  fixes+=("${CYAN}git push${RESET}")
+fi
+
+if [ -f build.zig ]; then
+  if zig build 2>/dev/null; then
+    echo -e "  ${GREEN}build${RESET}  ${DIM}ok${RESET}"
+  else
+    issues+=("${RED}build fails${RESET}")
+    fixes+=("${CYAN}zig build 2>&1 | head -20${RESET}")
+  fi
+else
+  echo -e "  ${DIM}build  no build.zig${RESET}"
+fi
+
+if [ -f build.zig.zon ]; then
+  local_version=$(grep -oP '\.version\s*=\s*"\K[^"]+' build.zig.zon 2>/dev/null || echo "?")
+  echo -e "  ${DIM}version${RESET}  ${local_version}"
+fi
+
+ci_result=$(gh run list --limit 1 --json conclusion,status 2>/dev/null || echo "[]")
+ci_conclusion=$(echo "$ci_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['conclusion'] if d else 'none')" 2>/dev/null || echo "none")
+ci_status=$(echo "$ci_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['status'] if d else 'none')" 2>/dev/null || echo "none")
+
+if [ "$ci_status" = "in_progress" ] || [ "$ci_status" = "queued" ]; then
+  echo -e "  ${YELLOW}ci${RESET}  ${ci_status}"
+elif [ "$ci_conclusion" = "failure" ]; then
+  issues+=("${RED}ci: tests failing${RESET}")
+  fixes+=("${CYAN}gh run view --log-failed${RESET}")
+elif [ "$ci_conclusion" = "success" ]; then
+  echo -e "  ${GREEN}ci${RESET}  ${DIM}passing${RESET}"
+else
+  echo -e "  ${DIM}ci  no runs${RESET}"
+fi
+
+if [ ${#issues[@]} -eq 0 ]; then
+  echo ""
+  echo -e "  ${GREEN}all clear${RESET}"
+else
+  echo ""
+  for i in "${!issues[@]}"; do
+    echo -e "  ${issues[$i]}"
+    if [ -n "${fixes[$i]:-}" ]; then
+      echo -e "    ${fixes[$i]}"
+    fi
+  done
+fi
+
+echo ""
