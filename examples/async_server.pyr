@@ -17,14 +17,14 @@ fn handle_json(req) {
 fn serve_request(server, routes, done) {
   conn = server.accept()
   raw = conn.read()
-  if raw == none {
+  if raw == nil {
     net.close(conn)
     done.send(1)
   } else {
     req = parse_request(raw)
-    if req != none {
+    if req != nil {
       handler = match_route(routes, req.method, req.path)
-      if handler != none {
+      if handler != nil {
         resp = handler(req)
         net.write(conn, resp)
       } else {

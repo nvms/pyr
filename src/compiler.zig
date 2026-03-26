@@ -9,6 +9,12 @@ const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ModuleLoader = @import("module.zig").ModuleLoader;
 const Module = @import("module.zig").Module;
 const stdlib = @import("stdlib.zig");
+const ffi = @import("ffi.zig");
+
+pub const CompileResult = struct {
+    func: *ObjFunction,
+    ffi_descs: []ffi.FfiDesc,
+};
 
 const VariantInfo = struct {
     type_name: []const u8,
@@ -43,6 +49,8 @@ pub const Compiler = struct {
     module_namespaces: std.StringHashMapUnmanaged(*Module),
     std_modules: std.StringHashMapUnmanaged(*const stdlib.StdModule),
     native_fns: std.StringHashMapUnmanaged(*ObjNativeFn),
+    ffi_descs: std.ArrayListUnmanaged(ffi.FfiDesc),
+    ffi_funcs: std.StringHashMapUnmanaged(u16),
 
     pub const Local = struct {
         name: []const u8,
@@ -55,11 +63,11 @@ pub const Compiler = struct {
         is_local: bool,
     };
 
-    pub fn compile(alloc: std.mem.Allocator, tree: ast.Ast) ?*ObjFunction {
+    pub fn compile(alloc: std.mem.Allocator, tree: ast.Ast) ?CompileResult {
         return compileModule(alloc, tree, null, ".");
     }
 
-    pub fn compileModule(alloc: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) ?*ObjFunction {
+    pub fn compileModule(alloc: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) ?CompileResult {
         const script = ObjFunction.create(alloc, "", 0);
         var compiler = Compiler{
             .alloc = alloc,
@@ -79,6 +87,8 @@ pub const Compiler = struct {
             .module_namespaces = .{},
             .std_modules = .{},
             .native_fns = .{},
+            .ffi_descs = .{},
+            .ffi_funcs = .{},
         };
 
         compiler.defineNatives();
@@ -95,7 +105,10 @@ pub const Compiler = struct {
         compiler.emitOp(.nil);
         compiler.emitOp(.return_);
 
-        return script;
+        return .{
+            .func = script,
+            .ffi_descs = compiler.ffi_descs.toOwnedSlice(alloc) catch &.{},
+        };
     }
 
     fn defineNatives(self: *Compiler) void {
@@ -213,7 +226,26 @@ pub const Compiler = struct {
                 }
             },
             .import => |imp| self.registerImport(imp),
+            .extern_block => |eb| self.registerExternBlock(eb),
             else => {},
+        }
+    }
+
+    fn registerExternBlock(self: *Compiler, eb: ast.ExternBlock) void {
+        for (eb.funcs) |func| {
+            const idx: u16 = @intCast(self.ffi_descs.items.len);
+
+            // ensure null-terminated symbol name
+            const name_z = self.alloc.allocSentinel(u8, func.name.len, 0) catch @panic("oom");
+            @memcpy(name_z, func.name);
+
+            self.ffi_descs.append(self.alloc, .{
+                .lib = eb.lib,
+                .name = name_z,
+                .params = func.params,
+                .ret = func.ret,
+            }) catch @panic("oom");
+            self.ffi_funcs.put(self.alloc, func.name, idx) catch @panic("oom");
         }
     }
 
@@ -312,6 +344,7 @@ pub const Compiler = struct {
             .binding => |b| self.compileTopBinding(b),
             .struct_decl, .enum_decl, .trait_decl => {},
             .import => |imp| self.compileImport(imp),
+            .extern_block => {},
         }
     }
 
@@ -386,6 +419,8 @@ pub const Compiler = struct {
             .module_namespaces = .{},
             .std_modules = .{},
             .native_fns = .{},
+            .ffi_descs = .{},
+            .ffi_funcs = .{},
         };
         sub.addLocal("");
 
@@ -994,6 +1029,16 @@ pub const Compiler = struct {
                 return;
             }
 
+            if (self.findFfiFunc(name)) |desc_idx| {
+                for (call.args) |arg| {
+                    self.compileExpr(arg);
+                }
+                self.emitOp(.ffi_call);
+                self.emitU16(desc_idx);
+                self.emitByte(@intCast(call.args.len));
+                return;
+            }
+
             if (self.findEnumVariant(name)) |info| {
                 if (info.payload_count > 0 and call.args.len == info.payload_count) {
                     for (call.args) |arg| {
@@ -1382,6 +1427,8 @@ pub const Compiler = struct {
             .module_namespaces = .{},
             .std_modules = .{},
             .native_fns = .{},
+            .ffi_descs = .{},
+            .ffi_funcs = .{},
         };
         sub.addLocal("");
 
@@ -1439,6 +1486,8 @@ pub const Compiler = struct {
             .module_namespaces = .{},
             .std_modules = .{},
             .native_fns = .{},
+            .ffi_descs = .{},
+            .ffi_funcs = .{},
         };
         sub.addLocal("");
 
@@ -1735,6 +1784,15 @@ pub const Compiler = struct {
         return null;
     }
 
+    fn findFfiFunc(self: *Compiler, name: []const u8) ?u16 {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.ffi_funcs.get(name)) |idx| return idx;
+            c = cur.enclosing;
+        }
+        return null;
+    }
+
     fn findReturnType(self: *Compiler, name: []const u8) TypeHint {
         var c: ?*Compiler = self;
         while (c) |cur| {
@@ -1987,7 +2045,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .set_global, .define_global, .print, .println => return false,
-            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read => return false,
+            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .ffi_call => return false,
         }
     }
     return true;

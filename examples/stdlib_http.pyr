@@ -33,15 +33,15 @@ fn main() {
   ]
 
   h1 = match_route(routes, "GET", "/hello")
-  assert(h1 != none)
+  assert(h1 != nil)
   println("matched hello")
 
   h2 = match_route(routes, "POST", "/users")
-  assert(h2 != none)
+  assert(h2 != nil)
   println("matched users")
 
   h3 = match_route(routes, "DELETE", "/hello")
-  assert_eq(h3, none)
+  assert_eq(h3, nil)
   println("no match")
 
   println("done")

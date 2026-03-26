@@ -41,7 +41,7 @@ enum Result(T, E) {
 
 enum Option(T) {
   Some(T)
-  None
+  Nil
 }
 ```
 

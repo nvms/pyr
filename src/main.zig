@@ -42,7 +42,7 @@ pub fn main() !void {
     }
 }
 
-fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@import("value.zig").ObjFunction, arena: std.heap.ArenaAllocator } {
+fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@import("value.zig").ObjFunction, ffi_descs: []@import("ffi.zig").FfiDesc, arena: std.heap.ArenaAllocator } {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
@@ -74,12 +74,12 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
         }
         std.process.exit(1);
     }
-    const func = compiler.Compiler.compileModule(arena.allocator(), result, &loader, dir) orelse {
+    const cr = compiler.Compiler.compileModule(arena.allocator(), result, &loader, dir) orelse {
         std.debug.print("error: compilation failed\n", .{});
         std.process.exit(1);
     };
 
-    return .{ .func = func, .arena = arena };
+    return .{ .func = cr.func, .ffi_descs = cr.ffi_descs, .arena = arena };
 }
 
 fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
@@ -87,6 +87,7 @@ fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
     defer result.arena.deinit();
 
     var vm = vm_mod.VM.init(result.arena.allocator());
+    vm.setFfiDescs(result.ffi_descs);
     vm.interpret(result.func) catch {
         std.process.exit(1);
     };

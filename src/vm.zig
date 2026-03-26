@@ -15,6 +15,7 @@ const ObjListener = @import("value.zig").ObjListener;
 const ObjConn = @import("value.zig").ObjConn;
 const TaskState = @import("value.zig").TaskState;
 const stdlib = @import("stdlib.zig");
+const ffi_mod = @import("ffi.zig");
 
 pub const ConcatState = struct {
     buf: std.ArrayListUnmanaged(u8),
@@ -204,6 +205,7 @@ pub const VM = struct {
     concat: *ConcatState,
     arena_stack: *ArenaStack,
     sched: *Scheduler,
+    ffi: ?*ffi_mod.FfiState,
 
     pub const CallFrame = struct {
         function: *ObjFunction,
@@ -231,11 +233,22 @@ pub const VM = struct {
             .concat = cs,
             .arena_stack = as,
             .sched = sc,
+            .ffi = null,
         };
     }
 
     fn currentAlloc(self: *VM) std.mem.Allocator {
         return self.arena_stack.currentAlloc();
+    }
+
+    pub fn setFfiDescs(self: *VM, descs: []ffi_mod.FfiDesc) void {
+        if (descs.len == 0) return;
+        const state = self.alloc.create(ffi_mod.FfiState) catch @panic("oom");
+        state.* = ffi_mod.FfiState.init(self.alloc, descs);
+        state.resolve() catch {
+            std.debug.print("ffi: failed to resolve symbols\n", .{});
+        };
+        self.ffi = state;
     }
 
     pub fn interpret(self: *VM, function: *ObjFunction) Error!void {
@@ -755,6 +768,7 @@ pub const VM = struct {
                 },
                 .net_accept => try self.execNetAccept(),
                 .net_read => try self.execNetRead(),
+                .ffi_call => try self.execFfiCall(),
                 .slide => {
                     const n = self.readByte();
                     const result = self.stack[self.sp - 1];
@@ -1698,6 +1712,19 @@ pub const VM = struct {
         self.push(ObjString.create(self.currentAlloc(), owned).toValue());
     }
 
+    fn execFfiCall(self: *VM) Error!void {
+        const desc_idx = self.readU16();
+        const arg_count = self.readByte();
+        const state = self.ffi orelse {
+            self.runtimeError("ffi not initialized", .{});
+            return error.RuntimeError;
+        };
+        const args = self.stack[self.sp - arg_count .. self.sp];
+        const result = state.call(desc_idx, args, self.currentAlloc());
+        self.sp -= arg_count;
+        self.push(result);
+    }
+
     // ---------------------------------------------------------------
     // stack and frame helpers
     // ---------------------------------------------------------------
@@ -1811,9 +1838,10 @@ fn testRunExpectError(source: []const u8) !void {
     var p = parser.Parser.init(tokens, source, alloc);
     const tree = p.parse();
     if (tree.errors.len > 0) @panic("parse error in test");
-    const func = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
+    const cr = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
     var vm = VM.init(alloc);
-    const result = vm.interpret(func);
+    vm.setFfiDescs(cr.ffi_descs);
+    const result = vm.interpret(cr.func);
     try std.testing.expectError(error.RuntimeError, result);
 }
 
@@ -1825,9 +1853,10 @@ fn testRun(source: []const u8) !void {
     var p = parser.Parser.init(tokens, source, alloc);
     const tree = p.parse();
     if (tree.errors.len > 0) @panic("parse error in test");
-    const func = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
+    const cr = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
     var vm = VM.init(alloc);
-    try vm.interpret(func);
+    vm.setFfiDescs(cr.ffi_descs);
+    try vm.interpret(cr.func);
 }
 
 test "vm: hello world" {
@@ -2482,9 +2511,9 @@ test "vm: parse_request malformed returns nil" {
         \\imp std/http { parse_request }
         \\fn main() {
         \\  req = parse_request("garbage")
-        \\  assert_eq(req, none)
+        \\  assert_eq(req, nil)
         \\  req2 = parse_request("")
-        \\  assert_eq(req2, none)
+        \\  assert_eq(req2, nil)
         \\  println("ok")
         \\}
     );
@@ -2582,7 +2611,7 @@ test "vm: route creates struct with handler" {
         \\  r = route("GET", "/test", my_handler)
         \\  assert_eq(r.method, "GET")
         \\  assert_eq(r.path, "/test")
-        \\  result = r.handler(none)
+        \\  result = r.handler(nil)
         \\  assert_eq(result, 42)
         \\  println("ok")
         \\}
@@ -2612,9 +2641,9 @@ test "vm: match_route method must match" {
         \\fn handler() { 1 }
         \\fn main() {
         \\  routes = [route("GET", "/hello", handler)]
-        \\  assert_eq(match_route(routes, "POST", "/hello"), none)
-        \\  assert_eq(match_route(routes, "GET", "/other"), none)
-        \\  assert(match_route(routes, "GET", "/hello") != none)
+        \\  assert_eq(match_route(routes, "POST", "/hello"), nil)
+        \\  assert_eq(match_route(routes, "GET", "/other"), nil)
+        \\  assert(match_route(routes, "GET", "/hello") != nil)
         \\  println("ok")
         \\}
     );
@@ -2624,7 +2653,7 @@ test "vm: match_route empty routes" {
     try testRun(
         \\imp std/http { match_route }
         \\fn main() {
-        \\  assert_eq(match_route([], "GET", "/"), none)
+        \\  assert_eq(match_route([], "GET", "/"), nil)
         \\  println("ok")
         \\}
     );
@@ -2652,7 +2681,7 @@ test "vm: net listen and close" {
         \\imp std/net { listen, close }
         \\fn main() {
         \\  server = listen("127.0.0.1", 0)
-        \\  assert(server != none)
+        \\  assert(server != nil)
         \\  close(server)
         \\  println("ok")
         \\}
@@ -2710,7 +2739,7 @@ test "vm: net read returns nil on closed connection" {
         \\  conn = net.accept(server)
         \\  net.close(client)
         \\  data = net.read(conn)
-        \\  assert_eq(data, none)
+        \\  assert_eq(data, nil)
         \\  net.close(conn)
         \\  net.close(server)
         \\  println("ok")
@@ -2723,7 +2752,7 @@ test "vm: net connect to non-listening port returns nil" {
         \\imp std/net { connect }
         \\fn main() {
         \\  conn = connect("127.0.0.1", 19899)
-        \\  assert_eq(conn, none)
+        \\  assert_eq(conn, nil)
         \\  println("ok")
         \\}
     );
@@ -2751,7 +2780,7 @@ test "vm: net namespace import" {
         \\imp std/net as tcp
         \\fn main() {
         \\  s = tcp.listen("127.0.0.1", 0)
-        \\  assert(s != none)
+        \\  assert(s != nil)
         \\  tcp.close(s)
         \\  println("ok")
         \\}
@@ -2815,7 +2844,7 @@ test "vm: http 404 for unmatched route" {
         \\  raw = net.read(conn)
         \\  req = parse_request(raw)
         \\  h = match_route(routes, req.method, req.path)
-        \\  assert_eq(h, none)
+        \\  assert_eq(h, nil)
         \\  net.write(conn, respond_status(404, "not found"))
         \\  net.close(conn)
         \\  reply = net.read(client)
@@ -2883,7 +2912,7 @@ test "vm: method-call read returns nil on close" {
         \\  conn = server.accept()
         \\  net.close(client)
         \\  data = conn.read()
-        \\  assert_eq(data, none)
+        \\  assert_eq(data, nil)
         \\  net.close(conn)
         \\  net.close(server)
         \\  println("ok")
@@ -3159,6 +3188,60 @@ test "vm: closure mutation does not affect outer scope" {
         \\  }
         \\  f()
         \\  assert_eq(x, 10)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: ffi getpid" {
+    try testRun(
+        \\extern "c" {
+        \\  fn getpid() -> cint
+        \\}
+        \\fn main() {
+        \\  pid = getpid()
+        \\  assert(pid > 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: ffi strlen" {
+    try testRun(
+        \\extern "c" {
+        \\  fn strlen(s: cstr) -> cint
+        \\}
+        \\fn main() {
+        \\  assert_eq(strlen("hello"), 5)
+        \\  assert_eq(strlen(""), 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: ffi getenv" {
+    try testRun(
+        \\extern "c" {
+        \\  fn getenv(name: cstr) -> cstr
+        \\}
+        \\fn main() {
+        \\  home = getenv("HOME")
+        \\  assert(home != nil)
+        \\  missing = getenv("NONEXISTENT_VAR_XYZ_123")
+        \\  assert_eq(missing, nil)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: ffi abs" {
+    try testRun(
+        \\extern "c" {
+        \\  fn abs(n: cint) -> cint
+        \\}
+        \\fn main() {
+        \\  assert_eq(abs(-42), 42)
+        \\  assert_eq(abs(0), 0)
         \\  println("ok")
         \\}
     );

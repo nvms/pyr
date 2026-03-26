@@ -230,6 +230,15 @@ pub const Sema = struct {
                     .kind = .variable,
                 });
             },
+            .extern_block => |eb| {
+                for (eb.funcs) |func| {
+                    self.define(func.name, .{
+                        .ty = &t_err,
+                        .is_mut = false,
+                        .kind = .function,
+                    });
+                }
+            },
         }
     }
 
@@ -321,6 +330,7 @@ pub const Sema = struct {
             .trait_decl => {},
             .import => {},
             .binding => |b| self.analyzeBinding(b, item.span),
+            .extern_block => {},
         }
     }
 

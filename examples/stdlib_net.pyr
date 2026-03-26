@@ -2,13 +2,13 @@ imp std/net as net
 
 fn main() {
   server = net.listen("127.0.0.1", 19877)
-  assert(server != none)
+  assert(server != nil)
 
   client = net.connect("127.0.0.1", 19877)
-  assert(client != none)
+  assert(client != nil)
 
   conn = net.accept(server)
-  assert(conn != none)
+  assert(conn != nil)
 
   net.write(client, "ping")
   data = net.read(conn)

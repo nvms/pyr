@@ -62,6 +62,13 @@ pub const Parser = struct {
                 }
                 break :blk self.parseImportItem(start);
             },
+            .kw_extern => blk: {
+                if (is_pub) {
+                    self.emitError("extern blocks cannot be pub");
+                    break :blk null;
+                }
+                break :blk self.parseExternBlock(start);
+            },
             else => blk: {
                 if (is_pub) {
                     // pub before a binding
@@ -296,6 +303,80 @@ pub const Parser = struct {
                 .methods = methods.toOwnedSlice(self.arena) catch @panic("oom"),
             } },
         };
+    }
+
+    fn parseExternBlock(self: *Parser, start: usize) ?ast.Item {
+        _ = self.expect(.kw_extern) orelse return null;
+
+        const lib_tok = self.eat(.string) orelse {
+            self.emitError("expected library name string after extern");
+            return null;
+        };
+        const raw = lib_tok.slice(self.source);
+        const lib = raw[1 .. raw.len - 1];
+
+        self.skipNewlines();
+        _ = self.expect(.lbrace) orelse return null;
+        self.nesting += 1;
+        self.skipNewlines();
+
+        var funcs = std.ArrayListUnmanaged(ast.FfiFunc){};
+        while (self.peek() != .rbrace and !self.atEnd()) {
+            _ = self.expect(.kw_fn) orelse return null;
+            const name = self.expectIdent() orelse return null;
+            _ = self.expect(.lparen) orelse return null;
+
+            var params = std.ArrayListUnmanaged(ast.FfiType){};
+            while (self.peek() != .rparen and !self.atEnd()) {
+                if (self.eat(.identifier) != null) {
+                    if (self.eat(.colon) == null) {
+                        self.emitError("expected ':' after parameter name");
+                        return null;
+                    }
+                }
+                const ptype = self.parseFfiType() orelse return null;
+                params.append(self.arena, ptype) catch @panic("oom");
+                if (self.peek() != .rparen) {
+                    _ = self.expect(.comma) orelse return null;
+                }
+            }
+            _ = self.expect(.rparen) orelse return null;
+
+            var ret: ast.FfiType = .void_;
+            if (self.eat(.arrow) != null) {
+                ret = self.parseFfiType() orelse return null;
+            }
+
+            funcs.append(self.arena, .{
+                .name = name,
+                .params = params.toOwnedSlice(self.arena) catch @panic("oom"),
+                .ret = ret,
+            }) catch @panic("oom");
+            self.skipNewlines();
+        }
+
+        self.nesting -= 1;
+        _ = self.expect(.rbrace) orelse return null;
+
+        return .{
+            .span = self.spanFrom(start),
+            .kind = .{ .extern_block = .{
+                .lib = lib,
+                .funcs = funcs.toOwnedSlice(self.arena) catch @panic("oom"),
+            } },
+        };
+    }
+
+    fn parseFfiType(self: *Parser) ?ast.FfiType {
+        const tok = self.advance();
+        const text = tok.slice(self.source);
+        if (std.mem.eql(u8, text, "cint")) return .cint;
+        if (std.mem.eql(u8, text, "cstr")) return .cstr;
+        if (std.mem.eql(u8, text, "ptr")) return .ptr;
+        if (std.mem.eql(u8, text, "f64")) return .f64_;
+        if (std.mem.eql(u8, text, "void")) return .void_;
+        self.emitError("unknown FFI type");
+        return null;
     }
 
     fn parseImportItem(self: *Parser, start: usize) ?ast.Item {
@@ -575,7 +656,7 @@ pub const Parser = struct {
                 _ = self.advance();
                 return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = .{ .bool_literal = false } });
             },
-            .kw_none => {
+            .kw_nil => {
                 _ = self.advance();
                 return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = .none_literal });
             },
@@ -900,7 +981,7 @@ pub const Parser = struct {
                 });
                 return .{ .kind = .{ .literal = expr } };
             },
-            .kw_none => {
+            .kw_nil => {
                 _ = self.advance();
                 return .{ .kind = .{ .literal = self.create(ast.Expr, .{
                     .span = .{ .start = 0, .end = 0 },

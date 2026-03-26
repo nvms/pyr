@@ -91,6 +91,7 @@ pub const OpCode = enum(u8) {
     await_all,
     net_accept,
     net_read,
+    ffi_call,
 };
 
 pub const Chunk = struct {

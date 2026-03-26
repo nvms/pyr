@@ -20,6 +20,7 @@ pub const Value = struct {
         channel,
         listener,
         conn,
+        ptr,
     };
 
     pub fn initNil() Value {
@@ -78,8 +79,16 @@ pub const Value = struct {
         return .{ .tag = .listener, .data = @intFromPtr(ptr) };
     }
 
-    pub fn initConn(ptr: *ObjConn) Value {
-        return .{ .tag = .conn, .data = @intFromPtr(ptr) };
+    pub fn initConn(p: *ObjConn) Value {
+        return .{ .tag = .conn, .data = @intFromPtr(p) };
+    }
+
+    pub fn initPtr(p: usize) Value {
+        return .{ .tag = .ptr, .data = p };
+    }
+
+    pub fn asPtr(self: Value) usize {
+        return self.data;
     }
 
     pub fn asBool(self: Value) bool {
@@ -145,6 +154,7 @@ pub const Value = struct {
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
             .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn => true,
+            .ptr => self.data != 0,
         };
     }
 
@@ -156,7 +166,7 @@ pub const Value = struct {
             .int => a.asInt() == b.asInt(),
             .float => a.asFloat() == b.asFloat(),
             .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
-            .function, .struct_, .enum_, .native_fn, .closure, .task, .channel, .listener, .conn => a.data == b.data,
+            .function, .struct_, .enum_, .native_fn, .closure, .task, .channel, .listener, .conn, .ptr => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -206,6 +216,7 @@ pub const Value = struct {
             .channel => std.debug.print("<channel>", .{}),
             .listener => std.debug.print("<listener>", .{}),
             .conn => std.debug.print("<conn>", .{}),
+            .ptr => std.debug.print("<ptr 0x{x}>", .{self.data}),
             .array => {
                 const arr = self.asArray();
                 std.debug.print("[", .{});

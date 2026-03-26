@@ -42,7 +42,8 @@ pub const Token = struct {
         kw_spawn,
         kw_true,
         kw_false,
-        kw_none,
+        kw_nil,
+        kw_extern,
 
         // types
         kw_int,
@@ -120,7 +121,8 @@ pub const keywords = std.StaticStringMap(Token.Tag).initComptime(.{
     .{ "spawn", .kw_spawn },
     .{ "true", .kw_true },
     .{ "false", .kw_false },
-    .{ "none", .kw_none },
+    .{ "nil", .kw_nil },
+    .{ "extern", .kw_extern },
     .{ "int", .kw_int },
     .{ "float", .kw_float },
     .{ "str", .kw_str },

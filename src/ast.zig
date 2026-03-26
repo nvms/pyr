@@ -28,6 +28,7 @@ pub const Item = struct {
         trait_decl: TraitDecl,
         import: Import,
         binding: Binding,
+        extern_block: ExternBlock,
     };
 };
 
@@ -304,4 +305,23 @@ pub const Generic = struct {
 pub const Pointer = struct {
     is_mut: bool,
     pointee: *const TypeExpr,
+};
+
+pub const FfiType = enum {
+    cint,
+    cstr,
+    ptr,
+    f64_,
+    void_,
+};
+
+pub const FfiFunc = struct {
+    name: []const u8,
+    params: []const FfiType,
+    ret: FfiType,
+};
+
+pub const ExternBlock = struct {
+    lib: []const u8,
+    funcs: []const FfiFunc,
 };

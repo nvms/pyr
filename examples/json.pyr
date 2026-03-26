@@ -17,7 +17,7 @@ fn main() {
   println(encode(3.14))
   println(encode("hello"))
   println(encode(true))
-  println(encode(none))
+  println(encode(nil))
 
   println(encode([1, 2, 3]))
   println(encode(["a", "b"]))

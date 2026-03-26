@@ -43,7 +43,7 @@ fn main() {
   raw2 = net.read(conn2)
   req2 = parse_request(raw2)
   handler2 = match_route(routes, req2.method, req2.path)
-  if handler2 == none {
+  if handler2 == nil {
     net.write(conn2, respond_status(404, "not found"))
     println("404 sent")
   }
