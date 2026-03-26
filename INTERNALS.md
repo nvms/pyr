@@ -201,7 +201,8 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - `conn.write(data)` compiles to net_write opcode with scheduler integration. `net.write(conn, data)` namespace syntax stays blocking (native function). same pattern as accept/read
 - write parking stores data pointer and offset in scheduler's io_write_data/io_write_off arrays. pollAndWake completes partial writes when fd becomes writable via POLL.OUT
 - only set sockets non-blocking when scheduler is active. blocking fallback paths keep sockets blocking for compatibility with native function writes
-- connect remains blocking (native function). async connect would require a dedicated syntax to avoid ambiguity with the `x.connect(a, b)` field-access interception pattern (collision with struct methods)
+- `net.connect(addr, port)` namespace syntax stays blocking (native function). non-namespace `x.connect(addr, port)` compiles to net_connect opcode with scheduler integration. compiler uses `isModuleNamespace()` to distinguish - if the target is a known std/user module namespace, it falls through to the native function call
+- connect parking: creates non-blocking socket, connect() returns EINPROGRESS, task parked with POLL.OUT. pollAndWake checks POLL.ERR to detect failed connections, pushes ObjConn on success
 
 ## std/http (HTTP utilities)
 

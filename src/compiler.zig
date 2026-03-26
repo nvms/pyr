@@ -837,6 +837,16 @@ pub const Compiler = struct {
         }
     }
 
+    fn isModuleNamespace(self: *Compiler, name: []const u8) bool {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.module_namespaces.get(name) != null) return true;
+            if (cur.std_modules.get(name) != null) return true;
+            c = cur.enclosing;
+        }
+        return false;
+    }
+
     fn resolveModuleValue(self: *Compiler, ns: []const u8, name: []const u8) ?Value {
         var c: ?*Compiler = self;
         while (c) |cur| {
@@ -1084,6 +1094,15 @@ pub const Compiler = struct {
                 self.compileExpr(call.args[0]);
                 self.emitOp(.net_write);
                 return;
+            }
+            if (std.mem.eql(u8, fa.field, "connect") and call.args.len == 2) {
+                const is_ns = if (fa.target.kind == .identifier) self.isModuleNamespace(fa.target.kind.identifier) else false;
+                if (!is_ns) {
+                    self.compileExpr(call.args[0]);
+                    self.compileExpr(call.args[1]);
+                    self.emitOp(.net_connect);
+                    return;
+                }
             }
         }
 
@@ -2051,7 +2070,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .set_global, .define_global, .print, .println => return false,
-            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .ffi_call => return false,
+            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .ffi_call => return false,
         }
     }
     return true;
