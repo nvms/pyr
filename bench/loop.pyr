@@ -1,0 +1,11 @@
+fn sum_range(n: int) -> int {
+  mut total = 0
+  for i in range(n) {
+    total = total + i
+  }
+  total
+}
+
+fn main() {
+  println(sum_range(10000000))
+}

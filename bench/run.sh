@@ -42,3 +42,33 @@ else
     printf "  %-12s (not installed)\n" "lua"
 fi
 echo ""
+
+echo "loop - 10M iteration sum"
+bench "pyr" $PYR run loop.pyr
+bench "python" python3 loop.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua loop.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""
+
+echo "closure - 10M closure calls with capture"
+bench "pyr" $PYR run closure.pyr
+bench "python" python3 closure.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua closure.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""
+
+echo "struct_access - 10M field reads on single struct"
+bench "pyr" $PYR run struct_access.pyr
+bench "python" python3 struct_access.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua struct_access.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""

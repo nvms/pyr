@@ -1,0 +1,13 @@
+fn apply_n(f, x: int, n: int) -> int {
+  mut result = x
+  for i in range(n) {
+    result = f(result)
+  }
+  result
+}
+
+fn main() {
+  step = 3
+  inc = fn(n) n + step
+  println(apply_n(inc, 0, 10000000))
+}

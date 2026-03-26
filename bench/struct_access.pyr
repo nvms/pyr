@@ -1,0 +1,19 @@
+struct Point {
+  x: float
+  y: float
+}
+
+fn access_fields(p: Point, n: int) -> float {
+  mut total = 0.0
+  mut i = 0
+  while i < n {
+    total = total + p.x + p.y
+    i = i + 1
+  }
+  total
+}
+
+fn main() {
+  p = Point { x: 1.0, y: 2.0 }
+  println(access_fields(p, 10000000))
+}
