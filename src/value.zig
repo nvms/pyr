@@ -18,6 +18,8 @@ pub const Value = struct {
         array,
         task,
         channel,
+        listener,
+        conn,
     };
 
     pub fn initNil() Value {
@@ -72,6 +74,14 @@ pub const Value = struct {
         return .{ .tag = .channel, .data = @intFromPtr(ptr) };
     }
 
+    pub fn initListener(ptr: *ObjListener) Value {
+        return .{ .tag = .listener, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initConn(ptr: *ObjConn) Value {
+        return .{ .tag = .conn, .data = @intFromPtr(ptr) };
+    }
+
     pub fn asBool(self: Value) bool {
         return self.data != 0;
     }
@@ -120,13 +130,21 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asListener(self: Value) *ObjListener {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
+    pub fn asConn(self: Value) *ObjConn {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn => true,
         };
     }
 
@@ -138,7 +156,7 @@ pub const Value = struct {
             .int => a.asInt() == b.asInt(),
             .float => a.asFloat() == b.asFloat(),
             .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
-            .function, .struct_, .enum_, .native_fn, .closure, .task, .channel => a.data == b.data,
+            .function, .struct_, .enum_, .native_fn, .closure, .task, .channel, .listener, .conn => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -186,6 +204,8 @@ pub const Value = struct {
             .closure => std.debug.print("<closure>", .{}),
             .task => std.debug.print("<task>", .{}),
             .channel => std.debug.print("<channel>", .{}),
+            .listener => std.debug.print("<listener>", .{}),
+            .conn => std.debug.print("<conn>", .{}),
             .array => {
                 const arr = self.asArray();
                 std.debug.print("[", .{});
@@ -480,6 +500,35 @@ pub const ObjChannel = struct {
 
     pub fn toValue(self: *ObjChannel) Value {
         return Value.initChannel(self);
+    }
+};
+
+pub const ObjListener = struct {
+    fd: std.posix.fd_t,
+    port: u16,
+
+    pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t, port: u16) *ObjListener {
+        const l = alloc.create(ObjListener) catch @panic("oom");
+        l.* = .{ .fd = fd, .port = port };
+        return l;
+    }
+
+    pub fn toValue(self: *ObjListener) Value {
+        return Value.initListener(self);
+    }
+};
+
+pub const ObjConn = struct {
+    fd: std.posix.fd_t,
+
+    pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t) *ObjConn {
+        const c = alloc.create(ObjConn) catch @panic("oom");
+        c.* = .{ .fd = fd };
+        return c;
+    }
+
+    pub fn toValue(self: *ObjConn) Value {
+        return Value.initConn(self);
     }
 };
 

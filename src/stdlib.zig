@@ -4,6 +4,8 @@ const ObjString = @import("value.zig").ObjString;
 const ObjArray = @import("value.zig").ObjArray;
 const ObjStruct = @import("value.zig").ObjStruct;
 const ObjEnum = @import("value.zig").ObjEnum;
+const ObjListener = @import("value.zig").ObjListener;
+const ObjConn = @import("value.zig").ObjConn;
 
 pub const NativeDef = struct {
     name: []const u8,
@@ -30,6 +32,8 @@ const modules = [_]StdModule{
     .{ .name = "fs", .functions = &fs_fns },
     .{ .name = "os", .functions = &os_fns },
     .{ .name = "json", .functions = &json_fns },
+    .{ .name = "net", .functions = &net_fns },
+    .{ .name = "http", .functions = &http_fns },
 };
 
 // --------------- output helpers ---------------
@@ -90,6 +94,8 @@ fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void {
         .closure => writeBytes(fd, "<closure>"),
         .task => writeBytes(fd, "<task>"),
         .channel => writeBytes(fd, "<channel>"),
+        .listener => writeBytes(fd, "<listener>"),
+        .conn => writeBytes(fd, "<conn>"),
         .array => {
             const arr = v.asArray();
             writeBytes(fd, "[");
@@ -301,7 +307,7 @@ fn jsonWriteValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v:
                 buf.appendSlice(alloc, "]}") catch return;
             }
         },
-        .function, .native_fn, .closure, .task, .channel => buf.appendSlice(alloc, "null") catch return,
+        .function, .native_fn, .closure, .task, .channel, .listener, .conn => buf.appendSlice(alloc, "null") catch return,
     }
 }
 
@@ -485,3 +491,228 @@ const JsonParser = struct {
         return ObjStruct.create(self.alloc, "object", name_slice, val_slice).toValue();
     }
 };
+
+// --------------- std/net ---------------
+
+const net_fns = [_]NativeDef{
+    .{ .name = "listen", .arity = 2, .func = &netListen },
+    .{ .name = "accept", .arity = 1, .func = &netAccept },
+    .{ .name = "connect", .arity = 2, .func = &netConnect },
+    .{ .name = "read", .arity = 1, .func = &netRead },
+    .{ .name = "write", .arity = 2, .func = &netWrite },
+    .{ .name = "close", .arity = 1, .func = &netClose },
+};
+
+fn parseAddr(s: []const u8) [4]u8 {
+    if (s.len == 0 or std.mem.eql(u8, s, "0.0.0.0")) return .{ 0, 0, 0, 0 };
+    if (std.mem.eql(u8, s, "localhost") or std.mem.eql(u8, s, "127.0.0.1")) return .{ 127, 0, 0, 1 };
+    var octets: [4]u8 = .{ 0, 0, 0, 0 };
+    var parts = std.mem.splitScalar(u8, s, '.');
+    var i: usize = 0;
+    while (parts.next()) |part| {
+        if (i >= 4) return .{ 0, 0, 0, 0 };
+        octets[i] = std.fmt.parseInt(u8, part, 10) catch return .{ 0, 0, 0, 0 };
+        i += 1;
+    }
+    return octets;
+}
+
+fn netListen(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .int) return Value.initNil();
+    const addr_str = args[0].asString().chars;
+    const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
+
+    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return Value.initNil();
+
+    const yes: c_int = 1;
+    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(yes)) catch {
+        std.posix.close(fd);
+        return Value.initNil();
+    };
+
+    const octets = parseAddr(addr_str);
+    const addr = std.net.Address.initIp4(octets, port);
+    std.posix.bind(fd, &addr.any, addr.getOsSockLen()) catch {
+        std.posix.close(fd);
+        return Value.initNil();
+    };
+
+    std.posix.listen(fd, 128) catch {
+        std.posix.close(fd);
+        return Value.initNil();
+    };
+
+    return ObjListener.create(alloc, fd, port).toValue();
+}
+
+fn netAccept(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .listener) return Value.initNil();
+    const listener = args[0].asListener();
+    const client_fd = std.posix.accept(listener.fd, null, null, 0) catch return Value.initNil();
+    return ObjConn.create(alloc, client_fd).toValue();
+}
+
+fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .int) return Value.initNil();
+    const addr_str = args[0].asString().chars;
+    const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
+
+    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return Value.initNil();
+    const octets = parseAddr(addr_str);
+    const addr = std.net.Address.initIp4(octets, port);
+    std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch {
+        std.posix.close(fd);
+        return Value.initNil();
+    };
+
+    return ObjConn.create(alloc, fd).toValue();
+}
+
+fn netRead(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .conn) return Value.initNil();
+    const conn = args[0].asConn();
+    var buf: [8192]u8 = undefined;
+    const n = std.posix.read(conn.fd, &buf) catch return Value.initNil();
+    if (n == 0) return Value.initNil();
+    const owned = alloc.dupe(u8, buf[0..n]) catch return Value.initNil();
+    return ObjString.create(alloc, owned).toValue();
+}
+
+fn netWrite(_: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .conn or args[1].tag != .string) return Value.initBool(false);
+    const conn = args[0].asConn();
+    const data = args[1].asString().chars;
+    var written: usize = 0;
+    while (written < data.len) {
+        written += std.posix.write(conn.fd, data[written..]) catch return Value.initBool(false);
+    }
+    return Value.initBool(true);
+}
+
+fn netClose(_: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag == .listener) {
+        std.posix.close(args[0].asListener().fd);
+    } else if (args[0].tag == .conn) {
+        std.posix.close(args[0].asConn().fd);
+    }
+    return Value.initNil();
+}
+
+// --------------- std/http ---------------
+
+const http_fns = [_]NativeDef{
+    .{ .name = "parse_request", .arity = 1, .func = &httpParseRequest },
+    .{ .name = "respond", .arity = 1, .func = &httpRespond },
+    .{ .name = "respond_status", .arity = 2, .func = &httpRespondStatus },
+    .{ .name = "json_response", .arity = 1, .func = &httpJsonResponse },
+    .{ .name = "route", .arity = 3, .func = &httpRoute },
+    .{ .name = "match_route", .arity = 3, .func = &httpMatchRoute },
+};
+
+fn httpParseRequest(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string) return Value.initNil();
+    const raw = args[0].asString().chars;
+
+    const line_end = std.mem.indexOf(u8, raw, "\r\n") orelse return Value.initNil();
+    const request_line = raw[0..line_end];
+
+    var parts = std.mem.splitScalar(u8, request_line, ' ');
+    const method = parts.next() orelse return Value.initNil();
+    const path = parts.next() orelse return Value.initNil();
+
+    const header_end = std.mem.indexOf(u8, raw, "\r\n\r\n") orelse raw.len;
+    const headers = raw[line_end + 2 .. header_end];
+    const body_start = if (header_end + 4 <= raw.len) header_end + 4 else raw.len;
+    const body = raw[body_start..];
+
+    const field_names = alloc.alloc([]const u8, 4) catch return Value.initNil();
+    field_names[0] = "method";
+    field_names[1] = "path";
+    field_names[2] = "headers";
+    field_names[3] = "body";
+    var values: [4]Value = .{
+        ObjString.create(alloc, alloc.dupe(u8, method) catch "").toValue(),
+        ObjString.create(alloc, alloc.dupe(u8, path) catch "").toValue(),
+        ObjString.create(alloc, alloc.dupe(u8, headers) catch "").toValue(),
+        ObjString.create(alloc, alloc.dupe(u8, body) catch "").toValue(),
+    };
+    return ObjStruct.create(alloc, "Request", field_names, &values).toValue();
+}
+
+fn httpRespond(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string) return Value.initNil();
+    return buildResponse(alloc, "200 OK", "text/plain", args[0].asString().chars);
+}
+
+fn httpRespondStatus(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .int or args[1].tag != .string) return Value.initNil();
+    const code = args[0].asInt();
+    const body = args[1].asString().chars;
+    var status_buf: [32]u8 = undefined;
+    const reason = switch (code) {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        500 => "Internal Server Error",
+        else => "Unknown",
+    };
+    const status = std.fmt.bufPrint(&status_buf, "{d} {s}", .{ code, reason }) catch return Value.initNil();
+    return buildResponse(alloc, status, "text/plain", body);
+}
+
+fn httpJsonResponse(alloc: std.mem.Allocator, args: []const Value) Value {
+    var buf = std.ArrayListUnmanaged(u8){};
+    jsonWriteValue(alloc, &buf, args[0]);
+    return buildResponse(alloc, "200 OK", "application/json", buf.items);
+}
+
+fn httpRoute(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .string) return Value.initNil();
+    const field_names = alloc.alloc([]const u8, 3) catch return Value.initNil();
+    field_names[0] = "method";
+    field_names[1] = "path";
+    field_names[2] = "handler";
+    var values: [3]Value = .{ args[0], args[1], args[2] };
+    return ObjStruct.create(alloc, "Route", field_names, &values).toValue();
+}
+
+fn httpMatchRoute(_: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .array or args[1].tag != .string or args[2].tag != .string) return Value.initNil();
+    const routes = args[0].asArray();
+    const method = args[1].asString().chars;
+    const path = args[2].asString().chars;
+
+    for (routes.items) |route_val| {
+        if (route_val.tag != .struct_) continue;
+        const route = route_val.asStruct();
+        const fv = route.fieldValues();
+        if (fv[0].tag != .string or fv[1].tag != .string) continue;
+
+        if (std.mem.eql(u8, fv[0].asString().chars, method) and
+            std.mem.eql(u8, fv[1].asString().chars, path))
+        {
+            return fv[2];
+        }
+    }
+    return Value.initNil();
+}
+
+fn buildResponse(alloc: std.mem.Allocator, status: []const u8, content_type: []const u8, body: []const u8) Value {
+    var resp = std.ArrayListUnmanaged(u8){};
+    resp.appendSlice(alloc, "HTTP/1.1 ") catch return Value.initNil();
+    resp.appendSlice(alloc, status) catch return Value.initNil();
+    resp.appendSlice(alloc, "\r\nContent-Type: ") catch return Value.initNil();
+    resp.appendSlice(alloc, content_type) catch return Value.initNil();
+    resp.appendSlice(alloc, "\r\nContent-Length: ") catch return Value.initNil();
+    var len_buf: [20]u8 = undefined;
+    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch return Value.initNil();
+    resp.appendSlice(alloc, len_str) catch return Value.initNil();
+    resp.appendSlice(alloc, "\r\nConnection: close\r\n\r\n") catch return Value.initNil();
+    resp.appendSlice(alloc, body) catch return Value.initNil();
+    return ObjString.create(alloc, resp.items).toValue();
+}

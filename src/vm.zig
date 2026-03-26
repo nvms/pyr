@@ -2206,3 +2206,108 @@ test "vm: await_all preserves order" {
         \\}
     );
 }
+
+test "vm: std/http parse_request" {
+    try testRun(
+        \\imp std/http { parse_request }
+        \\fn main() {
+        \\  req = parse_request("GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        \\  println(req.method)
+        \\  println(req.path)
+        \\}
+    );
+}
+
+test "vm: std/http respond" {
+    try testRun(
+        \\imp std/http { respond }
+        \\fn main() {
+        \\  r = respond("hello")
+        \\  assert(len(r) > 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: std/http json_response" {
+    try testRun(
+        \\imp std/http { json_response }
+        \\fn main() {
+        \\  r = json_response(42)
+        \\  assert(len(r) > 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: std/http route and match_route" {
+    try testRun(
+        \\imp std/http { route, match_route }
+        \\fn handle() {
+        \\  println("matched")
+        \\}
+        \\fn main() {
+        \\  routes = [
+        \\    route("GET", "/hello", handle),
+        \\    route("POST", "/data", handle)
+        \\  ]
+        \\  h = match_route(routes, "GET", "/hello")
+        \\  h()
+        \\  h2 = match_route(routes, "POST", "/data")
+        \\  h2()
+        \\  h3 = match_route(routes, "GET", "/nope")
+        \\  assert_eq(h3, none)
+        \\}
+    );
+}
+
+test "vm: std/http respond_status" {
+    try testRun(
+        \\imp std/http { respond_status }
+        \\fn main() {
+        \\  r = respond_status(404, "not found")
+        \\  assert(len(r) > 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: std/net imports compile" {
+    try testRun(
+        \\imp std/net { listen, accept, connect, read, write, close }
+        \\fn main() {
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: std/net listen and close" {
+    try testRun(
+        \\imp std/net { listen, close }
+        \\fn main() {
+        \\  server = listen("127.0.0.1", 0)
+        \\  close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: std/net listen connect read write close" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19876)
+        \\  client = net.connect("127.0.0.1", 19876)
+        \\  conn = net.accept(server)
+        \\  net.write(client, "hello")
+        \\  data = net.read(conn)
+        \\  println(data)
+        \\  net.write(conn, "world")
+        \\  reply = net.read(client)
+        \\  println(reply)
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\}
+    );
+}

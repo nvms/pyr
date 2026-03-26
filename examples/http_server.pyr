@@ -1,0 +1,55 @@
+imp std/net as net
+imp std/http { parse_request, respond, respond_status, json_response, route, match_route }
+imp std/io { println }
+
+fn handle_hello(req) {
+  respond("hello from pyr")
+}
+
+fn handle_health(req) {
+  json_response("ok")
+}
+
+fn main() {
+  server = net.listen("127.0.0.1", 19878)
+
+  routes = [
+    route("GET", "/hello", handle_hello),
+    route("GET", "/health", handle_health)
+  ]
+
+  client = net.connect("127.0.0.1", 19878)
+  conn = net.accept(server)
+
+  net.write(client, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  raw = net.read(conn)
+  req = parse_request(raw)
+  assert_eq(req.method, "GET")
+  assert_eq(req.path, "/hello")
+
+  handler = match_route(routes, req.method, req.path)
+  resp = handler(req)
+  net.write(conn, resp)
+  net.close(conn)
+
+  reply = net.read(client)
+  assert(len(reply) > 0)
+  println("received response")
+  net.close(client)
+
+  client2 = net.connect("127.0.0.1", 19878)
+  conn2 = net.accept(server)
+  net.write(client2, "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  raw2 = net.read(conn2)
+  req2 = parse_request(raw2)
+  handler2 = match_route(routes, req2.method, req2.path)
+  if handler2 == none {
+    net.write(conn2, respond_status(404, "not found"))
+    println("404 sent")
+  }
+  net.close(conn2)
+  net.close(client2)
+
+  net.close(server)
+  println("done")
+}

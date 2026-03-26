@@ -1,0 +1,27 @@
+imp std/net as net
+
+fn main() {
+  server = net.listen("127.0.0.1", 19877)
+  assert(server != none)
+
+  client = net.connect("127.0.0.1", 19877)
+  assert(client != none)
+
+  conn = net.accept(server)
+  assert(conn != none)
+
+  net.write(client, "ping")
+  data = net.read(conn)
+  assert_eq(data, "ping")
+  println(data)
+
+  net.write(conn, "pong")
+  reply = net.read(client)
+  assert_eq(reply, "pong")
+  println(reply)
+
+  net.close(conn)
+  net.close(client)
+  net.close(server)
+  println("done")
+}

@@ -1,0 +1,48 @@
+imp std/http { parse_request, respond, respond_status, json_response, route, match_route }
+
+fn handle_hello(req) {
+  respond("hello world")
+}
+
+fn handle_users(req) {
+  json_response([1, 2, 3])
+}
+
+fn main() {
+  req = parse_request("GET /hello HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\n\r\n")
+  println(req.method)
+  println(req.path)
+  assert_eq(req.method, "GET")
+  assert_eq(req.path, "/hello")
+
+  r1 = respond("ok")
+  assert(len(r1) > 0)
+  println(len(r1) > 0)
+
+  r2 = respond_status(404, "not found")
+  assert(len(r2) > 0)
+  println(len(r2) > 0)
+
+  r3 = json_response(42)
+  assert(len(r3) > 0)
+  println(len(r3) > 0)
+
+  routes = [
+    route("GET", "/hello", handle_hello),
+    route("POST", "/users", handle_users)
+  ]
+
+  h1 = match_route(routes, "GET", "/hello")
+  assert(h1 != none)
+  println("matched hello")
+
+  h2 = match_route(routes, "POST", "/users")
+  assert(h2 != none)
+  println("matched users")
+
+  h3 = match_route(routes, "DELETE", "/hello")
+  assert_eq(h3, none)
+  println("no match")
+
+  println("done")
+}

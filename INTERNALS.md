@@ -179,3 +179,26 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - await-blocked tasks are tracked in the scheduler's `await_waiters` list (separate from the run queue). when a task finishes, `wakeAwaiters` scans this list, pushes the result onto the waiter's stack, and re-enqueues it as ready
 - all concurrency opcodes (spawn, channel_create, channel_send, channel_recv, await_task, await_all) are in run() only, never fastLoop
 - deadlock detection: if a blocking op has no next ready task to switch to, it reports "deadlock: all tasks blocked". recv/send on channels without an active scheduler also errors
+
+## std/net (TCP sockets)
+
+- ObjListener wraps a `std.posix.fd_t` + port. ObjConn wraps a `std.posix.fd_t`. both are heap-allocated, tagged as `.listener` and `.conn` in Value.Tag
+- `listen(addr, port)` creates a TCP socket, sets SO_REUSEADDR, binds, and listens with backlog 128. returns ObjListener or nil on failure
+- `accept(listener)` calls std.posix.accept - blocking syscall. returns ObjConn or nil
+- `connect(addr, port)` creates a TCP socket and connects - blocking syscall. returns ObjConn or nil
+- `read(conn)` reads up to 8192 bytes from the connection. returns string or nil on EOF/error
+- `write(conn, data)` writes all bytes to the connection. returns bool
+- `close(handle)` closes a listener or conn fd. accepts either tag
+- address parsing: "0.0.0.0", "localhost", "127.0.0.1", or dotted-decimal notation
+- all I/O is blocking. in v1, `accept()` and `read()` block the entire VM. loopback connections (connect before accept) work because the kernel completes the TCP handshake in the backlog. future: non-blocking I/O with scheduler integration
+
+## std/http (HTTP utilities)
+
+- std/http is a utility module, not a server runtime. the server loop is written in pyr using std/net primitives. this lets handlers be regular pyr functions and compose naturally with arena blocks and spawn
+- `parse_request(data)` parses raw HTTP into a Request struct with method, path, headers, body fields. returns nil on invalid input
+- `respond(body)` builds an HTTP/1.1 200 OK text/plain response string with Content-Length and Connection: close headers
+- `respond_status(code, body)` builds a response with the given status code and reason phrase
+- `json_response(value)` serializes any pyr value to JSON and builds an application/json response
+- `route(method, path, handler)` creates a Route struct (method, path, handler fields). handler is stored as a Value - can be a function, closure, or native fn
+- `match_route(routes, method, path)` scans a routes array, returns the handler for the first matching method+path, or nil if no match
+- the server pattern: listen -> accept loop -> read -> parse_request -> match_route -> call handler -> write response -> close. arena blocks per request for automatic memory cleanup
