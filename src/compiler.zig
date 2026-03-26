@@ -459,6 +459,11 @@ pub const Compiler = struct {
                             self.emitByte(slot);
                             self.emitOp(.pop);
                         }
+                    } else if (self.resolveUpvalue(b.name)) |uv| {
+                        self.compileExpr(b.value);
+                        self.emitOp(.set_upvalue);
+                        self.emitByte(uv);
+                        self.emitOp(.pop);
                     } else {
                         const hint = self.exprType(b.value);
                         self.compileExpr(b.value);
@@ -1553,6 +1558,9 @@ pub const Compiler = struct {
                 if (self.resolveLocal(name)) |slot| {
                     self.emitOp(.set_local);
                     self.emitByte(slot);
+                } else if (self.resolveUpvalue(name)) |uv| {
+                    self.emitOp(.set_upvalue);
+                    self.emitByte(uv);
                 } else {
                     const idx = self.addStringConstant(name);
                     self.emitOp(.set_global);
@@ -1960,7 +1968,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .enum_variant => i += 6,
             .match_variant => i += 1,
             .get_payload => i += 1,
-            .get_upvalue => i += 1,
+            .get_upvalue, .set_upvalue => i += 1,
             .array_create => i += 1,
             .index_get, .index_set, .array_push, .array_len => {},
             .slide => i += 1,

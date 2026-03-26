@@ -576,6 +576,14 @@ pub const VM = struct {
                     self.push(if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil());
                 },
 
+                .set_upvalue => {
+                    const uv_index = self.readByte();
+                    const cl = self.currentFrame().closure orelse continue;
+                    if (uv_index < cl.upvalues.len) {
+                        cl.upvalues[uv_index] = self.peek(0);
+                    }
+                },
+
                 .get_payload => {
                     const idx = self.readByte();
                     const val = self.pop();
@@ -926,6 +934,13 @@ pub const VM = struct {
                 };
                 self.stack[self.sp] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
                 self.sp += 1;
+            } else if (byte == @intFromEnum(OpCode.set_upvalue)) {
+                const uv_index = code[frame.ip];
+                frame.ip += 1;
+                const cl = self.frames[self.frame_count - 1].closure orelse continue;
+                if (uv_index < cl.upvalues.len) {
+                    cl.upvalues[uv_index] = self.stack[self.sp - 1];
+                }
             } else if (byte == @intFromEnum(OpCode.add_int)) {
                 self.sp -= 1;
                 self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() + self.stack[self.sp].asInt());
@@ -3073,6 +3088,77 @@ test "vm: async io mixed with channels" {
         \\  assert_eq(reply, "pong")
         \\  net.close(client)
         \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: mutable closure counter" {
+    try testRun(
+        \\fn make_counter() {
+        \\  mut count = 0
+        \\  fn() {
+        \\    count = count + 1
+        \\    count
+        \\  }
+        \\}
+        \\fn main() {
+        \\  c = make_counter()
+        \\  assert_eq(c(), 1)
+        \\  assert_eq(c(), 2)
+        \\  assert_eq(c(), 3)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: mutable closure compound assign" {
+    try testRun(
+        \\fn main() {
+        \\  mut total = 0
+        \\  add = fn(n: int) {
+        \\    total += n
+        \\    total
+        \\  }
+        \\  assert_eq(add(5), 5)
+        \\  assert_eq(add(3), 8)
+        \\  assert_eq(add(2), 10)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: mutable closure independent copies" {
+    try testRun(
+        \\fn make_counter() {
+        \\  mut count = 0
+        \\  fn() {
+        \\    count = count + 1
+        \\    count
+        \\  }
+        \\}
+        \\fn main() {
+        \\  a = make_counter()
+        \\  b = make_counter()
+        \\  assert_eq(a(), 1)
+        \\  assert_eq(a(), 2)
+        \\  assert_eq(b(), 1)
+        \\  assert_eq(a(), 3)
+        \\  assert_eq(b(), 2)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: closure mutation does not affect outer scope" {
+    try testRun(
+        \\fn main() {
+        \\  mut x = 10
+        \\  f = fn() {
+        \\    x = 99
+        \\  }
+        \\  f()
+        \\  assert_eq(x, 10)
         \\  println("ok")
         \\}
     );

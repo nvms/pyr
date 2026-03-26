@@ -49,6 +49,7 @@ pub const OpCode = enum(u8) {
 
     make_closure,
     get_upvalue,
+    set_upvalue,
 
     get_field_idx,
     concat_local,

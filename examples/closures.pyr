@@ -2,6 +2,14 @@ fn make_adder(x: int) {
   fn(y) x + y
 }
 
+fn make_counter() {
+  mut count = 0
+  fn() {
+    count = count + 1
+    count
+  }
+}
+
 fn main() {
   add5 = make_adder(5)
   println(add5(3))
@@ -9,4 +17,9 @@ fn main() {
 
   mul = fn(a, b) a * b
   println(mul(6, 7))
+
+  counter = make_counter()
+  println(counter())
+  println(counter())
+  println(counter())
 }
