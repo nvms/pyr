@@ -237,6 +237,7 @@ pub const Parser = struct {
                 .name = vname,
                 .payloads = payloads.toOwnedSlice(self.arena) catch @panic("oom"),
             }) catch @panic("oom");
+            _ = self.eat(.comma);
             self.skipNewlines();
         }
 

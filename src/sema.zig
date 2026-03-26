@@ -1,0 +1,713 @@
+const std = @import("std");
+const ast = @import("ast.zig");
+
+pub const Type = union(enum) {
+    void,
+    bool_,
+    int,
+    float,
+    str,
+    byte,
+    u8_,
+    u16_,
+    u32_,
+    u64_,
+    i8_,
+    i16_,
+    i32_,
+    i64_,
+    f32_,
+    f64_,
+    usize_,
+    isize_,
+    named: []const u8,
+    fn_: FnType,
+    optional: *const Type,
+    pointer: Ptr,
+    slice: *const Type,
+    err,
+
+    pub const Ptr = struct {
+        pointee: *const Type,
+        is_mut: bool,
+    };
+};
+
+pub const FnType = struct {
+    param_count: usize,
+    return_type: *const Type,
+};
+
+pub const Symbol = struct {
+    ty: *const Type,
+    is_mut: bool,
+    kind: Kind,
+
+    pub const Kind = enum { variable, function, parameter, type_name, builtin };
+};
+
+const t_void: Type = .void;
+const t_bool: Type = .bool_;
+const t_int: Type = .int;
+const t_float: Type = .float;
+const t_str: Type = .str;
+const t_byte: Type = .byte;
+const t_err: Type = .err;
+const t_u8: Type = .u8_;
+const t_u16: Type = .u16_;
+const t_u32: Type = .u32_;
+const t_u64: Type = .u64_;
+const t_i8: Type = .i8_;
+const t_i16: Type = .i16_;
+const t_i32: Type = .i32_;
+const t_i64: Type = .i64_;
+const t_f32: Type = .f32_;
+const t_f64: Type = .f64_;
+const t_usize: Type = .usize_;
+const t_isize: Type = .isize_;
+
+const builtin_println_ty: Type = .{ .fn_ = .{ .param_count = 255, .return_type = &t_void } };
+const builtin_print_ty: Type = .{ .fn_ = .{ .param_count = 255, .return_type = &t_void } };
+
+pub const Scope = struct {
+    parent: ?*Scope,
+    symbols: std.StringHashMapUnmanaged(Symbol),
+
+    fn init() Scope {
+        return .{ .parent = null, .symbols = .{} };
+    }
+
+    fn define(self: *Scope, alloc: std.mem.Allocator, name: []const u8, sym: Symbol) void {
+        self.symbols.put(alloc, name, sym) catch @panic("oom");
+    }
+
+    fn lookup(self: *const Scope, name: []const u8) ?Symbol {
+        if (self.symbols.get(name)) |sym| return sym;
+        if (self.parent) |p| return p.lookup(name);
+        return null;
+    }
+
+    fn lookupLocal(self: *const Scope, name: []const u8) ?Symbol {
+        return self.symbols.get(name);
+    }
+};
+
+pub const Error = struct {
+    span: ast.Span,
+    message: []const u8,
+};
+
+pub const Analysis = struct {
+    errors: []const Error,
+};
+
+pub const Sema = struct {
+    arena: std.mem.Allocator,
+    source: []const u8,
+    scope: *Scope,
+    scope_stack: std.ArrayListUnmanaged(*Scope),
+    errors: std.ArrayListUnmanaged(Error),
+    fn_return_type: ?*const Type,
+
+    pub fn analyze(arena: std.mem.Allocator, tree: ast.Ast) Analysis {
+        var self = Sema{
+            .arena = arena,
+            .source = tree.source,
+            .scope = undefined,
+            .scope_stack = .{},
+            .errors = .{},
+            .fn_return_type = null,
+        };
+
+        self.pushScope();
+        self.defineBuiltins();
+
+        for (tree.items) |item| {
+            self.registerItem(item);
+        }
+
+        for (tree.items) |item| {
+            self.analyzeItem(item);
+        }
+
+        self.popScope();
+
+        return .{
+            .errors = self.errors.toOwnedSlice(arena) catch @panic("oom"),
+        };
+    }
+
+    fn defineBuiltins(self: *Sema) void {
+        self.define("println", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("print", .{ .ty = &builtin_print_ty, .is_mut = false, .kind = .builtin });
+        self.define("sqrt", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("len", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+    }
+
+    // ---------------------------------------------------------------
+    // registration (phase 1: forward declarations)
+    // ---------------------------------------------------------------
+
+    fn registerItem(self: *Sema, item: ast.Item) void {
+        switch (item.kind) {
+            .fn_decl => |decl| {
+                const return_ty = if (decl.return_type) |rt| self.resolveType(rt) else &t_void;
+                const fn_ty = self.create(Type, .{ .fn_ = .{
+                    .param_count = decl.params.len,
+                    .return_type = return_ty,
+                } });
+                self.define(decl.name, .{
+                    .ty = fn_ty,
+                    .is_mut = false,
+                    .kind = .function,
+                });
+            },
+            .struct_decl => |decl| {
+                self.define(decl.name, .{
+                    .ty = self.create(Type, .{ .named = decl.name }),
+                    .is_mut = false,
+                    .kind = .type_name,
+                });
+            },
+            .enum_decl => |decl| {
+                self.define(decl.name, .{
+                    .ty = self.create(Type, .{ .named = decl.name }),
+                    .is_mut = false,
+                    .kind = .type_name,
+                });
+                for (decl.variants) |v| {
+                    if (v.payloads.len > 0) {
+                        const variant_fn = self.create(Type, .{ .fn_ = .{
+                            .param_count = v.payloads.len,
+                            .return_type = self.create(Type, .{ .named = decl.name }),
+                        } });
+                        self.define(v.name, .{
+                            .ty = variant_fn,
+                            .is_mut = false,
+                            .kind = .function,
+                        });
+                    } else {
+                        self.define(v.name, .{
+                            .ty = self.create(Type, .{ .named = decl.name }),
+                            .is_mut = false,
+                            .kind = .variable,
+                        });
+                    }
+                }
+            },
+            .trait_decl => |decl| {
+                self.define(decl.name, .{
+                    .ty = self.create(Type, .{ .named = decl.name }),
+                    .is_mut = false,
+                    .kind = .type_name,
+                });
+            },
+            .import => {},
+            .binding => |b| {
+                const ty = if (b.type_expr) |te| self.resolveType(te) else &t_err;
+                self.define(b.name, .{
+                    .ty = ty,
+                    .is_mut = b.is_mut,
+                    .kind = .variable,
+                });
+            },
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // analysis (phase 2: type checking)
+    // ---------------------------------------------------------------
+
+    fn analyzeItem(self: *Sema, item: ast.Item) void {
+        switch (item.kind) {
+            .fn_decl => |decl| self.analyzeFnDecl(decl),
+            .struct_decl => |decl| self.analyzeStructDecl(decl),
+            .enum_decl => {},
+            .trait_decl => {},
+            .import => {},
+            .binding => |b| self.analyzeBinding(b, item.span),
+        }
+    }
+
+    fn analyzeFnDecl(self: *Sema, decl: ast.FnDecl) void {
+        const return_ty = if (decl.return_type) |rt| self.resolveType(rt) else &t_void;
+        const prev_return = self.fn_return_type;
+        self.fn_return_type = return_ty;
+        defer self.fn_return_type = prev_return;
+
+        self.pushScope();
+        defer self.popScope();
+
+        for (decl.params) |param| {
+            const ty = if (param.type_expr) |te| self.resolveType(te) else &t_err;
+            self.define(param.name, .{
+                .ty = ty,
+                .is_mut = false,
+                .kind = .parameter,
+            });
+        }
+
+        switch (decl.body) {
+            .block => |block| self.analyzeBlock(block),
+            .expr => |expr| self.analyzeExpr(expr),
+            .none => {},
+        }
+    }
+
+    fn analyzeStructDecl(self: *Sema, decl: ast.StructDecl) void {
+        for (decl.fields) |field| {
+            _ = self.resolveType(field.type_expr);
+        }
+    }
+
+    fn analyzeBlock(self: *Sema, block: *const ast.Block) void {
+        self.pushScope();
+        defer self.popScope();
+
+        for (block.stmts) |stmt| {
+            self.analyzeStmt(stmt);
+        }
+        if (block.trailing) |expr| {
+            self.analyzeExpr(expr);
+        }
+    }
+
+    fn analyzeStmt(self: *Sema, stmt: ast.Stmt) void {
+        switch (stmt.kind) {
+            .binding => |b| self.analyzeBinding(b, stmt.span),
+            .assign => |a| {
+                self.checkLvalue(a.target);
+                self.analyzeExpr(a.target);
+                self.analyzeExpr(a.value);
+            },
+            .compound_assign => |ca| {
+                self.checkMutableTarget(ca.target, stmt.span);
+                self.analyzeExpr(ca.target);
+                self.analyzeExpr(ca.value);
+            },
+            .ret => |r| {
+                if (r.value) |val| self.analyzeExpr(val);
+            },
+            .for_loop => |fl| {
+                self.analyzeExpr(fl.iterator);
+                self.pushScope();
+                self.define(fl.binding, .{
+                    .ty = &t_err,
+                    .is_mut = false,
+                    .kind = .variable,
+                });
+                self.analyzeBlock(fl.body);
+                self.popScope();
+            },
+            .while_loop => |wl| {
+                self.analyzeExpr(wl.condition);
+                self.analyzeBlock(wl.body);
+            },
+            .expr_stmt => |expr| self.analyzeExpr(expr),
+        }
+    }
+
+    fn analyzeBinding(self: *Sema, binding: ast.Binding, span: ast.Span) void {
+        self.analyzeExpr(binding.value);
+
+        if (self.scope.lookupLocal(binding.name) != null) {
+            self.emitError(span, "redefinition of '{s}'", .{binding.name});
+            return;
+        }
+
+        const ty = if (binding.type_expr) |te| self.resolveType(te) else &t_err;
+        self.define(binding.name, .{
+            .ty = ty,
+            .is_mut = binding.is_mut,
+            .kind = .variable,
+        });
+    }
+
+    fn analyzeExpr(self: *Sema, expr: *const ast.Expr) void {
+        switch (expr.kind) {
+            .int_literal, .float_literal, .string_literal, .bool_literal, .none_literal => {},
+            .identifier => |name| {
+                if (self.resolve(name) == null) {
+                    self.emitError(expr.span, "undefined name '{s}'", .{name});
+                }
+            },
+            .binary => |bin| {
+                self.analyzeExpr(bin.lhs);
+                self.analyzeExpr(bin.rhs);
+            },
+            .unary => |un| self.analyzeExpr(un.operand),
+            .field_access => |fa| self.analyzeExpr(fa.target),
+            .call => |call| {
+                self.analyzeExpr(call.callee);
+                for (call.args) |arg| self.analyzeExpr(arg);
+                self.checkCallArity(call, expr.span);
+            },
+            .index => |idx| {
+                self.analyzeExpr(idx.target);
+                self.analyzeExpr(idx.idx);
+            },
+            .if_expr => |ie| {
+                self.analyzeExpr(ie.condition);
+                self.analyzeBlock(ie.then_block);
+                if (ie.else_branch) |eb| switch (eb) {
+                    .block => |block| self.analyzeBlock(block),
+                    .else_if => |ei| self.analyzeExpr(ei),
+                };
+            },
+            .match_expr => |me| {
+                self.analyzeExpr(me.subject);
+                for (me.arms) |arm| {
+                    self.pushScope();
+                    self.bindPattern(arm.pattern);
+                    if (arm.guard) |g| self.analyzeExpr(g);
+                    self.analyzeExpr(arm.body);
+                    self.popScope();
+                }
+            },
+            .block => |block| self.analyzeBlock(block),
+            .closure => |cl| {
+                self.pushScope();
+                for (cl.params) |param| {
+                    self.define(param.name, .{
+                        .ty = if (param.type_expr) |te| self.resolveType(te) else &t_err,
+                        .is_mut = false,
+                        .kind = .parameter,
+                    });
+                }
+                switch (cl.body) {
+                    .block => |block| self.analyzeBlock(block),
+                    .expr => |e| self.analyzeExpr(e),
+                }
+                self.popScope();
+            },
+            .spawn => |inner| self.analyzeExpr(inner),
+            .struct_literal => |sl| {
+                if (self.resolve(sl.name) == null) {
+                    self.emitError(expr.span, "undefined type '{s}'", .{sl.name});
+                }
+                for (sl.fields) |field| self.analyzeExpr(field.value);
+            },
+            .pipeline => |pl| {
+                for (pl.stages) |stage| self.analyzeExpr(stage);
+            },
+        }
+    }
+
+    fn bindPattern(self: *Sema, pattern: ast.Pattern) void {
+        switch (pattern.kind) {
+            .identifier => |name| {
+                self.define(name, .{
+                    .ty = &t_err,
+                    .is_mut = false,
+                    .kind = .variable,
+                });
+            },
+            .variant => |v| {
+                for (v.bindings) |binding| {
+                    self.define(binding, .{
+                        .ty = &t_err,
+                        .is_mut = false,
+                        .kind = .variable,
+                    });
+                }
+            },
+            .literal, .wildcard => {},
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // type resolution
+    // ---------------------------------------------------------------
+
+    fn resolveType(self: *Sema, type_expr: *const ast.TypeExpr) *const Type {
+        return switch (type_expr.kind) {
+            .named => |name| resolveNamedType(name),
+            .generic => |g| self.create(Type, .{ .named = g.name }),
+            .optional => |inner| self.create(Type, .{ .optional = self.resolveType(inner) }),
+            .pointer => |p| self.create(Type, .{ .pointer = .{
+                .pointee = self.resolveType(p.pointee),
+                .is_mut = p.is_mut,
+            } }),
+            .slice => |inner| self.create(Type, .{ .slice = self.resolveType(inner) }),
+        };
+    }
+
+    fn resolveNamedType(name: []const u8) *const Type {
+        if (std.mem.eql(u8, name, "int")) return &t_int;
+        if (std.mem.eql(u8, name, "float")) return &t_float;
+        if (std.mem.eql(u8, name, "str")) return &t_str;
+        if (std.mem.eql(u8, name, "bool")) return &t_bool;
+        if (std.mem.eql(u8, name, "byte")) return &t_byte;
+        if (std.mem.eql(u8, name, "u8")) return &t_u8;
+        if (std.mem.eql(u8, name, "u16")) return &t_u16;
+        if (std.mem.eql(u8, name, "u32")) return &t_u32;
+        if (std.mem.eql(u8, name, "u64")) return &t_u64;
+        if (std.mem.eql(u8, name, "i8")) return &t_i8;
+        if (std.mem.eql(u8, name, "i16")) return &t_i16;
+        if (std.mem.eql(u8, name, "i32")) return &t_i32;
+        if (std.mem.eql(u8, name, "i64")) return &t_i64;
+        if (std.mem.eql(u8, name, "f32")) return &t_f32;
+        if (std.mem.eql(u8, name, "f64")) return &t_f64;
+        if (std.mem.eql(u8, name, "usize")) return &t_usize;
+        if (std.mem.eql(u8, name, "isize")) return &t_isize;
+        if (std.mem.eql(u8, name, "void")) return &t_void;
+        return &t_err;
+    }
+
+    // ---------------------------------------------------------------
+    // checks
+    // ---------------------------------------------------------------
+
+    fn checkCallArity(self: *Sema, call: ast.Call, span: ast.Span) void {
+        if (call.callee.kind != .identifier) return;
+        const name = call.callee.kind.identifier;
+        const sym = self.resolve(name) orelse return;
+        if (sym.ty.* != .fn_) return;
+        const fn_ty = sym.ty.fn_;
+        if (fn_ty.param_count == 255) return;
+        if (call.args.len != fn_ty.param_count) {
+            self.emitError(span, "'{s}' expects {d} argument(s), got {d}", .{
+                name, fn_ty.param_count, call.args.len,
+            });
+        }
+    }
+
+    fn checkLvalue(self: *Sema, expr: *const ast.Expr) void {
+        switch (expr.kind) {
+            .field_access => {},
+            .index => {},
+            .identifier => |name| {
+                if (self.resolve(name)) |sym| {
+                    if (!sym.is_mut) {
+                        self.emitError(expr.span, "cannot assign to immutable variable '{s}'", .{name});
+                    }
+                }
+            },
+            else => self.emitError(expr.span, "invalid assignment target", .{}),
+        }
+    }
+
+    fn checkMutableTarget(self: *Sema, expr: *const ast.Expr, span: ast.Span) void {
+        if (expr.kind == .identifier) {
+            const name = expr.kind.identifier;
+            if (self.resolve(name)) |sym| {
+                if (!sym.is_mut) {
+                    self.emitError(span, "cannot use compound assignment on immutable variable '{s}'", .{name});
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // scope management
+    // ---------------------------------------------------------------
+
+    fn pushScope(self: *Sema) void {
+        const new_scope = self.arena.create(Scope) catch @panic("oom");
+        new_scope.* = Scope.init();
+        new_scope.parent = if (self.scope_stack.items.len > 0) self.scope else null;
+        self.scope_stack.append(self.arena, new_scope) catch @panic("oom");
+        self.scope = new_scope;
+    }
+
+    fn popScope(self: *Sema) void {
+        _ = self.scope_stack.pop();
+        if (self.scope_stack.items.len > 0) {
+            self.scope = self.scope_stack.items[self.scope_stack.items.len - 1];
+        }
+    }
+
+    fn define(self: *Sema, name: []const u8, sym: Symbol) void {
+        self.scope.define(self.arena, name, sym);
+    }
+
+    fn resolve(self: *Sema, name: []const u8) ?Symbol {
+        return self.scope.lookup(name);
+    }
+
+    // ---------------------------------------------------------------
+    // helpers
+    // ---------------------------------------------------------------
+
+    fn create(self: *Sema, comptime T: type, value: T) *const T {
+        const ptr = self.arena.create(T) catch @panic("oom");
+        ptr.* = value;
+        return ptr;
+    }
+
+    fn emitError(self: *Sema, span: ast.Span, comptime fmt: []const u8, args: anytype) void {
+        const message = std.fmt.allocPrint(self.arena, fmt, args) catch @panic("oom");
+        self.errors.append(self.arena, .{ .span = span, .message = message }) catch @panic("oom");
+    }
+};
+
+// ---------------------------------------------------------------
+// tests
+// ---------------------------------------------------------------
+
+const parser = @import("parser.zig");
+
+fn testAnalyze(source: []const u8) Analysis {
+    var arena_impl = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const arena = arena_impl.allocator();
+    const tokens = parser.tokenize(arena, source);
+    var p = parser.Parser.init(tokens, source, arena);
+    const tree = p.parse();
+    if (tree.errors.len > 0) @panic("parse error in test");
+    return Sema.analyze(arena, tree);
+}
+
+fn expectNoErrors(result: Analysis) !void {
+    if (result.errors.len > 0) {
+        std.debug.print("sema errors:\n", .{});
+        for (result.errors) |err| {
+            std.debug.print("  [{d}..{d}] {s}\n", .{ err.span.start, err.span.end, err.message });
+        }
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn expectError(result: Analysis, needle: []const u8) !void {
+    for (result.errors) |err| {
+        if (std.mem.indexOf(u8, err.message, needle) != null) return;
+    }
+    std.debug.print("expected error containing '{s}', got {d} error(s):\n", .{ needle, result.errors.len });
+    for (result.errors) |err| {
+        std.debug.print("  {s}\n", .{err.message});
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "sema: clean hello world" {
+    const result = testAnalyze("fn main() {\n  println(\"hello\")\n}");
+    try expectNoErrors(result);
+}
+
+test "sema: function with params" {
+    const result = testAnalyze("fn add(a: int, b: int) -> int {\n  a + b\n}");
+    try expectNoErrors(result);
+}
+
+test "sema: undefined variable" {
+    const result = testAnalyze("fn f() {\n  println(x)\n}");
+    try expectError(result, "undefined name 'x'");
+}
+
+test "sema: forward reference to function" {
+    const result = testAnalyze("fn foo() {\n  bar()\n}\nfn bar() {}");
+    try expectNoErrors(result);
+}
+
+test "sema: struct and field access" {
+    const result = testAnalyze(
+        \\struct User {
+        \\  name: str
+        \\}
+        \\fn f(u: User) = u.name
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: enum variants in scope" {
+    const result = testAnalyze(
+        \\enum Color { Red, Green, Blue }
+        \\fn f() = Red
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: enum variant constructor" {
+    const result = testAnalyze(
+        \\enum Shape {
+        \\  Circle(float)
+        \\  Point
+        \\}
+        \\fn f() = Circle(5.0)
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: wrong arity" {
+    const result = testAnalyze(
+        \\fn add(a: int, b: int) -> int = a + b
+        \\fn f() = add(1, 2, 3)
+    );
+    try expectError(result, "expects 2 argument(s), got 3");
+}
+
+test "sema: variable binding" {
+    const result = testAnalyze("fn f() {\n  x = 5\n  println(x)\n}");
+    try expectNoErrors(result);
+}
+
+test "sema: mutable binding" {
+    const result = testAnalyze("fn f() {\n  mut x = 5\n  x += 1\n}");
+    try expectNoErrors(result);
+}
+
+test "sema: immutable compound assign" {
+    const result = testAnalyze("fn f() {\n  x = 5\n  x += 1\n}");
+    try expectError(result, "cannot use compound assignment on immutable");
+}
+
+test "sema: redefinition" {
+    const result = testAnalyze("fn f() {\n  x = 5\n  x = 10\n}");
+    try expectError(result, "redefinition");
+}
+
+test "sema: closure params in scope" {
+    const result = testAnalyze("fn f() = fn(x) x + 1");
+    try expectNoErrors(result);
+}
+
+test "sema: for loop binding" {
+    const result = testAnalyze("fn f() {\n  for item in items {\n    println(item)\n  }\n}");
+    try expectError(result, "undefined name 'items'");
+}
+
+test "sema: nested scopes" {
+    const result = testAnalyze(
+        \\fn f() {
+        \\  x = 1
+        \\  if true {
+        \\    y = 2
+        \\    println(x)
+        \\    println(y)
+        \\  }
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: match expression" {
+    const result = testAnalyze(
+        \\enum Shape {
+        \\  Circle(float)
+        \\  Point
+        \\}
+        \\fn f(s: Shape) = match s {
+        \\  Circle(r) -> r
+        \\  Point -> 0.0
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: multiple items" {
+    const result = testAnalyze(
+        \\struct Point {
+        \\  x: float
+        \\  y: float
+        \\}
+        \\fn distance(a: Point, b: Point) -> float {
+        \\  dx = a.x - b.x
+        \\  dy = a.y - b.y
+        \\  sqrt(dx * dx + dy * dy)
+        \\}
+        \\fn main() {
+        \\  p = Point { x: 0.0, y: 0.0 }
+        \\  println(distance(p, p))
+        \\}
+    );
+    try expectNoErrors(result);
+}

@@ -1,6 +1,8 @@
 const std = @import("std");
 const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
+const sema = @import("sema.zig");
+const codegen = @import("codegen.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -60,7 +62,31 @@ fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
         std.process.exit(1);
     }
 
-    std.debug.print("parsed {s}: {d} items\n", .{ path, result.items.len });
+    const analysis = sema.Sema.analyze(arena.allocator(), result);
+
+    if (analysis.errors.len > 0) {
+        for (analysis.errors) |err| {
+            const loc = lineCol(source, err.span.start);
+            std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ path, loc.line, loc.col, err.message });
+        }
+        std.process.exit(1);
+    }
+
+    const zig_source = codegen.Codegen.generate(arena.allocator(), result);
+
+    const out_path = blk: {
+        if (std.mem.endsWith(u8, path, ".pyr")) {
+            break :blk std.fmt.allocPrint(arena.allocator(), "{s}.zig", .{path[0 .. path.len - 4]}) catch @panic("oom");
+        }
+        break :blk std.fmt.allocPrint(arena.allocator(), "{s}.zig", .{path}) catch @panic("oom");
+    };
+
+    std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = zig_source }) catch |write_err| {
+        std.debug.print("error: could not write '{s}': {}\n", .{ out_path, write_err });
+        std.process.exit(1);
+    };
+
+    std.debug.print("compiled {s} -> {s}\n", .{ path, out_path });
 }
 
 fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
@@ -98,4 +124,6 @@ fn printUsage() void {
 test {
     _ = lexer;
     _ = @import("parser.zig");
+    _ = @import("sema.zig");
+    _ = @import("codegen.zig");
 }
