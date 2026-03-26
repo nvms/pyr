@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
+const ModuleLoader = @import("module.zig").ModuleLoader;
 
 pub const Type = union(enum) {
     void,
@@ -108,8 +109,14 @@ pub const Sema = struct {
     scope_stack: std.ArrayListUnmanaged(*Scope),
     errors: std.ArrayListUnmanaged(Error),
     fn_return_type: ?*const Type,
+    module_loader: ?*ModuleLoader,
+    module_dir: []const u8,
 
     pub fn analyze(arena: std.mem.Allocator, tree: ast.Ast) Analysis {
+        return analyzeModule(arena, tree, null, ".");
+    }
+
+    pub fn analyzeModule(arena: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) Analysis {
         var self = Sema{
             .arena = arena,
             .source = tree.source,
@@ -117,6 +124,8 @@ pub const Sema = struct {
             .scope_stack = .{},
             .errors = .{},
             .fn_return_type = null,
+            .module_loader = loader,
+            .module_dir = dir,
         };
 
         self.pushScope();
@@ -206,7 +215,7 @@ pub const Sema = struct {
                     .kind = .type_name,
                 });
             },
-            .import => {},
+            .import => |imp| self.registerImport(imp),
             .binding => |b| {
                 const ty = if (b.type_expr) |te| self.resolveType(te) else &t_err;
                 self.define(b.name, .{
@@ -215,6 +224,53 @@ pub const Sema = struct {
                     .kind = .variable,
                 });
             },
+        }
+    }
+
+    fn registerImport(self: *Sema, imp: ast.Import) void {
+        const loader = self.module_loader orelse return;
+        const mod = loader.load(imp.path, self.module_dir) orelse return;
+
+        if (imp.items.len > 0) {
+            for (mod.tree.items) |item| {
+                switch (item.kind) {
+                    .fn_decl => |decl| {
+                        if (!decl.is_pub) continue;
+                        for (imp.items) |wanted| {
+                            if (std.mem.eql(u8, decl.name, wanted)) {
+                                self.registerItem(item);
+                                break;
+                            }
+                        }
+                    },
+                    .struct_decl => |decl| {
+                        if (!decl.is_pub) continue;
+                        for (imp.items) |wanted| {
+                            if (std.mem.eql(u8, decl.name, wanted)) {
+                                self.registerItem(item);
+                                break;
+                            }
+                        }
+                    },
+                    .enum_decl => |decl| {
+                        if (!decl.is_pub) continue;
+                        for (imp.items) |wanted| {
+                            if (std.mem.eql(u8, decl.name, wanted)) {
+                                self.registerItem(item);
+                                break;
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        } else {
+            const ns_name = imp.alias orelse imp.path[imp.path.len - 1];
+            self.define(ns_name, .{
+                .ty = &t_err,
+                .is_mut = false,
+                .kind = .variable,
+            });
         }
     }
 

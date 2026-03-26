@@ -6,6 +6,8 @@ const Value = @import("value.zig").Value;
 const ObjString = @import("value.zig").ObjString;
 const ObjFunction = @import("value.zig").ObjFunction;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
+const ModuleLoader = @import("module.zig").ModuleLoader;
+const Module = @import("module.zig").Module;
 
 const VariantInfo = struct {
     type_name: []const u8,
@@ -34,6 +36,9 @@ pub const Compiler = struct {
     fn_returns: std.StringHashMapUnmanaged(TypeHint),
     upvalues: [256]Upvalue,
     upvalue_count: u8,
+    module_loader: ?*ModuleLoader,
+    module_dir: []const u8,
+    module_namespaces: std.StringHashMapUnmanaged(*Module),
 
     pub const Local = struct {
         name: []const u8,
@@ -47,6 +52,10 @@ pub const Compiler = struct {
     };
 
     pub fn compile(alloc: std.mem.Allocator, tree: ast.Ast) ?*ObjFunction {
+        return compileModule(alloc, tree, null, ".");
+    }
+
+    pub fn compileModule(alloc: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) ?*ObjFunction {
         const script = ObjFunction.create(alloc, "", 0);
         var compiler = Compiler{
             .alloc = alloc,
@@ -61,6 +70,9 @@ pub const Compiler = struct {
             .fn_returns = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
+            .module_loader = loader,
+            .module_dir = dir,
+            .module_namespaces = .{},
         };
 
         compiler.defineNatives();
@@ -162,7 +174,66 @@ pub const Compiler = struct {
                     }) catch @panic("oom");
                 }
             },
+            .import => |imp| self.registerImport(imp),
             else => {},
+        }
+    }
+
+    fn registerImport(self: *Compiler, imp: ast.Import) void {
+        const loader = self.module_loader orelse return;
+        const mod = loader.load(imp.path, self.module_dir) orelse return;
+
+        if (imp.items.len > 0) {
+            for (mod.tree.items) |item| {
+                switch (item.kind) {
+                    .fn_decl => |decl| {
+                        if (!decl.is_pub) continue;
+                        for (imp.items) |wanted| {
+                            if (std.mem.eql(u8, decl.name, wanted)) {
+                                self.registerDecl(item);
+                                break;
+                            }
+                        }
+                    },
+                    .struct_decl => |decl| {
+                        if (!decl.is_pub) continue;
+                        for (imp.items) |wanted| {
+                            if (std.mem.eql(u8, decl.name, wanted)) {
+                                self.registerDecl(item);
+                                break;
+                            }
+                        }
+                    },
+                    .enum_decl => |decl| {
+                        if (!decl.is_pub) continue;
+                        for (imp.items) |wanted| {
+                            if (std.mem.eql(u8, decl.name, wanted)) {
+                                self.registerDecl(item);
+                                break;
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        } else {
+            const ns_name = imp.alias orelse imp.path[imp.path.len - 1];
+            self.module_namespaces.put(self.alloc, ns_name, mod) catch @panic("oom");
+
+            for (mod.tree.items) |item| {
+                switch (item.kind) {
+                    .fn_decl => |decl| {
+                        if (decl.is_pub) self.registerDecl(item);
+                    },
+                    .struct_decl => |decl| {
+                        if (decl.is_pub) self.registerDecl(item);
+                    },
+                    .enum_decl => |decl| {
+                        if (decl.is_pub) self.registerDecl(item);
+                    },
+                    else => {},
+                }
+            }
         }
     }
 
@@ -174,7 +245,32 @@ pub const Compiler = struct {
         switch (item.kind) {
             .fn_decl => |decl| self.compileFnDecl(decl),
             .binding => |b| self.compileTopBinding(b),
-            .struct_decl, .enum_decl, .trait_decl, .import => {},
+            .struct_decl, .enum_decl, .trait_decl => {},
+            .import => |imp| self.compileImport(imp),
+        }
+    }
+
+    fn compileImport(self: *Compiler, imp: ast.Import) void {
+        const loader = self.module_loader orelse return;
+        const mod = loader.load(imp.path, self.module_dir) orelse return;
+        for (mod.tree.items) |item| {
+            switch (item.kind) {
+                .fn_decl => |decl| {
+                    if (!decl.is_pub) continue;
+                    if (imp.items.len > 0) {
+                        var wanted = false;
+                        for (imp.items) |name| {
+                            if (std.mem.eql(u8, decl.name, name)) {
+                                wanted = true;
+                                break;
+                            }
+                        }
+                        if (!wanted) continue;
+                    }
+                    self.compileFnDecl(decl);
+                },
+                else => {},
+            }
         }
     }
 
@@ -194,6 +290,9 @@ pub const Compiler = struct {
             .fn_returns = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
+            .module_loader = self.module_loader,
+            .module_dir = self.module_dir,
+            .module_namespaces = .{},
         };
         sub.addLocal("");
 
@@ -459,6 +558,12 @@ pub const Compiler = struct {
             },
             .call => |call| self.compileCall(call),
             .field_access => |fa| {
+                if (fa.target.kind == .identifier) {
+                    if (self.resolveModuleFunction(fa.target.kind.identifier, fa.field)) |func| {
+                        self.emitConstant(func.toValue());
+                        return;
+                    }
+                }
                 if (self.resolveFieldIndex(fa.field)) |field_idx| {
                     if (fa.target.kind == .identifier) {
                         if (self.resolveLocal(fa.target.kind.identifier)) |slot| {
@@ -525,6 +630,17 @@ pub const Compiler = struct {
             const str = ObjString.create(self.alloc, "");
             self.emitConstant(str.toValue());
         }
+    }
+
+    fn resolveModuleFunction(self: *Compiler, ns: []const u8, name: []const u8) ?*ObjFunction {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.module_namespaces.get(ns)) |_| {
+                return cur.fn_table.get(name);
+            }
+            c = cur.enclosing;
+        }
+        return null;
     }
 
     fn compileIdentifier(self: *Compiler, name: []const u8) void {
@@ -873,6 +989,9 @@ pub const Compiler = struct {
             .fn_returns = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
+            .module_loader = self.module_loader,
+            .module_dir = self.module_dir,
+            .module_namespaces = .{},
         };
         sub.addLocal("");
 

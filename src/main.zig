@@ -4,6 +4,7 @@ const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const compiler = @import("compiler.zig");
 const vm_mod = @import("vm.zig");
+const module = @import("module.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -62,7 +63,10 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
         std.process.exit(1);
     }
 
-    const analysis = sema.Sema.analyze(arena.allocator(), result);
+    const dir = module.dirOf(path, arena.allocator());
+    var loader = module.ModuleLoader.init(arena.allocator(), dir);
+
+    const analysis = sema.Sema.analyzeModule(arena.allocator(), result, &loader, dir);
     if (analysis.errors.len > 0) {
         for (analysis.errors) |err| {
             const loc = lineCol(source, err.span.start);
@@ -70,8 +74,7 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
         }
         std.process.exit(1);
     }
-
-    const func = compiler.Compiler.compile(arena.allocator(), result) orelse {
+    const func = compiler.Compiler.compileModule(arena.allocator(), result, &loader, dir) orelse {
         std.debug.print("error: compilation failed\n", .{});
         std.process.exit(1);
     };
@@ -129,4 +132,5 @@ test {
     _ = @import("sema.zig");
     _ = @import("value.zig");
     _ = @import("vm.zig");
+    _ = @import("module.zig");
 }
