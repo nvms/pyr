@@ -561,6 +561,7 @@ pub const ObjFunction = struct {
     arity: u8,
     locals_only: bool,
     chunk: @import("chunk.zig").Chunk,
+    source: []const u8,
 
     pub fn create(alloc: std.mem.Allocator, name: []const u8, arity: u8) *ObjFunction {
         const func = alloc.create(ObjFunction) catch @panic("oom");
@@ -569,6 +570,7 @@ pub const ObjFunction = struct {
             .arity = arity,
             .locals_only = false,
             .chunk = @import("chunk.zig").Chunk.init(),
+            .source = "",
         };
         return func;
     }

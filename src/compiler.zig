@@ -51,6 +51,8 @@ pub const Compiler = struct {
     native_fns: std.StringHashMapUnmanaged(*ObjNativeFn),
     ffi_descs: std.ArrayListUnmanaged(ffi.FfiDesc),
     ffi_funcs: std.StringHashMapUnmanaged(u16),
+    source: []const u8,
+    current_line: u32,
 
     pub const Local = struct {
         name: []const u8,
@@ -69,6 +71,7 @@ pub const Compiler = struct {
 
     pub fn compileModule(alloc: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) ?CompileResult {
         const script = ObjFunction.create(alloc, "", 0);
+        script.source = tree.source;
         var compiler = Compiler{
             .alloc = alloc,
             .enclosing = null,
@@ -89,6 +92,8 @@ pub const Compiler = struct {
             .native_fns = .{},
             .ffi_descs = .{},
             .ffi_funcs = .{},
+            .source = tree.source,
+            .current_line = 1,
         };
 
         compiler.defineNatives();
@@ -339,6 +344,7 @@ pub const Compiler = struct {
     // ---------------------------------------------------------------
 
     fn compileItem(self: *Compiler, item: ast.Item) void {
+        self.setSpan(item.span);
         switch (item.kind) {
             .fn_decl => |decl| self.compileFnDecl(decl),
             .binding => |b| self.compileTopBinding(b),
@@ -400,6 +406,7 @@ pub const Compiler = struct {
 
     fn compileFnDecl(self: *Compiler, decl: ast.FnDecl) void {
         const func = self.findFunction(decl.name) orelse ObjFunction.create(self.alloc, decl.name, @intCast(decl.params.len));
+        func.source = self.source;
 
         var sub = Compiler{
             .alloc = self.alloc,
@@ -421,6 +428,8 @@ pub const Compiler = struct {
             .native_fns = .{},
             .ffi_descs = .{},
             .ffi_funcs = .{},
+            .source = self.source,
+            .current_line = self.current_line,
         };
         sub.addLocal("");
 
@@ -480,6 +489,7 @@ pub const Compiler = struct {
     }
 
     fn compileStmt(self: *Compiler, stmt: ast.Stmt) void {
+        self.setSpan(stmt.span);
         switch (stmt.kind) {
             .binding => |b| {
                 if (self.scope_depth > 0) {
@@ -728,6 +738,7 @@ pub const Compiler = struct {
     // ---------------------------------------------------------------
 
     fn compileExpr(self: *Compiler, expr: *const ast.Expr) void {
+        self.setSpan(expr.span);
         switch (expr.kind) {
             .int_literal => |text| {
                 const val = std.fmt.parseInt(i64, text, 10) catch 0;
@@ -1434,6 +1445,7 @@ pub const Compiler = struct {
 
     fn compileClosure(self: *Compiler, cl: ast.Closure) void {
         var func = ObjFunction.create(self.alloc, "<closure>", @intCast(cl.params.len));
+        func.source = self.source;
         var sub = Compiler{
             .alloc = self.alloc,
             .enclosing = self,
@@ -1454,6 +1466,8 @@ pub const Compiler = struct {
             .native_fns = .{},
             .ffi_descs = .{},
             .ffi_funcs = .{},
+            .source = self.source,
+            .current_line = self.current_line,
         };
         sub.addLocal("");
 
@@ -1493,6 +1507,7 @@ pub const Compiler = struct {
 
     fn compileSpawn(self: *Compiler, body: *const ast.Expr) void {
         var func = ObjFunction.create(self.alloc, "<spawn>", 0);
+        func.source = self.source;
         var sub = Compiler{
             .alloc = self.alloc,
             .enclosing = self,
@@ -1513,6 +1528,8 @@ pub const Compiler = struct {
             .native_fns = .{},
             .ffi_descs = .{},
             .ffi_funcs = .{},
+            .source = self.source,
+            .current_line = self.current_line,
         };
         sub.addLocal("");
 
@@ -1893,16 +1910,29 @@ pub const Compiler = struct {
         return &self.function.chunk;
     }
 
+    fn lineFromOffset(self: *const Compiler, offset: usize) u32 {
+        var line: u32 = 1;
+        const end = @min(offset, self.source.len);
+        for (self.source[0..end]) |c| {
+            if (c == '\n') line += 1;
+        }
+        return line;
+    }
+
+    fn setSpan(self: *Compiler, span: ast.Span) void {
+        self.current_line = self.lineFromOffset(span.start);
+    }
+
     fn emitByte(self: *Compiler, byte: u8) void {
-        self.chunk().write(self.alloc, byte, 0);
+        self.chunk().write(self.alloc, byte, self.current_line);
     }
 
     fn emitOp(self: *Compiler, op: OpCode) void {
-        self.chunk().writeOp(self.alloc, op, 0);
+        self.chunk().writeOp(self.alloc, op, self.current_line);
     }
 
     fn emitU16(self: *Compiler, val: u16) void {
-        self.chunk().writeU16(self.alloc, val, 0);
+        self.chunk().writeU16(self.alloc, val, self.current_line);
     }
 
     fn emitConstant(self: *Compiler, val: Value) void {

@@ -2008,14 +2008,66 @@ pub const VM = struct {
     }
 
     fn runtimeError(self: *VM, comptime fmt: []const u8, args: anytype) void {
-        std.debug.print("runtime error: " ++ fmt ++ "\n", args);
-        var i: usize = self.frame_count;
-        while (i > 0) {
-            i -= 1;
-            const frame = &self.frames[i];
-            const name = if (frame.function.name.len > 0) frame.function.name else "<script>";
-            std.debug.print("  in {s}\n", .{name});
+        const frame = &self.frames[self.frame_count - 1];
+        const ip = if (frame.ip > 0) frame.ip - 1 else 0;
+        const line = if (ip < frame.function.chunk.lines.items.len) frame.function.chunk.lines.items[ip] else 0;
+        const src = frame.function.source;
+        const name = if (frame.function.name.len > 0) frame.function.name else "<script>";
+
+        var buf: [4096]u8 = undefined;
+        var pos: usize = 0;
+
+        pos += (std.fmt.bufPrint(buf[pos..], "\nruntime error: " ++ fmt ++ "\n", args) catch return).len;
+
+        if (line > 0 and src.len > 0) {
+            const src_line = getSourceLine(src, line);
+            var line_buf: [8]u8 = undefined;
+            const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{line}) catch "?";
+            const gutter = line_str.len + 1;
+            const spaces = "                ";
+
+            pos += (std.fmt.bufPrint(buf[pos..], "{s}--> {s}() line {d}\n", .{ spaces[0..@min(gutter, spaces.len)], name, line }) catch return).len;
+            pos += (std.fmt.bufPrint(buf[pos..], "{s} |\n", .{spaces[0..@min(gutter, spaces.len)]}) catch return).len;
+            pos += (std.fmt.bufPrint(buf[pos..], " {s} | {s}\n", .{ line_str, src_line }) catch return).len;
+            pos += (std.fmt.bufPrint(buf[pos..], "{s} |\n", .{spaces[0..@min(gutter, spaces.len)]}) catch return).len;
         }
+
+        if (self.frame_count > 1) {
+            pos += (std.fmt.bufPrint(buf[pos..], "stack trace:\n", .{}) catch return).len;
+            var i: usize = self.frame_count;
+            while (i > 0) {
+                i -= 1;
+                const f = &self.frames[i];
+                const fn_name = if (f.function.name.len > 0) f.function.name else "<script>";
+                const fn_ip = if (f.ip > 0) f.ip - 1 else 0;
+                const fn_line = if (fn_ip < f.function.chunk.lines.items.len) f.function.chunk.lines.items[fn_ip] else 0;
+                if (fn_line > 0) {
+                    pos += (std.fmt.bufPrint(buf[pos..], "  {s}() line {d}\n", .{ fn_name, fn_line }) catch return).len;
+                } else {
+                    pos += (std.fmt.bufPrint(buf[pos..], "  {s}()\n", .{fn_name}) catch return).len;
+                }
+            }
+        }
+
+        _ = std.posix.write(2, buf[0..pos]) catch {};
+    }
+
+    fn getSourceLine(source: []const u8, target_line: u32) []const u8 {
+        var line: u32 = 1;
+        var start: usize = 0;
+        for (source, 0..) |c, idx| {
+            if (line == target_line) {
+                var end = idx;
+                while (end < source.len and source[end] != '\n') end += 1;
+                return source[start..end];
+            }
+            if (c == '\n') {
+                line += 1;
+                start = idx + 1;
+            }
+        }
+        if (line == target_line) return source[start..];
+        return "";
     }
 };
 

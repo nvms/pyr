@@ -79,7 +79,7 @@ error: type mismatch
            user = find(42) ?? return not_found()
 ```
 
-**current state:** layer 1 (pretty compile-time errors) is implemented. `printDiagnostic()` in main.zig renders parser and sema errors with source excerpts, line number gutters, and `^^^` underlines. `Token.Tag.displayName()` provides human-readable token names in parser errors. layers 2 (line info in bytecode) and 3 (runtime error context) are documented in `.handoff/error-diagnostics.md`
+**current state:** all three layers implemented. layer 1: `printDiagnostic()` in main.zig renders parser and sema errors with source excerpts, line number gutters, and `^^^` underlines. layer 2: compiler propagates real line numbers from AST spans to bytecode (via `current_line` field + `setSpan()` calls on item/stmt/expr). layer 3: `runtimeError()` in vm.zig reads line numbers from bytecode, prints source context with gutter formatting, and a full stack trace with function names and line numbers. `ObjFunction.source` field stores the source text pointer for runtime diagnostics
 
 ## workflow
 
