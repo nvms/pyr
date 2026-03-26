@@ -8,6 +8,7 @@ const ObjStruct = @import("value.zig").ObjStruct;
 const ObjEnum = @import("value.zig").ObjEnum;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ObjClosure = @import("value.zig").ObjClosure;
+const ObjArray = @import("value.zig").ObjArray;
 
 pub const ConcatState = struct {
     buf: std.ArrayListUnmanaged(u8),
@@ -232,6 +233,13 @@ pub const VM = struct {
                             self.runtimeError("string has no field '{s}'", .{field_name});
                             return error.RuntimeError;
                         }
+                    } else if (val.tag == .array) {
+                        if (std.mem.eql(u8, field_name, "len")) {
+                            self.push(Value.initInt(@intCast(val.asArray().items.len)));
+                        } else {
+                            self.runtimeError("array has no field '{s}'", .{field_name});
+                            return error.RuntimeError;
+                        }
                     } else {
                         self.runtimeError("cannot access field on this value", .{});
                         return error.RuntimeError;
@@ -438,6 +446,60 @@ pub const VM = struct {
                     const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initBool(af > bf));
                 },
+
+                .array_create => {
+                    const count = self.readByte();
+                    const items = self.stack[self.sp - count .. self.sp];
+                    const arr = ObjArray.create(self.alloc, items);
+                    self.sp -= count;
+                    self.push(arr.toValue());
+                },
+                .index_get => {
+                    const idx_val = self.pop();
+                    const target = self.pop();
+                    if (target.tag == .array and idx_val.tag == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            self.push(arr.items[@intCast(idx)]);
+                        } else {
+                            self.runtimeError("array index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else if (target.tag == .string and idx_val.tag == .int) {
+                        const s = target.asString();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
+                            const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
+                            self.push(ObjString.create(self.alloc, ch).toValue());
+                        } else {
+                            self.runtimeError("string index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot index into this value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+                .index_set => {
+                    const val = self.pop();
+                    const idx_val = self.pop();
+                    const target = self.pop();
+                    if (target.tag == .array and idx_val.tag == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            arr.items[@intCast(idx)] = val;
+                        } else {
+                            self.runtimeError("array index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot index-assign into this value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+                .array_push, .array_len => {},
             }
         }
     }

@@ -169,6 +169,7 @@ pub const Expr = struct {
 
         struct_literal: StructLiteral,
         pipeline: Pipeline,
+        array_literal: []const *const Expr,
     };
 };
 

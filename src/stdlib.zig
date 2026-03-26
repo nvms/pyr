@@ -1,6 +1,7 @@
 const std = @import("std");
 const Value = @import("value.zig").Value;
 const ObjString = @import("value.zig").ObjString;
+const ObjArray = @import("value.zig").ObjArray;
 
 pub const NativeDef = struct {
     name: []const u8,
@@ -84,6 +85,15 @@ fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void {
         },
         .native_fn => writeBytes(fd, "<native fn>"),
         .closure => writeBytes(fd, "<closure>"),
+        .array => {
+            const arr = v.asArray();
+            writeBytes(fd, "[");
+            for (arr.items, 0..) |item, i| {
+                if (i > 0) writeBytes(fd, ", ");
+                writeValueTo(alloc, fd, item);
+            }
+            writeBytes(fd, "]");
+        },
     }
 }
 
@@ -206,11 +216,15 @@ fn osEnv(alloc: std.mem.Allocator, args: []const Value) Value {
     return ObjString.create(alloc, owned).toValue();
 }
 
-fn osArgs(_: std.mem.Allocator, _: []const Value) Value {
-    // returns arg count until arrays are implemented
-    const a = std.process.argsAlloc(std.heap.page_allocator) catch return Value.initInt(0);
+fn osArgs(alloc: std.mem.Allocator, _: []const Value) Value {
+    const a = std.process.argsAlloc(std.heap.page_allocator) catch return ObjArray.create(alloc, &.{}).toValue();
     defer std.process.argsFree(std.heap.page_allocator, a);
-    return Value.initInt(@intCast(a.len));
+    const arr = ObjArray.create(alloc, &.{});
+    for (a) |arg| {
+        const s = ObjString.create(alloc, alloc.dupe(u8, arg) catch "");
+        arr.push(alloc, s.toValue());
+    }
+    return arr.toValue();
 }
 
 fn osExit(_: std.mem.Allocator, args: []const Value) Value {

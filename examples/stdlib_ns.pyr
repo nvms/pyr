@@ -5,5 +5,5 @@ fn main() {
   io.println("namespace import works")
   home = os.env("HOME")
   io.println(home)
-  io.println(os.args())
+  io.println(len(os.args()))
 }

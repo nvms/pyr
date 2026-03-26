@@ -103,6 +103,7 @@ pub const Compiler = struct {
         self.defineNativeFn("int", 1, &nativeInt);
         self.defineNativeFn("float", 1, &nativeFloat);
         self.defineNativeFn("len", 1, &nativeLen);
+        self.defineNativeFn("push", 2, &nativePush);
         self.defineNativeFn("assert", 1, &nativeAssert);
         self.defineNativeFn("assert_eq", 2, &nativeAssertEq);
     }
@@ -149,7 +150,15 @@ pub const Compiler = struct {
     fn nativeLen(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
         if (v.tag == .string) return Value.initInt(@intCast(v.asString().chars.len));
+        if (v.tag == .array) return Value.initInt(@intCast(v.asArray().items.len));
         return Value.initInt(0);
+    }
+
+    fn nativePush(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag == .array) {
+            args[0].asArray().push(alloc, args[1]);
+        }
+        return Value.initNil();
     }
 
     fn nativeAssert(_: std.mem.Allocator, args: []const Value) Value {
@@ -531,9 +540,62 @@ pub const Compiler = struct {
         if (range_args) |args| {
             self.compileForRange(fl.binding, args, fl.body);
         } else {
-            self.compileExpr(fl.iterator);
+            self.compileForIn(fl.binding, fl.iterator, fl.body);
+        }
+    }
+
+    fn compileForIn(self: *Compiler, binding: []const u8, iterator: *const ast.Expr, body: *const ast.Block) void {
+        self.beginScope();
+
+        self.compileExpr(iterator);
+        self.addLocal("$iter");
+
+        self.emitConstant(Value.initInt(0));
+        self.addLocalTyped("$idx", .int_);
+
+        const loop_start = self.chunk().count();
+
+        const idx_slot = self.resolveLocal("$idx").?;
+        const iter_slot = self.resolveLocal("$iter").?;
+
+        self.emitOp(.get_local);
+        self.emitByte(idx_slot);
+        self.emitOp(.get_local);
+        self.emitByte(iter_slot);
+        self.emitOp(.get_field);
+        self.emitU16(self.addStringConstant("len"));
+        self.emitOp(.less_int);
+        const exit_jump = self.emitJump(.jump_if_false);
+        self.emitOp(.pop);
+
+        self.beginScope();
+        self.emitOp(.get_local);
+        self.emitByte(iter_slot);
+        self.emitOp(.get_local);
+        self.emitByte(idx_slot);
+        self.emitOp(.index_get);
+        self.addLocal(binding);
+
+        for (body.stmts) |s| self.compileStmt(s);
+        if (body.trailing) |expr| {
+            self.compileExpr(expr);
             self.emitOp(.pop);
         }
+        self.endScope();
+
+        self.emitOp(.get_local);
+        self.emitByte(idx_slot);
+        self.emitConstant(Value.initInt(1));
+        self.emitOp(.add_int);
+        self.emitOp(.set_local);
+        self.emitByte(idx_slot);
+        self.emitOp(.pop);
+
+        self.emitLoop(loop_start);
+        self.patchJump(exit_jump);
+        self.emitOp(.pop);
+
+        self.endScope();
     }
 
     fn compileForRange(self: *Compiler, binding: []const u8, args: RangeArgs, body: *const ast.Block) void {
@@ -679,6 +741,7 @@ pub const Compiler = struct {
             .index => |idx| {
                 self.compileExpr(idx.target);
                 self.compileExpr(idx.idx);
+                self.emitOp(.index_get);
             },
             .if_expr => |ie| self.compileIf(ie),
             .match_expr => |me| self.compileMatch(me),
@@ -687,6 +750,11 @@ pub const Compiler = struct {
             .spawn => {},
             .struct_literal => |sl| self.compileStructLiteral(sl),
             .pipeline => |pl| self.compilePipeline(pl),
+            .array_literal => |elems| {
+                for (elems) |elem| self.compileExpr(elem);
+                self.emitOp(.array_create);
+                self.emitByte(@intCast(elems.len));
+            },
         }
     }
 
@@ -1486,6 +1554,8 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .match_variant => i += 2,
             .get_payload => i += 1,
             .get_upvalue => i += 1,
+            .array_create => i += 1,
+            .index_get, .index_set, .array_push, .array_len => {},
             .make_closure => {
                 i += 2;
                 const uv_count = code[i];

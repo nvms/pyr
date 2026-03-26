@@ -15,6 +15,7 @@ pub const Value = struct {
         enum_,
         native_fn,
         closure,
+        array,
     };
 
     pub fn initNil() Value {
@@ -57,6 +58,10 @@ pub const Value = struct {
         return .{ .tag = .closure, .data = @intFromPtr(ptr) };
     }
 
+    pub fn initArray(ptr: *ObjArray) Value {
+        return .{ .tag = .array, .data = @intFromPtr(ptr) };
+    }
+
     pub fn asBool(self: Value) bool {
         return self.data != 0;
     }
@@ -93,13 +98,17 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asArray(self: Value) *ObjArray {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array => true,
         };
     }
 
@@ -112,6 +121,15 @@ pub const Value = struct {
             .float => a.asFloat() == b.asFloat(),
             .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
             .function, .struct_, .enum_, .native_fn, .closure => a.data == b.data,
+            .array => {
+                const aa = a.asArray();
+                const ba = b.asArray();
+                if (aa.items.len != ba.items.len) return false;
+                for (aa.items, ba.items) |av, bv| {
+                    if (!eql(av, bv)) return false;
+                }
+                return true;
+            },
         };
     }
 
@@ -148,6 +166,15 @@ pub const Value = struct {
             },
             .native_fn => std.debug.print("<native fn>", .{}),
             .closure => std.debug.print("<closure>", .{}),
+            .array => {
+                const arr = self.asArray();
+                std.debug.print("[", .{});
+                for (arr.items, 0..) |item, i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    item.dump();
+                }
+                std.debug.print("]", .{});
+            },
         }
     }
 };
@@ -245,6 +272,40 @@ pub const ObjClosure = struct {
 
     pub fn toValue(self: *ObjClosure) Value {
         return Value.initClosure(self);
+    }
+};
+
+pub const ObjArray = struct {
+    items: []Value,
+    capacity: usize,
+
+    pub fn create(alloc: std.mem.Allocator, initial: []const Value) *ObjArray {
+        const arr = alloc.create(ObjArray) catch @panic("oom");
+        if (initial.len > 0) {
+            const items = alloc.alloc(Value, initial.len) catch @panic("oom");
+            @memcpy(items, initial);
+            arr.* = .{ .items = items, .capacity = initial.len };
+        } else {
+            arr.* = .{ .items = &.{}, .capacity = 0 };
+        }
+        return arr;
+    }
+
+    pub fn push(self: *ObjArray, alloc: std.mem.Allocator, val: Value) void {
+        if (self.items.len == self.capacity) {
+            const new_cap = if (self.capacity == 0) 8 else self.capacity * 2;
+            const new_buf = alloc.alloc(Value, new_cap) catch @panic("oom");
+            if (self.items.len > 0) @memcpy(new_buf[0..self.items.len], self.items);
+            if (self.capacity > 0) alloc.free(self.items.ptr[0..self.capacity]);
+            self.items = new_buf[0..self.items.len];
+            self.capacity = new_cap;
+        }
+        self.items = self.items.ptr[0 .. self.items.len + 1];
+        self.items[self.items.len - 1] = val;
+    }
+
+    pub fn toValue(self: *ObjArray) Value {
+        return Value.initArray(self);
     }
 };
 

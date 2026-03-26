@@ -569,6 +569,7 @@ pub const Parser = struct {
                 _ = self.advance();
                 return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = .none_literal });
             },
+            .lbracket => return self.parseArrayLiteral(),
             .identifier, .kw_int, .kw_float, .kw_str, .kw_bool, .kw_byte => {
                 const name = self.tokenSlice(self.advance());
                 const ident_expr = self.create(ast.Expr, .{
@@ -653,6 +654,27 @@ pub const Parser = struct {
             .string_literal => .{ .string_literal = text },
         };
         return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = expr_kind });
+    }
+
+    fn parseArrayLiteral(self: *Parser) ?*const ast.Expr {
+        const start = self.currentSpanStart();
+        _ = self.advance(); // eat [
+        self.nesting += 1;
+        self.skipNewlines();
+        var elems = std.ArrayListUnmanaged(*const ast.Expr){};
+        while (self.peek() != .rbracket and !self.atEnd()) {
+            const elem = self.parseExpr() orelse return null;
+            elems.append(self.arena, elem) catch @panic("oom");
+            self.skipNewlines();
+            if (self.eat(.comma) == null) break;
+            self.skipNewlines();
+        }
+        self.nesting -= 1;
+        _ = self.expect(.rbracket) orelse return null;
+        return self.create(ast.Expr, .{
+            .span = self.spanFrom(start),
+            .kind = .{ .array_literal = elems.toOwnedSlice(self.arena) catch @panic("oom") },
+        });
     }
 
     fn parseStringInterp(self: *Parser) *const ast.Expr {

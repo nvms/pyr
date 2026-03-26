@@ -67,6 +67,12 @@ pub const OpCode = enum(u8) {
     div_float,
     less_float,
     greater_float,
+
+    array_create,
+    index_get,
+    index_set,
+    array_push,
+    array_len,
 };
 
 pub const Chunk = struct {

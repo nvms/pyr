@@ -90,3 +90,13 @@ else
     printf "  %-12s (not installed)\n" "lua"
 fi
 echo ""
+
+echo "array_sum - 1M push + iterate"
+bench "pyr" $PYR run array_sum.pyr
+bench "python" python3 array_sum.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua array_sum.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""

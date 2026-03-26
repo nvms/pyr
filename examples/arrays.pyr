@@ -1,0 +1,38 @@
+fn main() {
+  nums = [10, 20, 30, 40, 50]
+  assert_eq(len(nums), 5)
+  assert_eq(nums[0], 10)
+  assert_eq(nums[4], 50)
+
+  push(nums, 60)
+  assert_eq(len(nums), 6)
+  assert_eq(nums[5], 60)
+
+  empty = []
+  assert_eq(len(empty), 0)
+  push(empty, "first")
+  assert_eq(empty[0], "first")
+
+  a = [1, 2, 3]
+  b = [1, 2, 3]
+  c = [1, 2, 4]
+  assert(a == b)
+  assert(a != c)
+
+  nested = [[1, 2], [3, 4]]
+  assert_eq(nested[0][0], 1)
+  assert_eq(nested[1][1], 4)
+
+  mut sum = 0
+  for n in nums {
+    sum = sum + n
+  }
+  assert_eq(sum, 210)
+
+  words = ["hello", "world"]
+  for w in words {
+    println(w)
+  }
+
+  println("array tests passed")
+}

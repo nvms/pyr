@@ -156,6 +156,7 @@ pub const Sema = struct {
         self.define("abs", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("int", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("float", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("push", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("assert", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("assert_eq", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
     }
@@ -490,6 +491,9 @@ pub const Sema = struct {
             },
             .pipeline => |pl| {
                 for (pl.stages) |stage| self.analyzeExpr(stage);
+            },
+            .array_literal => |elems| {
+                for (elems) |elem| self.analyzeExpr(elem);
             },
         }
     }
