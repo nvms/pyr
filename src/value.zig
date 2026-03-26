@@ -126,10 +126,11 @@ pub const Value = struct {
             .struct_ => {
                 const s = self.asStruct();
                 std.debug.print("{s} {{ ", .{s.name});
-                for (s.field_names, s.field_values, 0..) |name, val, i| {
+                const fv = s.fieldValues();
+                for (s.field_names, 0..) |name, i| {
                     if (i > 0) std.debug.print(", ", .{});
                     std.debug.print("{s}: ", .{name});
-                    val.dump();
+                    fv[i].dump();
                 }
                 std.debug.print(" }}", .{});
             },
@@ -168,17 +169,29 @@ pub const ObjString = struct {
 pub const ObjStruct = struct {
     name: []const u8,
     field_names: []const []const u8,
-    field_values: []Value,
+    field_count: u8,
 
-    pub fn create(alloc: std.mem.Allocator, name: []const u8, field_names: []const []const u8, field_values: []Value) *ObjStruct {
-        const s = alloc.create(ObjStruct) catch @panic("oom");
-        s.* = .{ .name = name, .field_names = field_names, .field_values = field_values };
-        return s;
+    const header_slots = (@sizeOf(ObjStruct) + @sizeOf(Value) - 1) / @sizeOf(Value);
+
+    pub fn fieldValues(self: *ObjStruct) [*]Value {
+        const base: [*]Value = @ptrCast(@alignCast(@as([*]u8, @ptrCast(self))));
+        return base + header_slots;
+    }
+
+    pub fn create(alloc: std.mem.Allocator, name: []const u8, field_names: []const []const u8, values: []Value) *ObjStruct {
+        const buf = alloc.alloc(Value, header_slots + values.len) catch @panic("oom");
+        const self: *ObjStruct = @ptrCast(&buf[0]);
+        self.* = .{ .name = name, .field_names = field_names, .field_count = @intCast(values.len) };
+        const fv = self.fieldValues();
+        for (values, 0..) |v, i| {
+            fv[i] = v;
+        }
+        return self;
     }
 
     pub fn getField(self: *ObjStruct, name: []const u8) ?Value {
         for (self.field_names, 0..) |fname, i| {
-            if (std.mem.eql(u8, fname, name)) return self.field_values[i];
+            if (std.mem.eql(u8, fname, name)) return self.fieldValues()[i];
         }
         return null;
     }

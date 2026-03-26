@@ -195,7 +195,7 @@ pub const VM = struct {
                     const name = self.currentChunk().constants.items[name_idx].asString().chars;
 
                     const field_names = self.alloc.alloc([]const u8, field_count) catch @panic("oom");
-                    const field_values = self.alloc.alloc(Value, field_count) catch @panic("oom");
+                    const temp_values = self.alloc.alloc(Value, field_count) catch @panic("oom");
 
                     for (0..field_count) |fi| {
                         const fi_idx = self.readU16();
@@ -205,10 +205,11 @@ pub const VM = struct {
                     var fc: usize = field_count;
                     while (fc > 0) {
                         fc -= 1;
-                        field_values[fc] = self.pop();
+                        temp_values[fc] = self.pop();
                     }
 
-                    const s = ObjStruct.create(self.alloc, name, field_names, field_values);
+                    const s = ObjStruct.create(self.alloc, name, field_names, temp_values);
+                    self.alloc.free(temp_values);
                     self.push(s.toValue());
                 },
 
@@ -242,12 +243,24 @@ pub const VM = struct {
                     const val = self.pop();
                     if (val.tag == .struct_) {
                         const s = val.asStruct();
-                        if (idx < s.field_values.len) {
-                            self.push(s.field_values[idx]);
+                        if (idx < s.field_count) {
+                            self.push(s.fieldValues()[idx]);
                         } else {
                             self.runtimeError("field index out of bounds", .{});
                             return error.RuntimeError;
                         }
+                    } else {
+                        self.runtimeError("cannot access field on non-struct value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+
+                .get_local_field => {
+                    const slot = self.readByte();
+                    const field_idx = self.readByte();
+                    const val = self.stack[self.currentFrame().slot_offset + slot];
+                    if (val.tag == .struct_) {
+                        self.push(val.asStruct().fieldValues()[field_idx]);
                     } else {
                         self.runtimeError("cannot access field on non-struct value", .{});
                         return error.RuntimeError;
@@ -347,6 +360,23 @@ pub const VM = struct {
                     const a = self.pop();
                     self.push(Value.initInt(a.asInt() - b.asInt()));
                 },
+                .mul_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(Value.initInt(a.asInt() * b.asInt()));
+                },
+                .div_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const bi = b.asInt();
+                    self.push(Value.initInt(if (bi != 0) @divTrunc(a.asInt(), bi) else 0));
+                },
+                .mod_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const bi = b.asInt();
+                    self.push(Value.initInt(if (bi != 0) @mod(a.asInt(), bi) else 0));
+                },
                 .less_int => {
                     const b = self.pop();
                     const a = self.pop();
@@ -363,6 +393,41 @@ pub const VM = struct {
                     const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
                     const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initFloat(af + bf));
+                },
+                .sub_float => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    self.push(Value.initFloat(af - bf));
+                },
+                .mul_float => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    self.push(Value.initFloat(af * bf));
+                },
+                .div_float => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    self.push(Value.initFloat(if (bf != 0.0) af / bf else 0.0));
+                },
+                .less_float => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    self.push(Value.initBool(af < bf));
+                },
+                .greater_float => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    self.push(Value.initBool(af > bf));
                 },
             }
         }
@@ -465,55 +530,27 @@ pub const VM = struct {
                     self.sp -= arg_count + 1;
                     self.stack[self.sp] = result;
                     self.sp += 1;
-                } else if (callee.tag == .closure) {
-                    const cl = callee.asClosure();
-                    if (arg_count != cl.function.arity) {
-                        self.runtimeError("expected {d} arguments but got {d}", .{ cl.function.arity, arg_count });
+                } else {
+                    const func = if (callee.tag == .function)
+                        callee.asFunction()
+                    else if (callee.tag == .closure)
+                        callee.asClosure().function
+                    else {
+                        self.runtimeError("can only call functions", .{});
                         return error.RuntimeError;
-                    }
+                    };
                     if (self.frame_count == 64) {
                         self.runtimeError("stack overflow", .{});
                         return error.RuntimeError;
                     }
                     self.frames[self.frame_count] = .{
-                        .function = cl.function,
+                        .function = func,
                         .ip = 0,
                         .slot_offset = self.sp - arg_count - 1,
-                        .closure = cl,
+                        .closure = if (callee.tag == .closure) callee.asClosure() else null,
                     };
                     self.frame_count += 1;
-                    if (!cl.function.locals_only) return;
-                } else if (callee.tag == .function) {
-                    const func = callee.asFunction();
-                    if (arg_count != func.arity) {
-                        self.runtimeError("expected {d} arguments but got {d}", .{ func.arity, arg_count });
-                        return error.RuntimeError;
-                    }
-                    if (self.frame_count == 64) {
-                        self.runtimeError("stack overflow", .{});
-                        return error.RuntimeError;
-                    }
-                    if (func.locals_only) {
-                        self.frames[self.frame_count] = .{
-                            .function = func,
-                            .ip = 0,
-                            .slot_offset = self.sp - arg_count - 1,
-                            .closure = null,
-                        };
-                        self.frame_count += 1;
-                    } else {
-                        self.frames[self.frame_count] = .{
-                            .function = func,
-                            .ip = 0,
-                            .slot_offset = self.sp - arg_count - 1,
-                            .closure = null,
-                        };
-                        self.frame_count += 1;
-                        return;
-                    }
-                } else {
-                    self.runtimeError("can only call functions", .{});
-                    return error.RuntimeError;
+                    if (!func.locals_only) return;
                 }
             } else if (byte == @intFromEnum(OpCode.return_)) {
                 const result = self.stack[self.sp - 1];
@@ -559,12 +596,18 @@ pub const VM = struct {
                 const rhs = self.stack[self.sp - 1];
                 self.sp -= 1;
                 self.concatAppend(slot, rhs);
+            } else if (byte == @intFromEnum(OpCode.get_local_field)) {
+                const slot = code[frame.ip];
+                const field_idx = code[frame.ip + 1];
+                frame.ip += 2;
+                self.stack[self.sp] = self.stack[frame.slot_offset + slot].asStruct().fieldValues()[field_idx];
+                self.sp += 1;
             } else if (byte == @intFromEnum(OpCode.get_field_idx)) {
                 const idx = code[frame.ip];
                 frame.ip += 1;
                 const val = self.stack[self.sp - 1];
                 if (val.tag == .struct_) {
-                    self.stack[self.sp - 1] = val.asStruct().field_values[idx];
+                    self.stack[self.sp - 1] = val.asStruct().fieldValues()[idx];
                 } else {
                     frame.ip -= 2;
                     return;

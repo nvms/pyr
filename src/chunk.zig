@@ -51,11 +51,21 @@ pub const OpCode = enum(u8) {
     get_field_idx,
     concat_local,
 
+    get_local_field,
+
     add_int,
     sub_int,
+    mul_int,
+    div_int,
+    mod_int,
     less_int,
     greater_int,
     add_float,
+    sub_float,
+    mul_float,
+    div_float,
+    less_float,
+    greater_float,
 };
 
 pub const Chunk = struct {
