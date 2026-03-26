@@ -13,6 +13,7 @@ const stdlib = @import("stdlib.zig");
 const VariantInfo = struct {
     type_name: []const u8,
     payload_count: u8,
+    variant_index: u8,
 };
 
 const TypeHint = enum {
@@ -203,10 +204,11 @@ pub const Compiler = struct {
                 self.struct_defs.put(self.alloc, decl.name, names) catch @panic("oom");
             },
             .enum_decl => |decl| {
-                for (decl.variants) |variant| {
+                for (decl.variants, 0..) |variant, vi| {
                     self.enum_variants.put(self.alloc, variant.name, .{
                         .type_name = decl.name,
                         .payload_count = @intCast(variant.payloads.len),
+                        .variant_index = @intCast(vi),
                     }) catch @panic("oom");
                 }
             },
@@ -550,6 +552,13 @@ pub const Compiler = struct {
         self.compileExpr(iterator);
         self.addLocal("$iter");
 
+        // cache length once to avoid get_field("len") string comparison per iteration
+        self.emitOp(.get_local);
+        self.emitByte(self.resolveLocal("$iter").?);
+        self.emitOp(.get_field);
+        self.emitU16(self.addStringConstant("len"));
+        self.addLocalTyped("$len", .int_);
+
         self.emitConstant(Value.initInt(0));
         self.addLocalTyped("$idx", .int_);
 
@@ -557,13 +566,12 @@ pub const Compiler = struct {
 
         const idx_slot = self.resolveLocal("$idx").?;
         const iter_slot = self.resolveLocal("$iter").?;
+        const len_slot = self.resolveLocal("$len").?;
 
         self.emitOp(.get_local);
         self.emitByte(idx_slot);
         self.emitOp(.get_local);
-        self.emitByte(iter_slot);
-        self.emitOp(.get_field);
-        self.emitU16(self.addStringConstant("len"));
+        self.emitByte(len_slot);
         self.emitOp(.less_int);
         const exit_jump = self.emitJump(.jump_if_false);
         self.emitOp(.pop);
@@ -813,6 +821,7 @@ pub const Compiler = struct {
                 self.emitU16(variant_idx);
                 self.emitU16(type_idx);
                 self.emitByte(0);
+                self.emitByte(info.variant_index);
                 return;
             }
         }
@@ -950,6 +959,7 @@ pub const Compiler = struct {
                     self.emitU16(variant_idx);
                     self.emitU16(type_idx);
                     self.emitByte(@intCast(call.args.len));
+                    self.emitByte(info.variant_index);
                     return;
                 }
             }
@@ -1018,9 +1028,9 @@ pub const Compiler = struct {
                 .variant => |vp| {
                     self.emitOp(.get_local);
                     self.emitByte(self.resolveLocal("$match").?);
-                    const name_idx = self.addStringConstant(vp.name);
+                    const vi = if (self.findEnumVariant(vp.name)) |info| info.variant_index else 255;
                     self.emitOp(.match_variant);
-                    self.emitU16(name_idx);
+                    self.emitByte(vi);
                     const skip = self.emitJump(.jump_if_false);
                     self.emitOp(.pop);
                     self.emitOp(.pop);
@@ -1071,12 +1081,11 @@ pub const Compiler = struct {
                     self.emitOp(.pop);
                 },
                 .identifier => |binding_name| {
-                    if (self.findEnumVariant(binding_name)) |_| {
+                    if (self.findEnumVariant(binding_name)) |info| {
                         self.emitOp(.get_local);
                         self.emitByte(self.resolveLocal("$match").?);
-                        const name_idx = self.addStringConstant(binding_name);
                         self.emitOp(.match_variant);
-                        self.emitU16(name_idx);
+                        self.emitByte(info.variant_index);
                         const skip = self.emitJump(.jump_if_false);
                         self.emitOp(.pop);
                         self.emitOp(.pop);
@@ -1550,8 +1559,8 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .get_field => i += 2,
             .get_field_idx, .concat_local => i += 1,
             .get_local_field => i += 2,
-            .enum_variant => i += 5,
-            .match_variant => i += 2,
+            .enum_variant => i += 6,
+            .match_variant => i += 1,
             .get_payload => i += 1,
             .get_upvalue => i += 1,
             .array_create => i += 1,

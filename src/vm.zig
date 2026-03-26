@@ -288,6 +288,7 @@ pub const VM = struct {
                     const variant_idx = self.readU16();
                     const type_idx = self.readU16();
                     const payload_count = self.readByte();
+                    const vi = self.readByte();
                     const variant_name = self.currentChunk().constants.items[variant_idx].asString().chars;
                     const type_name = self.currentChunk().constants.items[type_idx].asString().chars;
 
@@ -298,17 +299,15 @@ pub const VM = struct {
                         payloads[pc] = self.pop();
                     }
 
-                    const e = ObjEnum.create(self.alloc, type_name, variant_name, payloads);
+                    const e = ObjEnum.create(self.alloc, type_name, variant_name, vi, payloads);
                     self.push(e.toValue());
                 },
 
                 .match_variant => {
-                    const name_idx = self.readU16();
-                    const variant_name = self.currentChunk().constants.items[name_idx].asString().chars;
+                    const expected_vi = self.readByte();
                     const val = self.peek(0);
                     if (val.tag == .enum_) {
-                        const e = val.asEnum();
-                        self.push(Value.initBool(std.mem.eql(u8, e.variant, variant_name)));
+                        self.push(Value.initBool(val.asEnum().variant_index == expected_vi));
                     } else {
                         self.push(Value.initBool(false));
                     }
@@ -783,6 +782,42 @@ pub const VM = struct {
                     self.stack[self.sp - 1] = Value.initBool(a.asInt() >= b.asInt());
                 } else {
                     try self.comparisonOpSlow(a, b, .greater_equal);
+                }
+            } else if (byte == @intFromEnum(OpCode.match_variant)) {
+                const expected_vi = code[frame.ip];
+                frame.ip += 1;
+                const val = self.stack[self.sp - 1];
+                if (val.tag == .enum_) {
+                    self.stack[self.sp] = Value.initBool(val.asEnum().variant_index == expected_vi);
+                } else {
+                    self.stack[self.sp] = Value.initBool(false);
+                }
+                self.sp += 1;
+            } else if (byte == @intFromEnum(OpCode.get_payload)) {
+                const payload_idx = code[frame.ip];
+                frame.ip += 1;
+                const val = self.stack[self.sp - 1];
+                self.sp -= 1;
+                if (val.tag == .enum_) {
+                    self.stack[self.sp] = val.asEnum().payloads[payload_idx];
+                    self.sp += 1;
+                }
+            } else if (byte == @intFromEnum(OpCode.index_get)) {
+                const idx_val = self.stack[self.sp - 1];
+                const target = self.stack[self.sp - 2];
+                if (target.tag == .array and idx_val.tag == .int) {
+                    const arr = target.asArray();
+                    const idx = idx_val.asInt();
+                    if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                        self.sp -= 1;
+                        self.stack[self.sp - 1] = arr.items[@intCast(idx)];
+                    } else {
+                        frame.ip -= 1;
+                        return;
+                    }
+                } else {
+                    frame.ip -= 1;
+                    return;
                 }
             } else {
                 frame.ip -= 1;

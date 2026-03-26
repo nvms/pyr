@@ -231,11 +231,12 @@ pub const ObjStruct = struct {
 pub const ObjEnum = struct {
     type_name: []const u8,
     variant: []const u8,
+    variant_index: u8,
     payloads: []Value,
 
-    pub fn create(alloc: std.mem.Allocator, type_name: []const u8, variant: []const u8, payloads: []Value) *ObjEnum {
+    pub fn create(alloc: std.mem.Allocator, type_name: []const u8, variant: []const u8, variant_index: u8, payloads: []Value) *ObjEnum {
         const e = alloc.create(ObjEnum) catch @panic("oom");
-        e.* = .{ .type_name = type_name, .variant = variant, .payloads = payloads };
+        e.* = .{ .type_name = type_name, .variant = variant, .variant_index = variant_index, .payloads = payloads };
         return e;
     }
 
