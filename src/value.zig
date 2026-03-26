@@ -11,6 +11,10 @@ pub const Value = struct {
         float,
         string,
         function,
+        struct_,
+        enum_,
+        native_fn,
+        closure,
     };
 
     pub fn initNil() Value {
@@ -37,6 +41,22 @@ pub const Value = struct {
         return .{ .tag = .function, .data = @intFromPtr(ptr) };
     }
 
+    pub fn initStruct(ptr: *ObjStruct) Value {
+        return .{ .tag = .struct_, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initEnum(ptr: *ObjEnum) Value {
+        return .{ .tag = .enum_, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initNativeFn(ptr: *ObjNativeFn) Value {
+        return .{ .tag = .native_fn, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initClosure(ptr: *ObjClosure) Value {
+        return .{ .tag = .closure, .data = @intFromPtr(ptr) };
+    }
+
     pub fn asBool(self: Value) bool {
         return self.data != 0;
     }
@@ -57,13 +77,29 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asStruct(self: Value) *ObjStruct {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
+    pub fn asEnum(self: Value) *ObjEnum {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
+    pub fn asNativeFn(self: Value) *ObjNativeFn {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
+    pub fn asClosure(self: Value) *ObjClosure {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure => true,
         };
     }
 
@@ -74,7 +110,7 @@ pub const Value = struct {
             .bool_ => a.asBool() == b.asBool(),
             .int => a.asInt() == b.asInt(),
             .float => a.asFloat() == b.asFloat(),
-            .string, .function => a.data == b.data,
+            .string, .function, .struct_, .enum_, .native_fn, .closure => a.data == b.data,
         };
     }
 
@@ -86,6 +122,30 @@ pub const Value = struct {
             .float => std.debug.print("{d}", .{self.asFloat()}),
             .string => std.debug.print("{s}", .{self.asString().chars}),
             .function => std.debug.print("<fn {s}>", .{self.asFunction().name}),
+            .struct_ => {
+                const s = self.asStruct();
+                std.debug.print("{s} {{ ", .{s.name});
+                for (s.field_names, s.field_values, 0..) |name, val, i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    std.debug.print("{s}: ", .{name});
+                    val.dump();
+                }
+                std.debug.print(" }}", .{});
+            },
+            .enum_ => {
+                const e = self.asEnum();
+                std.debug.print("{s}", .{e.variant});
+                if (e.payloads.len > 0) {
+                    std.debug.print("(", .{});
+                    for (e.payloads, 0..) |val, i| {
+                        if (i > 0) std.debug.print(", ", .{});
+                        val.dump();
+                    }
+                    std.debug.print(")", .{});
+                }
+            },
+            .native_fn => std.debug.print("<native fn>", .{}),
+            .closure => std.debug.print("<closure>", .{}),
         }
     }
 };
@@ -104,9 +164,80 @@ pub const ObjString = struct {
     }
 };
 
+pub const ObjStruct = struct {
+    name: []const u8,
+    field_names: []const []const u8,
+    field_values: []Value,
+
+    pub fn create(alloc: std.mem.Allocator, name: []const u8, field_names: []const []const u8, field_values: []Value) *ObjStruct {
+        const s = alloc.create(ObjStruct) catch @panic("oom");
+        s.* = .{ .name = name, .field_names = field_names, .field_values = field_values };
+        return s;
+    }
+
+    pub fn getField(self: *ObjStruct, name: []const u8) ?Value {
+        for (self.field_names, 0..) |fname, i| {
+            if (std.mem.eql(u8, fname, name)) return self.field_values[i];
+        }
+        return null;
+    }
+
+    pub fn toValue(self: *ObjStruct) Value {
+        return Value.initStruct(self);
+    }
+};
+
+pub const ObjEnum = struct {
+    type_name: []const u8,
+    variant: []const u8,
+    payloads: []Value,
+
+    pub fn create(alloc: std.mem.Allocator, type_name: []const u8, variant: []const u8, payloads: []Value) *ObjEnum {
+        const e = alloc.create(ObjEnum) catch @panic("oom");
+        e.* = .{ .type_name = type_name, .variant = variant, .payloads = payloads };
+        return e;
+    }
+
+    pub fn toValue(self: *ObjEnum) Value {
+        return Value.initEnum(self);
+    }
+};
+
+pub const ObjNativeFn = struct {
+    name: []const u8,
+    arity: u8,
+    func: *const fn ([]const Value) Value,
+
+    pub fn create(alloc: std.mem.Allocator, name: []const u8, arity: u8, func: *const fn ([]const Value) Value) *ObjNativeFn {
+        const nf = alloc.create(ObjNativeFn) catch @panic("oom");
+        nf.* = .{ .name = name, .arity = arity, .func = func };
+        return nf;
+    }
+
+    pub fn toValue(self: *ObjNativeFn) Value {
+        return Value.initNativeFn(self);
+    }
+};
+
+pub const ObjClosure = struct {
+    function: *ObjFunction,
+    upvalues: []Value,
+
+    pub fn create(alloc: std.mem.Allocator, function: *ObjFunction, upvalues: []Value) *ObjClosure {
+        const c = alloc.create(ObjClosure) catch @panic("oom");
+        c.* = .{ .function = function, .upvalues = upvalues };
+        return c;
+    }
+
+    pub fn toValue(self: *ObjClosure) Value {
+        return Value.initClosure(self);
+    }
+};
+
 pub const ObjFunction = struct {
     name: []const u8,
     arity: u8,
+    locals_only: bool,
     chunk: @import("chunk.zig").Chunk,
 
     pub fn create(alloc: std.mem.Allocator, name: []const u8, arity: u8) *ObjFunction {
@@ -114,6 +245,7 @@ pub const ObjFunction = struct {
         func.* = .{
             .name = name,
             .arity = arity,
+            .locals_only = false,
             .chunk = @import("chunk.zig").Chunk.init(),
         };
         return func;

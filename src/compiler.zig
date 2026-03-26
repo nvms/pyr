@@ -5,6 +5,12 @@ const OpCode = @import("chunk.zig").OpCode;
 const Value = @import("value.zig").Value;
 const ObjString = @import("value.zig").ObjString;
 const ObjFunction = @import("value.zig").ObjFunction;
+const ObjNativeFn = @import("value.zig").ObjNativeFn;
+
+const VariantInfo = struct {
+    type_name: []const u8,
+    payload_count: u8,
+};
 
 pub const Compiler = struct {
     alloc: std.mem.Allocator,
@@ -13,10 +19,19 @@ pub const Compiler = struct {
     locals: [256]Local,
     local_count: u8,
     scope_depth: u32,
+    struct_defs: std.StringHashMapUnmanaged([]const []const u8),
+    enum_variants: std.StringHashMapUnmanaged(VariantInfo),
+    upvalues: [256]Upvalue,
+    upvalue_count: u8,
 
     pub const Local = struct {
         name: []const u8,
         depth: u32,
+    };
+
+    pub const Upvalue = struct {
+        index: u8,
+        is_local: bool,
     };
 
     pub fn compile(alloc: std.mem.Allocator, tree: ast.Ast) ?*ObjFunction {
@@ -28,7 +43,17 @@ pub const Compiler = struct {
             .locals = undefined,
             .local_count = 0,
             .scope_depth = 0,
+            .struct_defs = .{},
+            .enum_variants = .{},
+            .upvalues = undefined,
+            .upvalue_count = 0,
         };
+
+        compiler.defineNatives();
+
+        for (tree.items) |item| {
+            compiler.registerDecl(item);
+        }
 
         for (tree.items) |item| {
             compiler.compileItem(item);
@@ -39,6 +64,77 @@ pub const Compiler = struct {
         compiler.emitOp(.return_);
 
         return script;
+    }
+
+    fn defineNatives(self: *Compiler) void {
+        self.defineNativeFn("sqrt", 1, &nativeSqrt);
+        self.defineNativeFn("abs", 1, &nativeAbs);
+        self.defineNativeFn("int", 1, &nativeInt);
+        self.defineNativeFn("float", 1, &nativeFloat);
+    }
+
+    fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn ([]const Value) Value) void {
+        const nf = ObjNativeFn.create(self.alloc, name, arity, func);
+        self.emitConstant(nf.toValue());
+        const name_idx = self.addStringConstant(name);
+        self.emitOp(.define_global);
+        self.emitU16(name_idx);
+    }
+
+    fn nativeSqrt(args: []const Value) Value {
+        const v = args[0];
+        const f: f64 = if (v.tag == .float) v.asFloat() else if (v.tag == .int) @floatFromInt(v.asInt()) else 0.0;
+        return Value.initFloat(@sqrt(f));
+    }
+
+    fn nativeAbs(args: []const Value) Value {
+        const v = args[0];
+        if (v.tag == .int) {
+            const i = v.asInt();
+            return Value.initInt(if (i < 0) -i else i);
+        }
+        if (v.tag == .float) return Value.initFloat(@abs(v.asFloat()));
+        return Value.initInt(0);
+    }
+
+    fn nativeInt(args: []const Value) Value {
+        const v = args[0];
+        if (v.tag == .int) return v;
+        if (v.tag == .float) return Value.initInt(@intFromFloat(v.asFloat()));
+        if (v.tag == .bool_) return Value.initInt(@intFromBool(v.asBool()));
+        return Value.initInt(0);
+    }
+
+    fn nativeFloat(args: []const Value) Value {
+        const v = args[0];
+        if (v.tag == .float) return v;
+        if (v.tag == .int) return Value.initFloat(@floatFromInt(v.asInt()));
+        return Value.initFloat(0.0);
+    }
+
+    // ---------------------------------------------------------------
+    // declaration registration (first pass)
+    // ---------------------------------------------------------------
+
+    fn registerDecl(self: *Compiler, item: ast.Item) void {
+        switch (item.kind) {
+            .struct_decl => |decl| {
+                const names = self.alloc.alloc([]const u8, decl.fields.len) catch @panic("oom");
+                for (decl.fields, 0..) |field, i| {
+                    names[i] = field.name;
+                }
+                self.struct_defs.put(self.alloc, decl.name, names) catch @panic("oom");
+            },
+            .enum_decl => |decl| {
+                for (decl.variants) |variant| {
+                    self.enum_variants.put(self.alloc, variant.name, .{
+                        .type_name = decl.name,
+                        .payload_count = @intCast(variant.payloads.len),
+                    }) catch @panic("oom");
+                }
+            },
+            else => {},
+        }
     }
 
     // ---------------------------------------------------------------
@@ -63,6 +159,10 @@ pub const Compiler = struct {
             .locals = undefined,
             .local_count = 0,
             .scope_depth = 1,
+            .struct_defs = .{},
+            .enum_variants = .{},
+            .upvalues = undefined,
+            .upvalue_count = 0,
         };
         sub.addLocal("");
 
@@ -83,6 +183,8 @@ pub const Compiler = struct {
             sub.emitOp(.nil);
             sub.emitOp(.return_);
         }
+
+        func.locals_only = analyzeLocalsOnly(&func.chunk);
 
         const idx = self.chunk().addConstant(self.alloc, func.toValue());
         self.emitOp(.constant);
@@ -124,7 +226,13 @@ pub const Compiler = struct {
             .binding => |b| {
                 self.compileExpr(b.value);
                 if (self.scope_depth > 0) {
-                    self.addLocal(b.name);
+                    if (self.resolveLocal(b.name)) |slot| {
+                        self.emitOp(.set_local);
+                        self.emitByte(slot);
+                        self.emitOp(.pop);
+                    } else {
+                        self.addLocal(b.name);
+                    }
                 } else {
                     const name_idx = self.addStringConstant(b.name);
                     self.emitOp(.define_global);
@@ -134,6 +242,7 @@ pub const Compiler = struct {
             .assign => |a| {
                 self.compileExpr(a.value);
                 self.compileSetTarget(a.target);
+                self.emitOp(.pop);
             },
             .compound_assign => |ca| {
                 self.compileGetTarget(ca.target);
@@ -146,6 +255,7 @@ pub const Compiler = struct {
                     else => .add,
                 });
                 self.compileSetTarget(ca.target);
+                self.emitOp(.pop);
             },
             .ret => |r| {
                 if (r.value) |val| {
@@ -155,11 +265,7 @@ pub const Compiler = struct {
                 }
                 self.emitOp(.return_);
             },
-            .for_loop => |fl| {
-                self.compileExpr(fl.iterator);
-                _ = fl.binding;
-                // TODO: iterator protocol
-            },
+            .for_loop => |fl| self.compileForLoop(fl),
             .while_loop => |wl| {
                 const loop_start = self.chunk().count();
                 self.compileExpr(wl.condition);
@@ -175,6 +281,86 @@ pub const Compiler = struct {
                 self.emitOp(.pop);
             },
         }
+    }
+
+    fn compileForLoop(self: *Compiler, fl: ast.ForLoop) void {
+        const range_args = detectRange(fl.iterator);
+        if (range_args) |args| {
+            self.compileForRange(fl.binding, args, fl.body);
+        } else {
+            self.compileExpr(fl.iterator);
+            self.emitOp(.pop);
+        }
+    }
+
+    fn compileForRange(self: *Compiler, binding: []const u8, args: RangeArgs, body: *const ast.Block) void {
+        self.beginScope();
+
+        if (args.start) |start| {
+            self.compileExpr(start);
+        } else {
+            self.emitConstant(Value.initInt(0));
+        }
+        self.addLocal("$counter");
+
+        const loop_start = self.chunk().count();
+
+        self.emitOp(.get_local);
+        self.emitByte(self.resolveLocal("$counter").?);
+        self.compileExpr(args.end);
+        self.emitOp(.less);
+        const exit_jump = self.emitJump(.jump_if_false);
+        self.emitOp(.pop);
+
+        self.beginScope();
+        self.emitOp(.get_local);
+        self.emitByte(self.resolveLocal("$counter").?);
+        self.addLocal(binding);
+
+        for (body.stmts) |s| {
+            self.compileStmt(s);
+        }
+        if (body.trailing) |expr| {
+            self.compileExpr(expr);
+            self.emitOp(.pop);
+        }
+        self.endScope();
+
+        const counter_slot = self.resolveLocal("$counter").?;
+        self.emitOp(.get_local);
+        self.emitByte(counter_slot);
+        if (args.step) |step| {
+            self.compileExpr(step);
+        } else {
+            self.emitConstant(Value.initInt(1));
+        }
+        self.emitOp(.add);
+        self.emitOp(.set_local);
+        self.emitByte(counter_slot);
+        self.emitOp(.pop);
+
+        self.emitLoop(loop_start);
+        self.patchJump(exit_jump);
+        self.emitOp(.pop);
+
+        self.endScope();
+    }
+
+    const RangeArgs = struct {
+        start: ?*const ast.Expr,
+        end: *const ast.Expr,
+        step: ?*const ast.Expr,
+    };
+
+    fn detectRange(expr: *const ast.Expr) ?RangeArgs {
+        if (expr.kind != .call) return null;
+        const call = expr.kind.call;
+        if (call.callee.kind != .identifier) return null;
+        if (!std.mem.eql(u8, call.callee.kind.identifier, "range")) return null;
+        if (call.args.len == 1) return .{ .start = null, .end = call.args[0], .step = null };
+        if (call.args.len == 2) return .{ .start = call.args[0], .end = call.args[1], .step = null };
+        if (call.args.len == 3) return .{ .start = call.args[0], .end = call.args[1], .step = call.args[2] };
+        return null;
     }
 
     // ---------------------------------------------------------------
@@ -198,7 +384,7 @@ pub const Compiler = struct {
             },
             .bool_literal => |val| self.emitOp(if (val) .true_ else .false_),
             .none_literal => self.emitOp(.nil),
-            .identifier => |name| self.compileGetVar(name),
+            .identifier => |name| self.compileIdentifier(name),
             .binary => |bin| self.compileBinary(bin),
             .unary => |un| {
                 self.compileExpr(un.operand);
@@ -211,25 +397,78 @@ pub const Compiler = struct {
             .call => |call| self.compileCall(call),
             .field_access => |fa| {
                 self.compileExpr(fa.target);
-                // TODO: field access opcode
-                _ = fa.field;
+                const name_idx = self.addStringConstant(fa.field);
+                self.emitOp(.get_field);
+                self.emitU16(name_idx);
             },
             .index => |idx| {
                 self.compileExpr(idx.target);
                 self.compileExpr(idx.idx);
-                // TODO: index opcode
             },
             .if_expr => |ie| self.compileIf(ie),
             .match_expr => |me| self.compileMatch(me),
             .block => |block| self.compileBlock(block),
             .closure => |cl| self.compileClosure(cl),
             .spawn => {},
-            .struct_literal => |sl| {
-                // TODO: struct creation
-                _ = sl;
-                self.emitOp(.nil);
-            },
+            .struct_literal => |sl| self.compileStructLiteral(sl),
             .pipeline => |pl| self.compilePipeline(pl),
+        }
+    }
+
+    fn compileIdentifier(self: *Compiler, name: []const u8) void {
+        if (self.resolveLocal(name)) |slot| {
+            self.emitOp(.get_local);
+            self.emitByte(slot);
+            return;
+        }
+
+        if (self.findEnumVariant(name)) |info| {
+            if (info.payload_count == 0) {
+                const variant_idx = self.addStringConstant(name);
+                const type_idx = self.addStringConstant(info.type_name);
+                self.emitOp(.enum_variant);
+                self.emitU16(variant_idx);
+                self.emitU16(type_idx);
+                self.emitByte(0);
+                return;
+            }
+        }
+
+        self.compileGetVar(name);
+    }
+
+    fn compileStructLiteral(self: *Compiler, sl: ast.StructLiteral) void {
+        const field_defs = self.findStructDef(sl.name);
+        if (field_defs) |defs| {
+            for (defs) |def_name| {
+                var found = false;
+                for (sl.fields) |field| {
+                    if (std.mem.eql(u8, field.name, def_name)) {
+                        self.compileExpr(field.value);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) self.emitOp(.nil);
+            }
+            const name_idx = self.addStringConstant(sl.name);
+            self.emitOp(.struct_create);
+            self.emitU16(name_idx);
+            self.emitByte(@intCast(defs.len));
+            for (defs) |def_name| {
+                self.emitU16(self.addStringConstant(def_name));
+            }
+        } else {
+            for (sl.fields) |field| {
+                self.compileExpr(field.value);
+            }
+            const name_idx = self.addStringConstant(sl.name);
+            self.emitOp(.struct_create);
+            self.emitU16(name_idx);
+            self.emitByte(@intCast(sl.fields.len));
+            for (sl.fields) |field| {
+                self.emitU16(self.addStringConstant(field.name));
+            }
         }
     }
 
@@ -278,6 +517,21 @@ pub const Compiler = struct {
                 self.emitOp(.print);
                 self.emitOp(.nil);
                 return;
+            }
+
+            if (self.findEnumVariant(name)) |info| {
+                if (info.payload_count > 0 and call.args.len == info.payload_count) {
+                    for (call.args) |arg| {
+                        self.compileExpr(arg);
+                    }
+                    const variant_idx = self.addStringConstant(name);
+                    const type_idx = self.addStringConstant(info.type_name);
+                    self.emitOp(.enum_variant);
+                    self.emitU16(variant_idx);
+                    self.emitU16(type_idx);
+                    self.emitByte(@intCast(call.args.len));
+                    return;
+                }
             }
         }
 
@@ -332,17 +586,127 @@ pub const Compiler = struct {
 
     fn compileMatch(self: *Compiler, me: ast.MatchExpr) void {
         self.compileExpr(me.subject);
-        // simplified: compile as if/else chain
-        for (me.arms, 0..) |arm, i| {
-            _ = i;
-            // TODO: proper pattern matching
-            // for now, just compile the body of the first arm
-            self.emitOp(.pop);
-            self.compileExpr(arm.body);
-            return;
+
+        self.beginScope();
+        self.addLocal("$match");
+
+        var end_jumps: [64]usize = undefined;
+        var end_count: usize = 0;
+
+        for (me.arms) |arm| {
+            switch (arm.pattern.kind) {
+                .variant => |vp| {
+                    self.emitOp(.get_local);
+                    self.emitByte(self.resolveLocal("$match").?);
+                    const name_idx = self.addStringConstant(vp.name);
+                    self.emitOp(.match_variant);
+                    self.emitU16(name_idx);
+                    const skip = self.emitJump(.jump_if_false);
+                    self.emitOp(.pop);
+                    self.emitOp(.pop);
+
+                    self.beginScope();
+                    for (vp.bindings, 0..) |binding, i| {
+                        self.emitOp(.get_local);
+                        self.emitByte(self.resolveLocal("$match").?);
+                        self.emitOp(.get_payload);
+                        self.emitByte(@intCast(i));
+                        self.addLocal(binding);
+                    }
+
+                    if (arm.guard) |guard| {
+                        self.compileExpr(guard);
+                        const guard_skip = self.emitJump(.jump_if_false);
+                        self.emitOp(.pop);
+                        self.compileExpr(arm.body);
+                        self.endScopeKeepTop();
+                        end_jumps[end_count] = self.emitJump(.jump);
+                        end_count += 1;
+                        self.patchJump(guard_skip);
+                        self.emitOp(.pop);
+                    } else {
+                        self.compileExpr(arm.body);
+                        self.endScopeKeepTop();
+                        end_jumps[end_count] = self.emitJump(.jump);
+                        end_count += 1;
+                    }
+
+                    self.patchJump(skip);
+                    self.emitOp(.pop);
+                    self.emitOp(.pop);
+                },
+                .literal => |lit| {
+                    self.emitOp(.get_local);
+                    self.emitByte(self.resolveLocal("$match").?);
+                    self.compileExpr(lit);
+                    self.emitOp(.equal);
+                    const skip = self.emitJump(.jump_if_false);
+                    self.emitOp(.pop);
+
+                    self.compileExpr(arm.body);
+                    end_jumps[end_count] = self.emitJump(.jump);
+                    end_count += 1;
+
+                    self.patchJump(skip);
+                    self.emitOp(.pop);
+                },
+                .identifier => |binding_name| {
+                    if (self.findEnumVariant(binding_name)) |_| {
+                        self.emitOp(.get_local);
+                        self.emitByte(self.resolveLocal("$match").?);
+                        const name_idx = self.addStringConstant(binding_name);
+                        self.emitOp(.match_variant);
+                        self.emitU16(name_idx);
+                        const skip = self.emitJump(.jump_if_false);
+                        self.emitOp(.pop);
+                        self.emitOp(.pop);
+
+                        self.compileExpr(arm.body);
+                        end_jumps[end_count] = self.emitJump(.jump);
+                        end_count += 1;
+
+                        self.patchJump(skip);
+                        self.emitOp(.pop);
+                        self.emitOp(.pop);
+                    } else {
+                        self.beginScope();
+                        self.emitOp(.get_local);
+                        self.emitByte(self.resolveLocal("$match").?);
+                        self.addLocal(binding_name);
+
+                        if (arm.guard) |guard| {
+                            self.compileExpr(guard);
+                            const guard_skip = self.emitJump(.jump_if_false);
+                            self.emitOp(.pop);
+                            self.compileExpr(arm.body);
+                            self.endScopeKeepTop();
+                            end_jumps[end_count] = self.emitJump(.jump);
+                            end_count += 1;
+                            self.patchJump(guard_skip);
+                            self.emitOp(.pop);
+                        } else {
+                            self.compileExpr(arm.body);
+                            self.endScopeKeepTop();
+                            end_jumps[end_count] = self.emitJump(.jump);
+                            end_count += 1;
+                        }
+                    }
+                },
+                .wildcard => {
+                    self.compileExpr(arm.body);
+                    end_jumps[end_count] = self.emitJump(.jump);
+                    end_count += 1;
+                },
+            }
         }
-        self.emitOp(.pop);
+
         self.emitOp(.nil);
+
+        for (end_jumps[0..end_count]) |j| {
+            self.patchJump(j);
+        }
+
+        self.endScopeKeepTop();
     }
 
     fn compileClosure(self: *Compiler, cl: ast.Closure) void {
@@ -354,6 +718,10 @@ pub const Compiler = struct {
             .locals = undefined,
             .local_count = 0,
             .scope_depth = 1,
+            .struct_defs = .{},
+            .enum_variants = .{},
+            .upvalues = undefined,
+            .upvalue_count = 0,
         };
         sub.addLocal("");
 
@@ -374,7 +742,19 @@ pub const Compiler = struct {
             sub.emitOp(.return_);
         }
 
-        self.emitConstant(func.toValue());
+        if (sub.upvalue_count > 0) {
+            const idx = self.chunk().addConstant(self.alloc, func.toValue());
+            self.emitOp(.make_closure);
+            self.emitU16(idx);
+            self.emitByte(sub.upvalue_count);
+            var i: u8 = 0;
+            while (i < sub.upvalue_count) : (i += 1) {
+                self.emitByte(if (sub.upvalues[i].is_local) 1 else 0);
+                self.emitByte(sub.upvalues[i].index);
+            }
+        } else {
+            self.emitConstant(func.toValue());
+        }
     }
 
     fn compilePipeline(self: *Compiler, pl: ast.Pipeline) void {
@@ -384,10 +764,6 @@ pub const Compiler = struct {
             if (stage.kind == .call) {
                 const call = stage.kind.call;
                 self.compileGetExpr(call.callee);
-                // first arg is the piped value (already on stack)
-                // swap: value is below callee, need callee below value
-                // actually, just push remaining args and call with +1 arity
-                // this is a simplification - proper pipeline needs stack manipulation
                 for (call.args) |arg| {
                     self.compileExpr(arg);
                 }
@@ -409,6 +785,9 @@ pub const Compiler = struct {
         if (self.resolveLocal(name)) |slot| {
             self.emitOp(.get_local);
             self.emitByte(slot);
+        } else if (self.resolveUpvalue(name)) |uv| {
+            self.emitOp(.get_upvalue);
+            self.emitByte(uv);
         } else {
             const idx = self.addStringConstant(name);
             self.emitOp(.get_global);
@@ -444,6 +823,33 @@ pub const Compiler = struct {
         return null;
     }
 
+    fn resolveUpvalue(self: *Compiler, name: []const u8) ?u8 {
+        const enclosing = self.enclosing orelse return null;
+
+        if (enclosing.resolveLocal(name)) |local_slot| {
+            return self.addUpvalue(local_slot, true);
+        }
+
+        if (enclosing.resolveUpvalue(name)) |upvalue_idx| {
+            return self.addUpvalue(upvalue_idx, false);
+        }
+
+        return null;
+    }
+
+    fn addUpvalue(self: *Compiler, index: u8, is_local: bool) u8 {
+        var i: u8 = 0;
+        while (i < self.upvalue_count) : (i += 1) {
+            if (self.upvalues[i].index == index and self.upvalues[i].is_local == is_local) {
+                return i;
+            }
+        }
+        if (self.upvalue_count == 255) return 0;
+        self.upvalues[self.upvalue_count] = .{ .index = index, .is_local = is_local };
+        self.upvalue_count += 1;
+        return self.upvalue_count - 1;
+    }
+
     fn addLocal(self: *Compiler, name: []const u8) void {
         if (self.local_count == 255) return;
         self.locals[self.local_count] = .{ .name = name, .depth = self.scope_depth };
@@ -467,6 +873,28 @@ pub const Compiler = struct {
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
             self.local_count -= 1;
         }
+    }
+
+    // ---------------------------------------------------------------
+    // metadata lookup (walks enclosing chain)
+    // ---------------------------------------------------------------
+
+    fn findStructDef(self: *Compiler, name: []const u8) ?[]const []const u8 {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.struct_defs.get(name)) |defs| return defs;
+            c = cur.enclosing;
+        }
+        return null;
+    }
+
+    fn findEnumVariant(self: *Compiler, name: []const u8) ?VariantInfo {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.enum_variants.get(name)) |info| return info;
+            c = cur.enclosing;
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------
@@ -530,3 +958,42 @@ pub const Compiler = struct {
         return self.chunk().code.items[self.chunk().code.items.len - 1] == @intFromEnum(op);
     }
 };
+
+fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
+    const code = c.code.items;
+    var i: usize = 0;
+    while (i < code.len) {
+        const op: OpCode = @enumFromInt(code[i]);
+        i += 1;
+        switch (op) {
+            .constant => i += 2,
+            .nil, .true_, .false_, .pop => {},
+            .get_local, .set_local => i += 1,
+            .add, .subtract, .multiply, .divide, .modulo, .negate => {},
+            .not, .equal, .not_equal, .less, .greater, .less_equal, .greater_equal => {},
+            .jump, .jump_if_false, .loop_ => i += 2,
+            .call => i += 1,
+            .return_ => {},
+            .get_global => i += 2,
+            .struct_create => {
+                i += 2;
+                const fc = code[i];
+                i += 1;
+                i += @as(usize, fc) * 2;
+            },
+            .get_field => i += 2,
+            .enum_variant => i += 5,
+            .match_variant => i += 2,
+            .get_payload => i += 1,
+            .get_upvalue => i += 1,
+            .make_closure => {
+                i += 2;
+                const uv_count = code[i];
+                i += 1;
+                i += @as(usize, uv_count) * 2;
+            },
+            .set_global, .define_global, .print, .println => return false,
+        }
+    }
+    return true;
+}

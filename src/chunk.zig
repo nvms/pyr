@@ -38,6 +38,15 @@ pub const OpCode = enum(u8) {
 
     print,
     println,
+
+    struct_create,
+    get_field,
+    enum_variant,
+    match_variant,
+    get_payload,
+
+    make_closure,
+    get_upvalue,
 };
 
 pub const Chunk = struct {
