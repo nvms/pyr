@@ -2,4 +2,5 @@ CLAUDE.md
 zig-cache/
 zig-out/
 .zig-cache/
+.handoff/
 examples/*.zig
