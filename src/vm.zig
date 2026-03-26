@@ -1378,7 +1378,8 @@ pub const VM = struct {
                 }
             }
         } else {
-            self.push(Value.initNil());
+            self.runtimeError("send on full channel with no active tasks", .{});
+            return error.RuntimeError;
         }
     }
 
@@ -1412,7 +1413,8 @@ pub const VM = struct {
                 }
             }
         } else {
-            self.push(Value.initNil());
+            self.runtimeError("recv on empty channel with no active tasks", .{});
+            return error.RuntimeError;
         }
     }
 
@@ -1551,6 +1553,20 @@ pub const VM = struct {
 
 const parser = @import("parser.zig");
 const compiler = @import("compiler.zig");
+
+fn testRunExpectError(source: []const u8) !void {
+    var arena_impl = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena_impl.deinit();
+    const alloc = arena_impl.allocator();
+    const tokens = parser.tokenize(alloc, source);
+    var p = parser.Parser.init(tokens, source, alloc);
+    const tree = p.parse();
+    if (tree.errors.len > 0) @panic("parse error in test");
+    const func = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
+    var vm = VM.init(alloc);
+    const result = vm.interpret(func);
+    try std.testing.expectError(error.RuntimeError, result);
+}
 
 fn testRun(source: []const u8) !void {
     var arena_impl = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -1763,4 +1779,337 @@ test "vm: multiple spawns" {
 
 test "vm: spawn captures closure" {
     try testRun("fn main() {\n  x = 100\n  ch = channel(1)\n  spawn { ch.send(x) }\n  println(ch.recv())\n}");
+}
+
+test "vm: recv blocks until send" {
+    try testRun("fn main() {\n  ch = channel(1)\n  spawn { ch.send(77) }\n  msg = ch.recv()\n  println(msg)\n}");
+}
+
+test "vm: multiple producers one consumer" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(10)
+        \\  spawn { ch.send(10) }
+        \\  spawn { ch.send(20) }
+        \\  spawn { ch.send(30) }
+        \\  mut sum = 0
+        \\  sum = sum + ch.recv()
+        \\  sum = sum + ch.recv()
+        \\  sum = sum + ch.recv()
+        \\  println(sum)
+        \\}
+    );
+}
+
+test "vm: one producer multiple consumers" {
+    try testRun(
+        \\fn consume(ch, out) {
+        \\  out.send(ch.recv())
+        \\}
+        \\fn main() {
+        \\  ch = channel(10)
+        \\  out = channel(10)
+        \\  spawn { consume(ch, out) }
+        \\  spawn { consume(ch, out) }
+        \\  ch.send(1)
+        \\  ch.send(2)
+        \\  mut sum = 0
+        \\  sum = sum + out.recv()
+        \\  sum = sum + out.recv()
+        \\  println(sum)
+        \\}
+    );
+}
+
+test "vm: ping pong channel" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(1)
+        \\  spawn {
+        \\    ch.send(1)
+        \\    ch.send(2)
+        \\    ch.send(3)
+        \\  }
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\}
+    );
+}
+
+test "vm: spawn no channel" {
+    try testRun(
+        \\fn work(n: int) {
+        \\  mut i = 0
+        \\  while i < n {
+        \\    i = i + 1
+        \\  }
+        \\  println(i)
+        \\}
+        \\fn main() {
+        \\  spawn { work(5) }
+        \\  println(0)
+        \\}
+    );
+}
+
+test "vm: spawn in loop" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(10)
+        \\  mut i = 0
+        \\  while i < 5 {
+        \\    spawn { ch.send(i) }
+        \\    i = i + 1
+        \\  }
+        \\  mut sum = 0
+        \\  mut j = 0
+        \\  while j < 5 {
+        \\    sum = sum + ch.recv()
+        \\    j = j + 1
+        \\  }
+        \\  println(sum)
+        \\}
+    );
+}
+
+test "vm: channel with struct values" {
+    try testRun(
+        \\struct Point {
+        \\  x: int
+        \\  y: int
+        \\}
+        \\fn main() {
+        \\  ch = channel(5)
+        \\  ch.send(Point { x: 3, y: 4 })
+        \\  p = ch.recv()
+        \\  println(p.x + p.y)
+        \\}
+    );
+}
+
+test "vm: channel with enum values" {
+    try testRun(
+        \\enum Msg { Hello(int), Bye }
+        \\fn main() {
+        \\  ch = channel(5)
+        \\  ch.send(Hello(42))
+        \\  msg = ch.recv()
+        \\  result = match msg {
+        \\    Hello(n) -> n
+        \\    Bye -> 0
+        \\  }
+        \\  println(result)
+        \\}
+    );
+}
+
+test "vm: channel with array values" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(5)
+        \\  ch.send([1, 2, 3])
+        \\  arr = ch.recv()
+        \\  println(arr[0] + arr[1] + arr[2])
+        \\}
+    );
+}
+
+test "vm: synchronous channel no spawn" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(3)
+        \\  ch.send(10)
+        \\  ch.send(20)
+        \\  ch.send(30)
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\}
+    );
+}
+
+test "vm: spawn fifo ordering" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(10)
+        \\  spawn { ch.send(1) }
+        \\  spawn { ch.send(2) }
+        \\  spawn { ch.send(3) }
+        \\  spawn { ch.send(4) }
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\}
+    );
+}
+
+test "vm: many tasks stress" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(20)
+        \\  mut i = 0
+        \\  while i < 20 {
+        \\    spawn { ch.send(1) }
+        \\    i = i + 1
+        \\  }
+        \\  mut sum = 0
+        \\  mut j = 0
+        \\  while j < 20 {
+        \\    sum = sum + ch.recv()
+        \\    j = j + 1
+        \\  }
+        \\  println(sum)
+        \\}
+    );
+}
+
+test "vm: channel blocking recv then send" {
+    try testRun(
+        \\fn delayed_send(ch) {
+        \\  ch.send(999)
+        \\}
+        \\fn main() {
+        \\  ch = channel(1)
+        \\  spawn { delayed_send(ch) }
+        \\  result = ch.recv()
+        \\  println(result)
+        \\}
+    );
+}
+
+test "vm: spawn with multiple captures" {
+    try testRun(
+        \\fn main() {
+        \\  a = 10
+        \\  b = 20
+        \\  c = 30
+        \\  ch = channel(1)
+        \\  spawn { ch.send(a + b + c) }
+        \\  println(ch.recv())
+        \\}
+    );
+}
+
+test "vm: producer consumer loop" {
+    try testRun(
+        \\fn producer(ch, n: int) {
+        \\  mut i = 0
+        \\  while i < n {
+        \\    ch.send(i * i)
+        \\    i = i + 1
+        \\  }
+        \\}
+        \\fn main() {
+        \\  ch = channel(3)
+        \\  spawn { producer(ch, 5) }
+        \\  mut sum = 0
+        \\  mut i = 0
+        \\  while i < 5 {
+        \\    sum = sum + ch.recv()
+        \\    i = i + 1
+        \\  }
+        \\  println(sum)
+        \\}
+    );
+}
+
+test "vm: channel ring buffer wraparound" {
+    try testRun(
+        \\fn main() {
+        \\  ch = channel(2)
+        \\  ch.send(1)
+        \\  ch.send(2)
+        \\  println(ch.recv())
+        \\  ch.send(3)
+        \\  println(ch.recv())
+        \\  ch.send(4)
+        \\  println(ch.recv())
+        \\  println(ch.recv())
+        \\}
+    );
+}
+
+test "vm: spawn captures mut variable" {
+    try testRun(
+        \\fn main() {
+        \\  mut x = 5
+        \\  ch = channel(1)
+        \\  spawn { ch.send(x) }
+        \\  x = 99
+        \\  println(ch.recv())
+        \\}
+    );
+}
+
+test "vm: deadlock detection" {
+    try testRunExpectError(
+        \\fn main() {
+        \\  ch = channel(1)
+        \\  ch.recv()
+        \\}
+    );
+}
+
+test "vm: send on non-channel error" {
+    try testRunExpectError(
+        \\fn main() {
+        \\  x = 5
+        \\  x.send(1)
+        \\}
+    );
+}
+
+test "vm: recv on non-channel error" {
+    try testRunExpectError(
+        \\fn main() {
+        \\  x = 5
+        \\  x.recv()
+        \\}
+    );
+}
+
+test "vm: channel pipeline" {
+    try testRun(
+        \\fn double(input, output) {
+        \\  mut i = 0
+        \\  while i < 4 {
+        \\    val = input.recv()
+        \\    output.send(val * 2)
+        \\    i = i + 1
+        \\  }
+        \\}
+        \\fn main() {
+        \\  ch1 = channel(5)
+        \\  ch2 = channel(5)
+        \\  spawn { double(ch1, ch2) }
+        \\  ch1.send(1)
+        \\  ch1.send(2)
+        \\  ch1.send(3)
+        \\  ch1.send(4)
+        \\  println(ch2.recv())
+        \\  println(ch2.recv())
+        \\  println(ch2.recv())
+        \\  println(ch2.recv())
+        \\}
+    );
+}
+
+test "vm: two stage pipeline" {
+    try testRun(
+        \\fn add_one(input, output) {
+        \\  val = input.recv()
+        \\  output.send(val + 1)
+        \\}
+        \\fn main() {
+        \\  a = channel(1)
+        \\  b = channel(1)
+        \\  c = channel(1)
+        \\  spawn { add_one(a, b) }
+        \\  spawn { add_one(b, c) }
+        \\  a.send(10)
+        \\  println(c.recv())
+        \\}
+    );
 }
