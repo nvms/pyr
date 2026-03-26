@@ -80,7 +80,7 @@ pub const Scheduler = struct {
     io_write_data: [64][]const u8,
     io_write_off: [64]usize,
 
-    const IoOp = enum(u8) { accept, read, write, connect };
+    const IoOp = enum(u8) { accept, read, write };
 
     fn init() Scheduler {
         return .{
@@ -151,7 +151,7 @@ pub const Scheduler = struct {
         var pollfds: [64]std.posix.pollfd = undefined;
         var i: u8 = 0;
         while (i < self.io_count) : (i += 1) {
-            const events: i16 = if (self.io_ops[i] == .write or self.io_ops[i] == .connect) std.posix.POLL.OUT else std.posix.POLL.IN;
+            const events: i16 = if (self.io_ops[i] == .write) std.posix.POLL.OUT else std.posix.POLL.IN;
             pollfds[i] = .{ .fd = self.io_fds[i], .events = events, .revents = 0 };
         }
 
@@ -212,18 +212,6 @@ pub const Scheduler = struct {
                             off += n;
                         }
                         task.stack[task.sp] = Value.initBool(off >= data.len);
-                        task.sp += 1;
-                    },
-                    .connect => {
-                        var err_val: c_int = 0;
-                        var err_len: std.posix.socklen_t = @sizeOf(c_int);
-                        const rc = std.posix.system.getsockopt(self.io_fds[j], std.posix.SOL.SOCKET, std.posix.SO.ERROR, @ptrCast(&err_val), &err_len);
-                        if (rc == 0 and err_val == 0) {
-                            task.stack[task.sp] = ObjConn.create(alloc, self.io_fds[j]).toValue();
-                        } else {
-                            std.posix.close(self.io_fds[j]);
-                            task.stack[task.sp] = Value.initNil();
-                        }
                         task.sp += 1;
                     },
                 }
@@ -810,7 +798,6 @@ pub const VM = struct {
                 .net_accept => try self.execNetAccept(),
                 .net_read => try self.execNetRead(),
                 .net_write => try self.execNetWrite(),
-                .net_connect => try self.execNetConnect(),
                 .ffi_call => try self.execFfiCall(),
                 .slide => {
                     const n = self.readByte();
@@ -1795,56 +1782,6 @@ pub const VM = struct {
         self.push(Value.initBool(true));
     }
 
-    fn execNetConnect(self: *VM) Error!void {
-        const port_val = self.pop();
-        const addr_val = self.pop();
-        if (addr_val.tag != .string or port_val.tag != .int) {
-            self.push(Value.initNil());
-            return;
-        }
-        const addr_str = addr_val.asString().chars;
-        const port: u16 = @intCast(@as(i64, @max(0, @min(65535, port_val.asInt()))));
-
-        const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch {
-            self.push(Value.initNil());
-            return;
-        };
-
-        const octets = stdlib.parseAddr(addr_str);
-        const addr = std.net.Address.initIp4(octets, port);
-
-        if (self.sched.active) {
-            stdlib.setNonBlocking(fd);
-            std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch |err| {
-                if (err == error.WouldBlock) {
-                    if (self.sched.current_task) |ct| {
-                        self.saveToTask(ct);
-                        ct.state = .blocked_io;
-                        self.sched.parkIo(ct, fd, .connect);
-
-                        if (self.scheduleNextOrPoll()) |next| {
-                            self.switchTo(next);
-                        } else {
-                            self.runtimeError("deadlock: all tasks blocked", .{});
-                            return error.RuntimeError;
-                        }
-                        return;
-                    }
-                }
-                std.posix.close(fd);
-                self.push(Value.initNil());
-                return;
-            };
-        } else {
-            std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch {
-                std.posix.close(fd);
-                self.push(Value.initNil());
-                return;
-            };
-        }
-
-        self.push(ObjConn.create(self.currentAlloc(), fd).toValue());
-    }
 
     fn execFfiCall(self: *VM) Error!void {
         const desc_idx = self.readU16();
@@ -3417,31 +3354,24 @@ test "vm: method connect opcode" {
     );
 }
 
-test "vm: connect to non-listening port via opcode returns nil" {
-    try testRun(
-        \\imp std/net as net
-        \\fn main() {
-        \\  client = net.connect("127.0.0.1", 19892)
-        \\  assert_eq(client, nil)
-        \\  println("ok")
-        \\}
-    );
-}
 
 test "vm: concurrent write with spawn" {
     try testRun(
         \\imp std/net as net
         \\fn main() {
         \\  server = net.listen("127.0.0.1", 19893)
+        \\  response_ch = channel(1)
         \\  spawn {
         \\    conn = server.accept()
         \\    data = conn.read()
         \\    conn.write("echo:" + data)
         \\    net.close(conn)
+        \\    response_ch.send(1)
         \\  }
         \\  client = net.connect("127.0.0.1", 19893)
-        \\  client.write("test")
-        \\  reply = client.read()
+        \\  net.write(client, "test")
+        \\  response_ch.recv()
+        \\  reply = net.read(client)
         \\  assert_eq(reply, "echo:test")
         \\  net.close(client)
         \\  net.close(server)

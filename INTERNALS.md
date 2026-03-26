@@ -199,10 +199,9 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - all deadlock-detection sites use `scheduleNextOrPoll` so I/O-blocked tasks don't trigger false deadlocks
 - I/O waiter data stored in Scheduler struct (not a new VM field) to avoid LLVM perturbation
 - `conn.write(data)` compiles to net_write opcode with scheduler integration. `net.write(conn, data)` namespace syntax stays blocking (native function). same pattern as accept/read
-- `net.connect(addr, port)` compiles to net_connect opcode. with scheduler: creates non-blocking socket, parks on EINPROGRESS, pollAndWake checks getsockopt(SO_ERROR). without scheduler: blocking connect
-- write parking stores data pointer and offset in scheduler's io_write_data/io_write_off arrays. pollAndWake completes partial writes when fd becomes writable
-- connect parking uses POLL.OUT. pollAndWake verifies connection via getsockopt before pushing ObjConn
+- write parking stores data pointer and offset in scheduler's io_write_data/io_write_off arrays. pollAndWake completes partial writes when fd becomes writable via POLL.OUT
 - only set sockets non-blocking when scheduler is active. blocking fallback paths keep sockets blocking for compatibility with native function writes
+- connect remains blocking (native function). async connect would require a dedicated syntax to avoid ambiguity with the `x.connect(a, b)` field-access interception pattern (collision with struct methods)
 
 ## std/http (HTTP utilities)
 

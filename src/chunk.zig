@@ -92,7 +92,6 @@ pub const OpCode = enum(u8) {
     net_accept,
     net_read,
     net_write,
-    net_connect,
     ffi_call,
 };
 
