@@ -616,19 +616,19 @@ pub const Compiler = struct {
         }
         self.addLocalTyped("$counter", .int_);
 
+        const counter_idx = self.local_count - 1;
+        const counter_slot = self.resolveLocal("$counter").?;
+
         const loop_start = self.chunk().count();
 
         self.emitOp(.get_local);
-        self.emitByte(self.resolveLocal("$counter").?);
+        self.emitByte(counter_slot);
         self.compileExpr(args.end);
         self.emitOp(.less_int);
         const exit_jump = self.emitJump(.jump_if_false);
         self.emitOp(.pop);
 
-        self.beginScope();
-        self.emitOp(.get_local);
-        self.emitByte(self.resolveLocal("$counter").?);
-        self.addLocalTyped(binding, .int_);
+        self.locals[counter_idx].name = binding;
 
         for (body.stmts) |s| {
             self.compileStmt(s);
@@ -637,20 +637,20 @@ pub const Compiler = struct {
             self.compileExpr(expr);
             self.emitOp(.pop);
         }
-        self.endScope();
 
-        const counter_slot = self.resolveLocal("$counter").?;
-        self.emitOp(.get_local);
-        self.emitByte(counter_slot);
-        if (args.step) |step| {
-            self.compileExpr(step);
+        self.locals[counter_idx].name = "$counter";
+        if (args.step == null) {
+            self.emitOp(.inc_local);
+            self.emitByte(counter_slot);
         } else {
-            self.emitConstant(Value.initInt(1));
+            self.emitOp(.get_local);
+            self.emitByte(counter_slot);
+            self.compileExpr(args.step.?);
+            self.emitOp(.add_int);
+            self.emitOp(.set_local);
+            self.emitByte(counter_slot);
+            self.emitOp(.pop);
         }
-        self.emitOp(.add_int);
-        self.emitOp(.set_local);
-        self.emitByte(counter_slot);
-        self.emitOp(.pop);
 
         self.emitLoop(loop_start);
         self.patchJump(exit_jump);
@@ -1014,7 +1014,160 @@ pub const Compiler = struct {
         self.endScopeKeepTop();
     }
 
+    fn variantCountForType(self: *Compiler, type_name: []const u8) u8 {
+        var max_idx: u8 = 0;
+        var found = false;
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            var it = cur.enum_variants.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.value_ptr.type_name, type_name)) {
+                    found = true;
+                    if (entry.value_ptr.variant_index >= max_idx) {
+                        max_idx = entry.value_ptr.variant_index + 1;
+                    }
+                }
+            }
+            c = cur.enclosing;
+        }
+        return if (found) max_idx else 0;
+    }
+
+    fn canUseMatchJump(self: *Compiler, arms: []const ast.MatchArm) ?[]const u8 {
+        if (arms.len == 0) return null;
+        var type_name: ?[]const u8 = null;
+        for (arms) |arm| {
+            if (arm.guard != null) return null;
+            switch (arm.pattern.kind) {
+                .variant => |vp| {
+                    const info = self.findEnumVariant(vp.name) orelse return null;
+                    if (type_name) |tn| {
+                        if (!std.mem.eql(u8, tn, info.type_name)) return null;
+                    } else {
+                        type_name = info.type_name;
+                    }
+                },
+                .identifier => |name| {
+                    if (self.findEnumVariant(name)) |info| {
+                        if (type_name) |tn| {
+                            if (!std.mem.eql(u8, tn, info.type_name)) return null;
+                        } else {
+                            type_name = info.type_name;
+                        }
+                    } else {
+                        return null;
+                    }
+                },
+                .wildcard => {},
+                else => return null,
+            }
+        }
+        return type_name;
+    }
+
+    fn compileMatchJump(self: *Compiler, me: ast.MatchExpr, variant_count: u8) void {
+        self.compileExpr(me.subject);
+        self.beginScope();
+        self.addLocal("$match");
+
+        const match_slot = self.resolveLocal("$match").?;
+        self.emitOp(.match_jump);
+        self.emitByte(match_slot);
+        self.emitByte(variant_count);
+
+        const table_start = self.chunk().count();
+        for (0..variant_count) |_| {
+            self.emitByte(0);
+            self.emitByte(0);
+        }
+        self.emitByte(0);
+        self.emitByte(0);
+        const base_ip = self.chunk().count();
+
+        var arm_starts: [256]usize = undefined;
+        var has_arm: [256]bool = .{false} ** 256;
+        var wildcard_arm: ?usize = null;
+
+        var end_jumps: [64]usize = undefined;
+        var end_count: usize = 0;
+
+        for (me.arms) |arm| {
+            switch (arm.pattern.kind) {
+                .variant => |vp| {
+                    const info = self.findEnumVariant(vp.name).?;
+                    const vi = info.variant_index;
+                    arm_starts[vi] = self.chunk().count();
+                    has_arm[vi] = true;
+
+                    self.beginScope();
+                    for (vp.bindings, 0..) |binding, i| {
+                        self.emitOp(.get_local);
+                        self.emitByte(match_slot);
+                        self.emitOp(.get_payload);
+                        self.emitByte(@intCast(i));
+                        self.addLocal(binding);
+                    }
+                    self.compileExpr(arm.body);
+                    self.endScopeKeepTop();
+                    end_jumps[end_count] = self.emitJump(.jump);
+                    end_count += 1;
+                },
+                .identifier => |name| {
+                    const info = self.findEnumVariant(name).?;
+                    const vi = info.variant_index;
+                    arm_starts[vi] = self.chunk().count();
+                    has_arm[vi] = true;
+
+                    self.compileExpr(arm.body);
+                    end_jumps[end_count] = self.emitJump(.jump);
+                    end_count += 1;
+                },
+                .wildcard => {
+                    wildcard_arm = self.chunk().count();
+                    self.compileExpr(arm.body);
+                    end_jumps[end_count] = self.emitJump(.jump);
+                    end_count += 1;
+                },
+                else => unreachable,
+            }
+        }
+
+        const nil_pos = self.chunk().count();
+        self.emitOp(.nil);
+
+        for (end_jumps[0..end_count]) |j| {
+            self.patchJump(j);
+        }
+
+        const code = self.chunk().code.items;
+        for (0..variant_count) |vi| {
+            const target = if (has_arm[vi])
+                arm_starts[vi]
+            else if (wildcard_arm) |w|
+                w
+            else
+                nil_pos;
+            const offset: u16 = @intCast(target - base_ip);
+            code[table_start + vi * 2] = @intCast(offset >> 8);
+            code[table_start + vi * 2 + 1] = @intCast(offset & 0xff);
+        }
+        const default_target = if (wildcard_arm) |w| w else nil_pos;
+        const default_offset: u16 = @intCast(default_target - base_ip);
+        code[table_start + variant_count * 2] = @intCast(default_offset >> 8);
+        code[table_start + variant_count * 2 + 1] = @intCast(default_offset & 0xff);
+
+        self.endScopeKeepTop();
+    }
+
     fn compileMatch(self: *Compiler, me: ast.MatchExpr) void {
+        if (self.canUseMatchJump(me.arms)) |type_name| {
+            const vc = self.variantCountForType(type_name);
+            if (vc > 0 and vc <= 64) {
+                self.compileMatchJump(me, vc);
+                return;
+            }
+        }
+
         self.compileExpr(me.subject);
 
         self.beginScope();
@@ -1334,8 +1487,14 @@ pub const Compiler = struct {
 
     fn endScopeKeepTop(self: *Compiler) void {
         self.scope_depth -= 1;
+        var count: u8 = 0;
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
             self.local_count -= 1;
+            count += 1;
+        }
+        if (count > 0) {
+            self.emitOp(.slide);
+            self.emitByte(count);
         }
     }
 
@@ -1565,6 +1724,14 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .get_upvalue => i += 1,
             .array_create => i += 1,
             .index_get, .index_set, .array_push, .array_len => {},
+            .slide => i += 1,
+            .inc_local => i += 1,
+            .match_jump => {
+                i += 1;
+                const vc = code[i];
+                i += 1;
+                i += @as(usize, vc) * 2 + 2;
+            },
             .make_closure => {
                 i += 2;
                 const uv_count = code[i];

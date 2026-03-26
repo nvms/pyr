@@ -499,6 +499,38 @@ pub const VM = struct {
                     }
                 },
                 .array_push, .array_len => {},
+                .slide => {
+                    const n = self.readByte();
+                    const result = self.stack[self.sp - 1];
+                    self.sp -= n;
+                    self.stack[self.sp - 1] = result;
+                },
+                .inc_local => {
+                    const frame_ = &self.frames[self.frame_count - 1];
+                    const slot = frame_.function.chunk.code.items[frame_.ip];
+                    frame_.ip += 1;
+                    const abs = frame_.slot_offset + slot;
+                    self.stack[abs] = Value.initInt(self.stack[abs].asInt() + 1);
+                },
+                .match_jump => {
+                    const frame_ = &self.frames[self.frame_count - 1];
+                    const c = frame_.function.chunk.code.items;
+                    const slot = c[frame_.ip];
+                    frame_.ip += 1;
+                    const n = c[frame_.ip];
+                    frame_.ip += 1;
+                    const table_start = frame_.ip;
+                    frame_.ip += @as(usize, n) * 2 + 2;
+                    const base = frame_.ip;
+                    const val = self.stack[frame_.slot_offset + slot];
+                    var off_idx: usize = @as(usize, n) * 2;
+                    if (val.tag == .enum_) {
+                        const vi = val.asEnum().variant_index;
+                        if (vi < n) off_idx = @as(usize, vi) * 2;
+                    }
+                    const offset = @as(u16, c[table_start + off_idx]) << 8 | c[table_start + off_idx + 1];
+                    frame_.ip = base + offset;
+                },
             }
         }
     }
@@ -521,6 +553,11 @@ pub const VM = struct {
                 const slot = code[frame.ip];
                 frame.ip += 1;
                 self.stack[frame.slot_offset + slot] = self.stack[self.sp - 1];
+            } else if (byte == @intFromEnum(OpCode.inc_local)) {
+                const slot = code[frame.ip];
+                frame.ip += 1;
+                const abs = frame.slot_offset + slot;
+                self.stack[abs] = Value.initInt(self.stack[abs].asInt() + 1);
             } else if (byte == @intFromEnum(OpCode.constant)) {
                 const hi: u16 = code[frame.ip];
                 const lo: u16 = code[frame.ip + 1];
@@ -653,6 +690,13 @@ pub const VM = struct {
             } else if (byte == @intFromEnum(OpCode.greater_int)) {
                 self.sp -= 1;
                 self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() > self.stack[self.sp].asInt());
+            } else if (byte == @intFromEnum(OpCode.mul_int)) {
+                self.sp -= 1;
+                self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() *% self.stack[self.sp].asInt());
+            } else if (byte == @intFromEnum(OpCode.mod_int)) {
+                self.sp -= 1;
+                const bi = self.stack[self.sp].asInt();
+                self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @mod(self.stack[self.sp - 1].asInt(), bi) else 0);
             } else if (byte == @intFromEnum(OpCode.add_float)) {
                 const b = self.stack[self.sp - 1];
                 const a = self.stack[self.sp - 2];
@@ -702,6 +746,12 @@ pub const VM = struct {
                 }
             } else if (byte == @intFromEnum(OpCode.pop)) {
                 self.sp -= 1;
+            } else if (byte == @intFromEnum(OpCode.slide)) {
+                const n = code[frame.ip];
+                frame.ip += 1;
+                const result = self.stack[self.sp - 1];
+                self.sp -= n;
+                self.stack[self.sp - 1] = result;
             } else if (byte == @intFromEnum(OpCode.nil)) {
                 self.stack[self.sp] = Value.initNil();
                 self.sp += 1;
@@ -819,6 +869,22 @@ pub const VM = struct {
                     frame.ip -= 1;
                     return;
                 }
+            } else if (byte == @intFromEnum(OpCode.match_jump)) {
+                const slot = code[frame.ip];
+                frame.ip += 1;
+                const n = code[frame.ip];
+                frame.ip += 1;
+                const table_start = frame.ip;
+                frame.ip += @as(usize, n) * 2 + 2;
+                const base = frame.ip;
+                const val = self.stack[frame.slot_offset + slot];
+                var off_idx: usize = @as(usize, n) * 2;
+                if (val.tag == .enum_) {
+                    const vi = val.asEnum().variant_index;
+                    if (vi < n) off_idx = @as(usize, vi) * 2;
+                }
+                const offset = @as(u16, code[table_start + off_idx]) << 8 | code[table_start + off_idx + 1];
+                frame.ip = base + offset;
             } else {
                 frame.ip -= 1;
                 return;
@@ -1261,4 +1327,12 @@ test "vm: string interpolation with expression" {
 
 test "vm: string interpolation multiple parts" {
     try testRun("fn main() {\n  a = 1\n  b = 2\n  println(\"{a} + {b}\")\n}");
+}
+
+test "vm: inline match expression" {
+    try testRun("enum Op { Add(int)\n  Sub(int)\n  Nop }\nfn main() {\n  a = Add(3)\n  s = Sub(1)\n  mut r = 0\n  r = match a {\n    Add(n) -> r + n\n    Sub(n) -> r - n\n    Nop -> r\n  }\n  r = match s {\n    Add(n) -> r + n\n    Sub(n) -> r - n\n    Nop -> r\n  }\n  println(r)\n}");
+}
+
+test "vm: inline match in loop" {
+    try testRun("enum Op { Add(int)\n  Nop }\nfn main() {\n  a = Add(1)\n  mut r = 0\n  for i in range(5) {\n    r = match a {\n      Add(n) -> r + n\n      Nop -> r\n    }\n  }\n  println(r)\n}");
 }
