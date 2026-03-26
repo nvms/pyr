@@ -1,0 +1,21 @@
+imp std/io { println }
+
+fn fetch_profile(id: int) -> int = id * 100
+
+fn fetch_orders(id: int) -> int = id * 10
+
+fn main() {
+  id = 5
+
+  results = await_all(
+    spawn { fetch_profile(id) },
+    spawn { fetch_orders(id) }
+  )
+
+  profile = results[0]
+  orders = results[1]
+
+  println(profile)
+  println(orders)
+  println(profile + orders)
+}

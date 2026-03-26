@@ -87,6 +87,7 @@ pub const OpCode = enum(u8) {
     channel_send,
     channel_recv,
     await_task,
+    await_all,
 };
 
 pub const Chunk = struct {

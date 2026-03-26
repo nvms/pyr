@@ -67,6 +67,8 @@ pub const Scheduler = struct {
     queue_count: u8,
     current_task: ?*ObjTask,
     active: bool,
+    await_waiters: [16]?*ObjTask,
+    await_waiter_count: u8,
 
     fn init() Scheduler {
         return .{
@@ -76,6 +78,8 @@ pub const Scheduler = struct {
             .queue_count = 0,
             .current_task = null,
             .active = false,
+            .await_waiters = .{null} ** 16,
+            .await_waiter_count = 0,
         };
     }
 
@@ -644,6 +648,9 @@ pub const VM = struct {
                 .channel_send => try self.execChannelSend(),
                 .channel_recv => try self.execChannelRecv(),
                 .await_task => try self.execAwaitTask(),
+                .await_all => {
+                    _ = self.readByte();
+                },
                 .slide => {
                     const n = self.readByte();
                     const result = self.stack[self.sp - 1];
@@ -1328,19 +1335,23 @@ pub const VM = struct {
 
     fn wakeAwaiters(self: *VM, finished: *ObjTask) void {
         const sched = self.sched;
-        const i: u8 = sched.queue_head;
-        const count: u8 = sched.queue_count;
-        var checked: u8 = 0;
-        while (checked < count) : (checked += 1) {
-            const idx = (i + checked) % 64;
-            if (sched.run_queue[idx]) |queued| {
-                if (queued.state == .blocked_await and queued.waiting_on == finished) {
-                    queued.stack[queued.sp] = finished.result;
-                    queued.sp += 1;
-                    queued.state = .ready;
-                    queued.waiting_on = null;
+        var i: u8 = 0;
+        while (i < sched.await_waiter_count) {
+            if (sched.await_waiters[i]) |waiter| {
+                if (waiter.state == .blocked_await and waiter.waiting_on == finished) {
+                    waiter.stack[waiter.sp] = finished.result;
+                    waiter.sp += 1;
+                    waiter.state = .ready;
+                    waiter.waiting_on = null;
+                    sched.enqueue(waiter);
+
+                    sched.await_waiter_count -= 1;
+                    sched.await_waiters[i] = sched.await_waiters[sched.await_waiter_count];
+                    sched.await_waiters[sched.await_waiter_count] = null;
+                    continue;
                 }
             }
+            i += 1;
         }
     }
 
@@ -1436,6 +1447,7 @@ pub const VM = struct {
                 self.saveToTask(ct);
                 ct.state = .blocked_await;
                 ct.waiting_on = task;
+                self.addAwaitWaiter(ct);
 
                 if (self.sched.dequeue()) |next| {
                     self.switchTo(next);
@@ -1446,6 +1458,14 @@ pub const VM = struct {
             }
         } else {
             self.push(Value.initNil());
+        }
+    }
+
+    fn addAwaitWaiter(self: *VM, task: *ObjTask) void {
+        const sched = self.sched;
+        if (sched.await_waiter_count < 16) {
+            sched.await_waiters[sched.await_waiter_count] = task;
+            sched.await_waiter_count += 1;
         }
     }
 
@@ -2110,6 +2130,79 @@ test "vm: two stage pipeline" {
         \\  spawn { add_one(b, c) }
         \\  a.send(10)
         \\  println(c.recv())
+        \\}
+    );
+}
+
+test "vm: await_all basic" {
+    try testRun(
+        \\fn get_a() -> int = 10
+        \\fn get_b() -> int = 20
+        \\fn main() {
+        \\  results = await_all(
+        \\    spawn { get_a() },
+        \\    spawn { get_b() }
+        \\  )
+        \\  println(results[0])
+        \\  println(results[1])
+        \\}
+    );
+}
+
+test "vm: await_all three tasks" {
+    try testRun(
+        \\fn compute(n: int) -> int = n * n
+        \\fn main() {
+        \\  r = await_all(
+        \\    spawn { compute(3) },
+        \\    spawn { compute(4) },
+        \\    spawn { compute(5) }
+        \\  )
+        \\  println(r[0] + r[1] + r[2])
+        \\}
+    );
+}
+
+test "vm: await_all with channels" {
+    try testRun(
+        \\fn fetch(ch) -> int {
+        \\  ch.send(42)
+        \\  42
+        \\}
+        \\fn main() {
+        \\  ch = channel(5)
+        \\  r = await_all(
+        \\    spawn { fetch(ch) },
+        \\    spawn { fetch(ch) }
+        \\  )
+        \\  println(r[0] + r[1])
+        \\}
+    );
+}
+
+test "vm: await_all single task" {
+    try testRun(
+        \\fn work() -> int = 99
+        \\fn main() {
+        \\  r = await_all(spawn { work() })
+        \\  println(r[0])
+        \\}
+    );
+}
+
+test "vm: await_all preserves order" {
+    try testRun(
+        \\fn main() {
+        \\  r = await_all(
+        \\    spawn { 1 },
+        \\    spawn { 2 },
+        \\    spawn { 3 },
+        \\    spawn { 4 }
+        \\  )
+        \\  println(r[0])
+        \\  println(r[1])
+        \\  println(r[2])
+        \\  println(r[3])
         \\}
     );
 }

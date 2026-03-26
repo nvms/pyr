@@ -175,5 +175,7 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - when recv succeeds and recv_waiters exist after a send: the value is popped from buffer and placed directly in the waiter's stack
 - context switch: saveToTask copies VM frames/stack/counters to ObjTask, switchTo/restoreFromTask copies back. this is a full state copy, not a pointer swap
 - return_ at frame_count == 0 with scheduler active triggers taskFinished: marks task done, wakes any tasks blocked on await_task, dequeues next ready task. if no tasks remain, scheduler deactivates and main returns normally
-- all concurrency opcodes (spawn, channel_create, channel_send, channel_recv, await_task) are in run() only, never fastLoop
-- deadlock detection: if a blocking op has no next ready task to switch to, it reports "deadlock: all tasks blocked"
+- `await_all(t1, t2, t3)` is compiled as sequential await_task calls that collect results into an array. compiler stores task handles in hidden locals, emits get_local + await_task for each, then array_create. this works because awaiting t1 lets the scheduler run t2 and t3, so by the time we await t2 it's likely already done
+- await-blocked tasks are tracked in the scheduler's `await_waiters` list (separate from the run queue). when a task finishes, `wakeAwaiters` scans this list, pushes the result onto the waiter's stack, and re-enqueues it as ready
+- all concurrency opcodes (spawn, channel_create, channel_send, channel_recv, await_task, await_all) are in run() only, never fastLoop
+- deadlock detection: if a blocking op has no next ready task to switch to, it reports "deadlock: all tasks blocked". recv/send on channels without an active scheduler also errors

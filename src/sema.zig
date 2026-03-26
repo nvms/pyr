@@ -160,6 +160,7 @@ pub const Sema = struct {
         self.define("assert", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("assert_eq", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("channel", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("await_all", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
     }
 
     // ---------------------------------------------------------------

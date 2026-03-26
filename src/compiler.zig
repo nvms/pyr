@@ -967,6 +967,28 @@ pub const Compiler = struct {
                 return;
             }
 
+            if (std.mem.eql(u8, name, "await_all")) {
+                const count = call.args.len;
+                const base_slot = self.local_count;
+
+                for (call.args) |arg| {
+                    self.compileExpr(arg);
+                    const slot_name = std.fmt.allocPrint(self.alloc, "$await_{d}", .{self.local_count}) catch "$await";
+                    self.addLocal(slot_name);
+                }
+
+                var i: usize = 0;
+                while (i < count) : (i += 1) {
+                    self.emitOp(.get_local);
+                    self.emitByte(base_slot + @as(u8, @intCast(i)));
+                    self.emitOp(.await_task);
+                }
+
+                self.emitOp(.array_create);
+                self.emitByte(@intCast(count));
+                return;
+            }
+
             if (self.findEnumVariant(name)) |info| {
                 if (info.payload_count > 0 and call.args.len == info.payload_count) {
                     for (call.args) |arg| {
@@ -1947,7 +1969,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .set_global, .define_global, .print, .println => return false,
-            .spawn, .channel_create, .channel_send, .channel_recv, .await_task => return false,
+            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all => return false,
         }
     }
     return true;
