@@ -28,11 +28,17 @@ fn main() {
   u = User { name: "alice", age: 30, active: true }
   println(encode(u))
 
+  println(encode("line\none"))
+
   arr = decode("[1, 2, 3]")
   println(len(arr))
   println(arr[0])
   println(arr[1])
   println(arr[2])
+
+  obj = decode("\{\"name\":\"bob\",\"age\":25\}")
+  println(obj.name)
+  println(obj.age)
 
   println(decode("true"))
   println(decode("false"))
@@ -40,12 +46,9 @@ fn main() {
   println(decode("42"))
   println(decode("3.14"))
 
-  s = encode(u)
-  u2 = decode(s)
-  println(u2.name)
-  println(u2.age)
-  println(u2.active)
+  nested = decode("\{\"users\":[\{\"name\":\"carol\",\"score\":99\}]\}")
+  println(nested.users[0].name)
+  println(nested.users[0].score)
 
-  roundtrip = encode(decode("[10,20,30]"))
-  println(roundtrip)
+  println(encode(decode("[1,\"two\",true,null,3.5]")))
 }

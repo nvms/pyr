@@ -699,7 +699,7 @@ pub const Compiler = struct {
             },
             .string_literal => |text| {
                 const inner = if (text.len >= 2) text[1 .. text.len - 1] else text;
-                const str = ObjString.create(self.alloc, inner);
+                const str = ObjString.create(self.alloc, self.processEscapes(inner));
                 self.emitConstant(str.toValue());
             },
             .string_interp => |si| self.compileStringInterp(si),
@@ -778,7 +778,7 @@ pub const Compiler = struct {
         for (si.parts) |part| {
             switch (part) {
                 .literal => |text| {
-                    const str = ObjString.create(self.alloc, text);
+                    const str = ObjString.create(self.alloc, self.processEscapes(text));
                     self.emitConstant(str.toValue());
                 },
                 .expr => |expr| {
@@ -1706,6 +1706,60 @@ pub const Compiler = struct {
         }
         self.emitOp(.call);
         self.emitByte(arity);
+    }
+
+    fn processEscapes(self: *Compiler, raw: []const u8) []const u8 {
+        var has_escape = false;
+        for (raw) |c| {
+            if (c == '\\') {
+                has_escape = true;
+                break;
+            }
+        }
+        if (!has_escape) return raw;
+
+        var buf = std.ArrayListUnmanaged(u8){};
+        var i: usize = 0;
+        while (i < raw.len) {
+            if (raw[i] == '\\' and i + 1 < raw.len) {
+                switch (raw[i + 1]) {
+                    'n' => buf.append(self.alloc, '\n') catch @panic("oom"),
+                    't' => buf.append(self.alloc, '\t') catch @panic("oom"),
+                    'r' => buf.append(self.alloc, '\r') catch @panic("oom"),
+                    '\\' => buf.append(self.alloc, '\\') catch @panic("oom"),
+                    '"' => buf.append(self.alloc, '"') catch @panic("oom"),
+                    '{' => buf.append(self.alloc, '{') catch @panic("oom"),
+                    '}' => buf.append(self.alloc, '}') catch @panic("oom"),
+                    '0' => buf.append(self.alloc, 0) catch @panic("oom"),
+                    'x' => {
+                        if (i + 3 < raw.len) {
+                            const byte = std.fmt.parseInt(u8, raw[i + 2 .. i + 4], 16) catch {
+                                buf.append(self.alloc, '\\') catch @panic("oom");
+                                buf.append(self.alloc, 'x') catch @panic("oom");
+                                i += 2;
+                                continue;
+                            };
+                            buf.append(self.alloc, byte) catch @panic("oom");
+                            i += 4;
+                            continue;
+                        } else {
+                            buf.append(self.alloc, '\\') catch @panic("oom");
+                            buf.append(self.alloc, 'x') catch @panic("oom");
+                            i += 2;
+                            continue;
+                        }
+                    },
+                    else => {
+                        buf.append(self.alloc, raw[i + 1]) catch @panic("oom");
+                    },
+                }
+                i += 2;
+            } else {
+                buf.append(self.alloc, raw[i]) catch @panic("oom");
+                i += 1;
+            }
+        }
+        return buf.items;
     }
 
     fn addStringConstant(self: *Compiler, text: []const u8) u16 {

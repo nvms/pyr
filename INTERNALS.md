@@ -92,7 +92,7 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - resolveModuleValue checks both module_namespaces (user modules) and std_modules (std modules), returns Value (either ObjFunction or ObjNativeFn)
 - compileGetVar checks native_fns table before falling back to get_global, enabling direct constant embedding for selective std imports
 - io functions use std.posix.write/read directly (zig 0.15 removed std.io.getStdOut/getStdErr/getStdIn)
-- std/json: encode uses recursive jsonWriteValue (similar to writeValueTo but writes to ArrayListUnmanaged(u8) buffer). decode uses JsonParser struct with recursive descent. decoded objects become ObjStruct with name "object" and dynamically discovered field names. string escaping follows JSON spec (\", \\, \n, \t, \r, \uXXXX). note: pyr string literals don't process escape sequences (lexer skips them for delimiter purposes but compiler keeps raw bytes), so JSON strings with embedded quotes must be constructed via encode() round-trip rather than string literals
+- std/json: encode uses recursive jsonWriteValue (similar to writeValueTo but writes to ArrayListUnmanaged(u8) buffer). decode uses JsonParser struct with recursive descent. decoded objects become ObjStruct with name "object" and dynamically discovered field names. string escaping follows JSON spec (\", \\, \n, \t, \r, \uXXXX). JSON strings with braces use `\{` and `\}` in pyr source to avoid triggering interpolation
 
 ## direct function calls
 
