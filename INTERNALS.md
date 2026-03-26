@@ -198,7 +198,11 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - `pollAndWake` performs the actual I/O when an fd is ready, pushes result onto waiting task's stack, enqueues as ready
 - all deadlock-detection sites use `scheduleNextOrPoll` so I/O-blocked tasks don't trigger false deadlocks
 - I/O waiter data stored in Scheduler struct (not a new VM field) to avoid LLVM perturbation
-- connect and write remain blocking. non-blocking connect/write are future optimizations
+- `conn.write(data)` compiles to net_write opcode with scheduler integration. `net.write(conn, data)` namespace syntax stays blocking (native function). same pattern as accept/read
+- `net.connect(addr, port)` compiles to net_connect opcode. with scheduler: creates non-blocking socket, parks on EINPROGRESS, pollAndWake checks getsockopt(SO_ERROR). without scheduler: blocking connect
+- write parking stores data pointer and offset in scheduler's io_write_data/io_write_off arrays. pollAndWake completes partial writes when fd becomes writable
+- connect parking uses POLL.OUT. pollAndWake verifies connection via getsockopt before pushing ObjConn
+- only set sockets non-blocking when scheduler is active. blocking fallback paths keep sockets blocking for compatibility with native function writes
 
 ## std/http (HTTP utilities)
 

@@ -232,7 +232,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - std/fs: read, write, append, exists, remove. file operations via std.fs.cwd()
   - std/os: env (environment variables), args (returns string array), exit
   - std/json: encode (any pyr value -> JSON string), decode (JSON string -> pyr value). encode handles int, float, str, bool, nil, array, struct, enum. decode returns int/float/str/bool/nil for primitives, ObjArray for arrays, ObjStruct (name "object") for objects. round-trip: decode(encode(v)) preserves structure for structs/arrays
-  - std/net: listen, accept, connect, read, write, close. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd) value types. method-call syntax (`server.accept()`, `conn.read()`) compiles to net_accept/net_read opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`) uses blocking native functions. all sockets set to O_NONBLOCK via fcntl
+  - std/net: listen, accept, connect, read, write, close. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd) value types. method-call syntax (`server.accept()`, `conn.read()`, `conn.write(data)`) and `net.connect(addr, port)` compile to net_accept/net_read/net_write/net_connect opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`, `net.read(conn)`, `net.write(conn, data)`) uses blocking native functions. sockets set to O_NONBLOCK only when scheduler is active
   - std/http: parse_request, respond, respond_status, json_response, route, match_route. HTTP utility module - server loop written in pyr using std/net primitives. handlers are regular pyr functions. route/match_route pattern for declarative routing
 - type keywords (int, float, str, bool, byte) usable in expression position as conversion functions: `int(3.7)`, `float(5)`
 - assert and assert_eq builtins: assert(condition) exits on failure, assert_eq(a, b) exits with diff on mismatch
@@ -251,16 +251,16 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - `await_all(spawn { a() }, spawn { b() })` collects results from parallel tasks into an array
 - FFI: `extern "lib" { fn name(type, ...) -> type }` syntax. dlopen/dlsym resolution at VM init. trampoline dispatch for up to 6 int/ptr args. cstr auto null-termination. "c" library resolves to libc. FfiState is a heap-allocated side struct (avoids LLVM perturbation). ffi_call opcode with u16 descriptor index + u8 arg count. src/ffi.zig contains FfiState, trampolines, marshaling. build.zig links libc
 - `nil` keyword (not `none`) for null values. Value tag is `.nil`
-- 76 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, ffi_call
+- 78 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, ffi_call
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
-- 196 tests, 23 validated examples, 9 benchmarks
+- 200 tests, 23 validated examples, 9 benchmarks
 - benchmarks: fib(35) 0.84s (python 0.88s), loop 10M 0.20s (python 0.20s), closure 10M 0.25s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.53s (python 0.64s), match 30M 4.35s (python 2.09s), arena 1M 0.49s (python 0.20s), channel 100K 0.03s
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** non-blocking write (partial write buffering), async connect, package manager / module resolution
+**next:** package manager / module resolution, error handling (?T option types, ?? operator)
 
 ## roadmap
 

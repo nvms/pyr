@@ -26,9 +26,9 @@ fn serve_request(server, routes, done) {
       handler = match_route(routes, req.method, req.path)
       if handler != nil {
         resp = handler(req)
-        net.write(conn, resp)
+        conn.write(resp)
       } else {
-        net.write(conn, respond_status(404, "not found"))
+        conn.write(respond_status(404, "not found"))
       }
     }
     net.close(conn)
@@ -54,9 +54,9 @@ fn main() {
   c2 = net.connect("127.0.0.1", 19910)
   c3 = net.connect("127.0.0.1", 19910)
 
-  net.write(c1, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
-  net.write(c2, "GET /json HTTP/1.1\r\nHost: localhost\r\n\r\n")
-  net.write(c3, "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  c1.write("GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  c2.write("GET /json HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  c3.write("GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n")
 
   r1 = c1.read()
   r2 = c2.read()

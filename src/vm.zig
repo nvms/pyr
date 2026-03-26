@@ -77,8 +77,10 @@ pub const Scheduler = struct {
     io_ops: [64]IoOp,
     io_tasks: [64]?*ObjTask,
     io_count: u8,
+    io_write_data: [64][]const u8,
+    io_write_off: [64]usize,
 
-    const IoOp = enum(u8) { accept, read };
+    const IoOp = enum(u8) { accept, read, write, connect };
 
     fn init() Scheduler {
         return .{
@@ -94,6 +96,8 @@ pub const Scheduler = struct {
             .io_ops = .{.accept} ** 64,
             .io_tasks = .{null} ** 64,
             .io_count = 0,
+            .io_write_data = .{&.{}} ** 64,
+            .io_write_off = .{0} ** 64,
         };
     }
 
@@ -121,11 +125,23 @@ pub const Scheduler = struct {
         self.io_count += 1;
     }
 
+    fn parkIoWrite(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, data: []const u8, offset: usize) void {
+        if (self.io_count >= 64) @panic("io poller overflow");
+        self.io_fds[self.io_count] = fd;
+        self.io_ops[self.io_count] = .write;
+        self.io_tasks[self.io_count] = task;
+        self.io_write_data[self.io_count] = data;
+        self.io_write_off[self.io_count] = offset;
+        self.io_count += 1;
+    }
+
     fn removeIoWaiter(self: *Scheduler, idx: u8) void {
         self.io_count -= 1;
         self.io_fds[idx] = self.io_fds[self.io_count];
         self.io_ops[idx] = self.io_ops[self.io_count];
         self.io_tasks[idx] = self.io_tasks[self.io_count];
+        self.io_write_data[idx] = self.io_write_data[self.io_count];
+        self.io_write_off[idx] = self.io_write_off[self.io_count];
         self.io_tasks[self.io_count] = null;
     }
 
@@ -135,7 +151,8 @@ pub const Scheduler = struct {
         var pollfds: [64]std.posix.pollfd = undefined;
         var i: u8 = 0;
         while (i < self.io_count) : (i += 1) {
-            pollfds[i] = .{ .fd = self.io_fds[i], .events = std.posix.POLL.IN, .revents = 0 };
+            const events: i16 = if (self.io_ops[i] == .write or self.io_ops[i] == .connect) std.posix.POLL.OUT else std.posix.POLL.IN;
+            pollfds[i] = .{ .fd = self.io_fds[i], .events = events, .revents = 0 };
         }
 
         _ = std.posix.poll(pollfds[0..self.io_count], -1) catch return;
@@ -143,7 +160,7 @@ pub const Scheduler = struct {
         var j: u8 = self.io_count;
         while (j > 0) {
             j -= 1;
-            if (pollfds[j].revents & (std.posix.POLL.IN | std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
+            if (pollfds[j].revents & (std.posix.POLL.IN | std.posix.POLL.OUT | std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
                 const task = self.io_tasks[j].?;
 
                 switch (self.io_ops[j]) {
@@ -182,6 +199,30 @@ pub const Scheduler = struct {
                                 continue;
                             };
                             task.stack[task.sp] = ObjString.create(alloc, owned).toValue();
+                        }
+                        task.sp += 1;
+                    },
+                    .write => {
+                        const data = self.io_write_data[j];
+                        var off = self.io_write_off[j];
+                        while (off < data.len) {
+                            const n = std.posix.write(self.io_fds[j], data[off..]) catch {
+                                break;
+                            };
+                            off += n;
+                        }
+                        task.stack[task.sp] = Value.initBool(off >= data.len);
+                        task.sp += 1;
+                    },
+                    .connect => {
+                        var err_val: c_int = 0;
+                        var err_len: std.posix.socklen_t = @sizeOf(c_int);
+                        const rc = std.posix.system.getsockopt(self.io_fds[j], std.posix.SOL.SOCKET, std.posix.SO.ERROR, @ptrCast(&err_val), &err_len);
+                        if (rc == 0 and err_val == 0) {
+                            task.stack[task.sp] = ObjConn.create(alloc, self.io_fds[j]).toValue();
+                        } else {
+                            std.posix.close(self.io_fds[j]);
+                            task.stack[task.sp] = Value.initNil();
                         }
                         task.sp += 1;
                     },
@@ -768,6 +809,8 @@ pub const VM = struct {
                 },
                 .net_accept => try self.execNetAccept(),
                 .net_read => try self.execNetRead(),
+                .net_write => try self.execNetWrite(),
+                .net_connect => try self.execNetConnect(),
                 .ffi_call => try self.execFfiCall(),
                 .slide => {
                     const n = self.readByte();
@@ -1710,6 +1753,97 @@ pub const VM = struct {
             return;
         };
         self.push(ObjString.create(self.currentAlloc(), owned).toValue());
+    }
+
+    fn execNetWrite(self: *VM) Error!void {
+        const data_val = self.pop();
+        const target = self.pop();
+        if (target.tag != .conn or data_val.tag != .string) {
+            self.push(Value.initBool(false));
+            return;
+        }
+        const fd = target.asConn().fd;
+        const data = data_val.asString().chars;
+
+        if (self.sched.active) {
+            stdlib.setNonBlocking(fd);
+        }
+
+        var written: usize = 0;
+        while (written < data.len) {
+            const n = std.posix.write(fd, data[written..]) catch |err| {
+                if (err == error.WouldBlock and self.sched.active) {
+                    if (self.sched.current_task) |ct| {
+                        self.saveToTask(ct);
+                        ct.state = .blocked_io;
+                        self.sched.parkIoWrite(ct, fd, data, written);
+
+                        if (self.scheduleNextOrPoll()) |next| {
+                            self.switchTo(next);
+                        } else {
+                            self.runtimeError("deadlock: all tasks blocked", .{});
+                            return error.RuntimeError;
+                        }
+                        return;
+                    }
+                }
+                self.push(Value.initBool(false));
+                return;
+            };
+            written += n;
+        }
+        self.push(Value.initBool(true));
+    }
+
+    fn execNetConnect(self: *VM) Error!void {
+        const port_val = self.pop();
+        const addr_val = self.pop();
+        if (addr_val.tag != .string or port_val.tag != .int) {
+            self.push(Value.initNil());
+            return;
+        }
+        const addr_str = addr_val.asString().chars;
+        const port: u16 = @intCast(@as(i64, @max(0, @min(65535, port_val.asInt()))));
+
+        const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch {
+            self.push(Value.initNil());
+            return;
+        };
+
+        const octets = stdlib.parseAddr(addr_str);
+        const addr = std.net.Address.initIp4(octets, port);
+
+        if (self.sched.active) {
+            stdlib.setNonBlocking(fd);
+            std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch |err| {
+                if (err == error.WouldBlock) {
+                    if (self.sched.current_task) |ct| {
+                        self.saveToTask(ct);
+                        ct.state = .blocked_io;
+                        self.sched.parkIo(ct, fd, .connect);
+
+                        if (self.scheduleNextOrPoll()) |next| {
+                            self.switchTo(next);
+                        } else {
+                            self.runtimeError("deadlock: all tasks blocked", .{});
+                            return error.RuntimeError;
+                        }
+                        return;
+                    }
+                }
+                std.posix.close(fd);
+                self.push(Value.initNil());
+                return;
+            };
+        } else {
+            std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch {
+                std.posix.close(fd);
+                self.push(Value.initNil());
+                return;
+            };
+        }
+
+        self.push(ObjConn.create(self.currentAlloc(), fd).toValue());
     }
 
     fn execFfiCall(self: *VM) Error!void {
@@ -3242,6 +3376,75 @@ test "vm: ffi abs" {
         \\fn main() {
         \\  assert_eq(abs(-42), 42)
         \\  assert_eq(abs(0), 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: method write opcode" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19890)
+        \\  client = net.connect("127.0.0.1", 19890)
+        \\  conn = net.accept(server)
+        \\  result = client.write("hello from method")
+        \\  assert_eq(result, true)
+        \\  data = net.read(conn)
+        \\  assert_eq(data, "hello from method")
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: method connect opcode" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19891)
+        \\  client = net.connect("127.0.0.1", 19891)
+        \\  conn = net.accept(server)
+        \\  net.write(client, "ping")
+        \\  assert_eq(net.read(conn), "ping")
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: connect to non-listening port via opcode returns nil" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  client = net.connect("127.0.0.1", 19892)
+        \\  assert_eq(client, nil)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: concurrent write with spawn" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19893)
+        \\  spawn {
+        \\    conn = server.accept()
+        \\    data = conn.read()
+        \\    conn.write("echo:" + data)
+        \\    net.close(conn)
+        \\  }
+        \\  client = net.connect("127.0.0.1", 19893)
+        \\  client.write("test")
+        \\  reply = client.read()
+        \\  assert_eq(reply, "echo:test")
+        \\  net.close(client)
+        \\  net.close(server)
         \\  println("ok")
         \\}
     );

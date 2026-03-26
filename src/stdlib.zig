@@ -508,7 +508,7 @@ const net_fns = [_]NativeDef{
     .{ .name = "close", .arity = 1, .func = &netClose },
 };
 
-fn parseAddr(s: []const u8) [4]u8 {
+pub fn parseAddr(s: []const u8) [4]u8 {
     if (s.len == 0 or std.mem.eql(u8, s, "0.0.0.0")) return .{ 0, 0, 0, 0 };
     if (std.mem.eql(u8, s, "localhost") or std.mem.eql(u8, s, "127.0.0.1")) return .{ 127, 0, 0, 1 };
     var octets: [4]u8 = .{ 0, 0, 0, 0 };

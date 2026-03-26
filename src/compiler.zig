@@ -1079,6 +1079,18 @@ pub const Compiler = struct {
                 self.emitOp(.net_read);
                 return;
             }
+            if (std.mem.eql(u8, fa.field, "write") and call.args.len == 1) {
+                self.compileExpr(fa.target);
+                self.compileExpr(call.args[0]);
+                self.emitOp(.net_write);
+                return;
+            }
+            if (std.mem.eql(u8, fa.field, "connect") and call.args.len == 2) {
+                self.compileExpr(call.args[0]);
+                self.compileExpr(call.args[1]);
+                self.emitOp(.net_connect);
+                return;
+            }
         }
 
         self.compileGetExpr(call.callee);
@@ -2045,7 +2057,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .set_global, .define_global, .print, .println => return false,
-            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .ffi_call => return false,
+            .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .ffi_call => return false,
         }
     }
     return true;
