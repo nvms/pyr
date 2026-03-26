@@ -267,6 +267,15 @@ pub const VM = struct {
                     }
                 },
 
+                .to_str => {
+                    const val = self.pop();
+                    if (val.tag == .string) {
+                        self.push(val);
+                    } else {
+                        self.push(self.valueToString(val));
+                    }
+                },
+
                 .enum_variant => {
                     const variant_idx = self.readU16();
                     const type_idx = self.readU16();
@@ -824,6 +833,20 @@ pub const VM = struct {
         self.frame_count += 1;
     }
 
+    fn valueToString(self: *VM, val: Value) Value {
+        var buf: [64]u8 = undefined;
+        const s = switch (val.tag) {
+            .int => std.fmt.bufPrint(&buf, "{d}", .{val.asInt()}) catch "?",
+            .float => std.fmt.bufPrint(&buf, "{d}", .{val.asFloat()}) catch "?",
+            .bool_ => if (val.asBool()) "true" else "false",
+            .nil => "nil",
+            else => "?",
+        };
+        const copy = self.alloc.alloc(u8, s.len) catch @panic("oom");
+        @memcpy(copy, s);
+        return ObjString.create(self.alloc, copy).toValue();
+    }
+
     fn binaryOp(self: *VM, op: OpCode) Error!void {
         const b = self.pop();
         const a = self.pop();
@@ -1129,4 +1152,16 @@ test "vm: concat_local in loop" {
 
 test "vm: concat_local preserves other values" {
     try testRun("fn main() {\n  mut s = \"hello\"\n  s = s + \" \"\n  s = s + \"world\"\n  println(s)\n}");
+}
+
+test "vm: string interpolation" {
+    try testRun("fn main() {\n  name = \"world\"\n  println(\"hello {name}\")\n}");
+}
+
+test "vm: string interpolation with expression" {
+    try testRun("fn main() {\n  x = 5\n  println(\"x is {x + 1}\")\n}");
+}
+
+test "vm: string interpolation multiple parts" {
+    try testRun("fn main() {\n  a = 1\n  b = 2\n  println(\"{a} + {b}\")\n}");
 }

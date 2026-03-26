@@ -16,6 +16,9 @@ pub const Token = struct {
         integer,
         float,
         string,
+        string_begin,
+        string_part,
+        string_end,
         identifier,
 
         // keywords

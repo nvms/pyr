@@ -444,6 +444,7 @@ pub const Compiler = struct {
                 const str = ObjString.create(self.alloc, inner);
                 self.emitConstant(str.toValue());
             },
+            .string_interp => |si| self.compileStringInterp(si),
             .bool_literal => |val| self.emitOp(if (val) .true_ else .false_),
             .none_literal => self.emitOp(.nil),
             .identifier => |name| self.compileIdentifier(name),
@@ -499,6 +500,30 @@ pub const Compiler = struct {
             .spawn => {},
             .struct_literal => |sl| self.compileStructLiteral(sl),
             .pipeline => |pl| self.compilePipeline(pl),
+        }
+    }
+
+    fn compileStringInterp(self: *Compiler, si: ast.StringInterp) void {
+        var first = true;
+        for (si.parts) |part| {
+            switch (part) {
+                .literal => |text| {
+                    const str = ObjString.create(self.alloc, text);
+                    self.emitConstant(str.toValue());
+                },
+                .expr => |expr| {
+                    self.compileExpr(expr);
+                    self.emitOp(.to_str);
+                },
+            }
+            if (!first) {
+                self.emitOp(.add);
+            }
+            first = false;
+        }
+        if (si.parts.len == 0) {
+            const str = ObjString.create(self.alloc, "");
+            self.emitConstant(str.toValue());
         }
     }
 
@@ -1221,7 +1246,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
         i += 1;
         switch (op) {
             .constant => i += 2,
-            .nil, .true_, .false_, .pop => {},
+            .nil, .true_, .false_, .pop, .to_str => {},
             .get_local, .set_local => i += 1,
             .add, .subtract, .multiply, .divide, .modulo, .negate, .add_int, .sub_int, .mul_int, .div_int, .mod_int, .less_int, .greater_int, .add_float, .sub_float, .mul_float, .div_float, .less_float, .greater_float => {},
             .not, .equal, .not_equal, .less, .greater, .less_equal, .greater_equal => {},

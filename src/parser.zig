@@ -556,6 +556,7 @@ pub const Parser = struct {
             .integer => return self.parseLiteral(.int_literal),
             .float => return self.parseLiteral(.float_literal),
             .string => return self.parseLiteral(.string_literal),
+            .string_begin => return self.parseStringInterp(),
             .kw_true => {
                 _ = self.advance();
                 return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = .{ .bool_literal = true } });
@@ -652,6 +653,37 @@ pub const Parser = struct {
             .string_literal => .{ .string_literal = text },
         };
         return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = expr_kind });
+    }
+
+    fn parseStringInterp(self: *Parser) *const ast.Expr {
+        const start = self.currentSpanStart();
+        var parts = std.ArrayListUnmanaged(ast.StringInterp.InterpPart){};
+        const text = self.tokenSlice(self.advance());
+        if (text.len > 1) {
+            parts.append(self.arena, .{ .literal = text[1..] }) catch @panic("oom");
+        }
+        while (true) {
+            const expr = self.parseExpr() orelse break;
+            parts.append(self.arena, .{ .expr = expr }) catch @panic("oom");
+            if (self.peek() == .string_part) {
+                const part = self.tokenSlice(self.advance());
+                if (part.len > 0) {
+                    parts.append(self.arena, .{ .literal = part }) catch @panic("oom");
+                }
+            } else if (self.peek() == .string_end) {
+                const end_text = self.tokenSlice(self.advance());
+                if (end_text.len > 1) {
+                    parts.append(self.arena, .{ .literal = end_text[0 .. end_text.len - 1] }) catch @panic("oom");
+                }
+                break;
+            } else {
+                break;
+            }
+        }
+        return self.create(ast.Expr, .{
+            .span = self.spanFrom(start),
+            .kind = .{ .string_interp = .{ .parts = parts.toOwnedSlice(self.arena) catch @panic("oom") } },
+        });
     }
 
     fn parsePostfix(self: *Parser, lhs: *const ast.Expr) ?*const ast.Expr {

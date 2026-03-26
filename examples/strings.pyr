@@ -1,5 +1,5 @@
 fn greet(name: str) -> str {
-  "hello " + name + "!"
+  "hello {name}!"
 }
 
 fn main() {

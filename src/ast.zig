@@ -148,6 +148,7 @@ pub const Expr = struct {
         int_literal: []const u8,
         float_literal: []const u8,
         string_literal: []const u8,
+        string_interp: StringInterp,
         bool_literal: bool,
         none_literal,
         identifier: []const u8,
@@ -168,6 +169,15 @@ pub const Expr = struct {
 
         struct_literal: StructLiteral,
         pipeline: Pipeline,
+    };
+};
+
+pub const StringInterp = struct {
+    parts: []const InterpPart,
+
+    pub const InterpPart = union(enum) {
+        literal: []const u8,
+        expr: *const Expr,
     };
 };
 

@@ -52,6 +52,7 @@ pub const OpCode = enum(u8) {
     concat_local,
 
     get_local_field,
+    to_str,
 
     add_int,
     sub_int,

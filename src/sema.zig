@@ -331,6 +331,14 @@ pub const Sema = struct {
     fn analyzeExpr(self: *Sema, expr: *const ast.Expr) void {
         switch (expr.kind) {
             .int_literal, .float_literal, .string_literal, .bool_literal, .none_literal => {},
+            .string_interp => |si| {
+                for (si.parts) |part| {
+                    switch (part) {
+                        .literal => {},
+                        .expr => |e| self.analyzeExpr(e),
+                    }
+                }
+            },
             .identifier => |name| {
                 if (self.resolve(name) == null) {
                     self.emitError(expr.span, "undefined name '{s}'", .{name});

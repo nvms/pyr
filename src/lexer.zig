@@ -5,13 +5,20 @@ const keywords = @import("token.zig").keywords;
 pub const Lexer = struct {
     source: []const u8,
     pos: usize,
+    interp_depth: u8,
 
     pub fn init(source: []const u8) Lexer {
-        return .{ .source = source, .pos = 0 };
+        return .{ .source = source, .pos = 0, .interp_depth = 0 };
     }
 
     pub fn next(self: *Lexer) Token {
         self.skipWhitespace();
+
+        if (self.interp_depth > 0 and self.pos < self.source.len and self.source[self.pos] == '}') {
+            self.pos += 1;
+            self.interp_depth -= 1;
+            return self.lexStringContinuation(self.pos);
+        }
 
         if (self.pos >= self.source.len) {
             return self.makeToken(.eof, self.pos, self.pos);
@@ -76,11 +83,40 @@ pub const Lexer = struct {
 
     fn lexString(self: *Lexer, start: usize) Token {
         while (self.pos < self.source.len and self.source[self.pos] != '"') {
-            if (self.source[self.pos] == '\\') self.pos += 1;
+            if (self.source[self.pos] == '\\') {
+                self.pos += 1;
+                if (self.pos < self.source.len) self.pos += 1;
+                continue;
+            }
+            if (self.source[self.pos] == '{') {
+                const end = self.pos;
+                self.pos += 1;
+                self.interp_depth += 1;
+                return self.makeToken(.string_begin, start, end);
+            }
             self.pos += 1;
         }
         if (self.pos < self.source.len) self.pos += 1;
         return self.makeToken(.string, start, self.pos);
+    }
+
+    fn lexStringContinuation(self: *Lexer, start: usize) Token {
+        while (self.pos < self.source.len and self.source[self.pos] != '"') {
+            if (self.source[self.pos] == '\\') {
+                self.pos += 1;
+                if (self.pos < self.source.len) self.pos += 1;
+                continue;
+            }
+            if (self.source[self.pos] == '{') {
+                const end = self.pos;
+                self.pos += 1;
+                self.interp_depth += 1;
+                return self.makeToken(.string_part, start, end);
+            }
+            self.pos += 1;
+        }
+        if (self.pos < self.source.len) self.pos += 1;
+        return self.makeToken(.string_end, start, self.pos);
     }
 
     fn lexNumber(self: *Lexer, start: usize) Token {
@@ -222,6 +258,25 @@ test "lex string" {
     var lex = Lexer.init("\"hello world\"");
     const tok = lex.next();
     try std.testing.expectEqual(Token.Tag.string, tok.tag);
+    try std.testing.expectEqual(Token.Tag.eof, lex.next().tag);
+}
+
+test "lex string interpolation" {
+    var lex = Lexer.init("\"hello {name}!\"");
+    try std.testing.expectEqual(Token.Tag.string_begin, lex.next().tag);
+    try std.testing.expectEqual(Token.Tag.identifier, lex.next().tag);
+    const end = lex.next();
+    try std.testing.expectEqual(Token.Tag.string_end, end.tag);
+    try std.testing.expectEqual(Token.Tag.eof, lex.next().tag);
+}
+
+test "lex string multiple interpolations" {
+    var lex = Lexer.init("\"a {x} b {y} c\"");
+    try std.testing.expectEqual(Token.Tag.string_begin, lex.next().tag);
+    try std.testing.expectEqual(Token.Tag.identifier, lex.next().tag);
+    try std.testing.expectEqual(Token.Tag.string_part, lex.next().tag);
+    try std.testing.expectEqual(Token.Tag.identifier, lex.next().tag);
+    try std.testing.expectEqual(Token.Tag.string_end, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.eof, lex.next().tag);
 }
 
