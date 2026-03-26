@@ -16,6 +16,6 @@ bench: ## Run benchmarks (release build)
 clean: ## Clean build artifacts
 	rm -rf zig-out .zig-cache zig-cache
 
-.PHONY: help
+.PHONY: build test run examples bench clean help
 help: ## Show help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(firstword $(MAKEFILE_LIST)) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[32m%-20s\033[0m %s\n", $$1, $$2}'
