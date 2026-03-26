@@ -396,6 +396,9 @@ pub const Sema = struct {
                 self.analyzeExpr(wl.condition);
                 self.analyzeBlock(wl.body);
             },
+            .arena_block => |blk| {
+                self.analyzeBlock(blk);
+            },
             .expr_stmt => |expr| self.analyzeExpr(expr),
         }
     }

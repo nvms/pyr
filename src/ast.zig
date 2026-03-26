@@ -110,6 +110,7 @@ pub const Stmt = struct {
         ret: Return,
         for_loop: ForLoop,
         while_loop: WhileLoop,
+        arena_block: *const Block,
         expr_stmt: *const Expr,
     };
 };

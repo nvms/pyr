@@ -112,6 +112,7 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - for-range counter comparison and increment emit less_int/add_int directly (not generic less/add)
 - `inc_local <slot:u8>` replaces the 5-opcode counter increment pattern (get_local + constant(1) + add_int + set_local + pop). ~20-30% improvement on all for-range benchmarks
 - for-range binding aliases the counter local directly instead of pushing a copy. the compiler temporarily renames `$counter` to the binding name during body compilation, then restores it. saves 2 opcodes per iteration (the copy push and scope pop). safe because for-range bindings are immutable
+- for-range body must have beginScope/endScope around it (added after discovering stack leak). without inner scope, bindings declared inside the loop body are never popped, causing stack overflow after ~250 iterations with struct creation
 - mul_int and mod_int are now in fastLoop alongside add_int/sub_int/less_int/greater_int
 
 ## get_field_idx and get_local_field optimization
@@ -139,9 +140,22 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - ObjArray stores `items: []Value` and `capacity: usize`. growable via push() with capacity doubling (initial capacity 8)
 - `[1, 2, 3]` compiles to: push each element, then `array_create` with u8 count. VM pops N values from stack and creates ObjArray
 - `arr[i]` compiles to: push target, push index, `index_get`. works for both arrays and strings (single-char string for string indexing)
-- `index_set` opcode exists but no syntax compiles to it yet (need `arr[i] = val` assignment)
+- `index_set`: array element assignment (`arr[i] = val`, `arr[i] += 5`). bounds-checked at runtime
 - `push(arr, val)` is a builtin native function (not an opcode) - takes array and value, calls ObjArray.push
 - `len(arr)` handled by native len() function. `arr.len` handled by get_field in VM (string comparison for "len")
 - `for x in arr` compiles to: hidden `$iter` local (the array), hidden `$idx` local (counter), index-based loop using get_field("len") for bounds check and index_get per iteration
 - deep equality: Value.eql recursively compares array elements (not pointer identity)
 - array benchmark (1M push + iterate) shows room for optimization: get_field("len") per iteration is expensive (string comparison). future optimization: cache array length or emit specialized array_len opcode
+
+## arena memory model
+
+- `arena { ... }` blocks create a child arena allocator. all allocations inside use the child arena. when the block exits, the arena is freed in bulk
+- ArenaStack is a heap-allocated side struct (like ConcatState) to avoid LLVM perturbation of the VM layout. holds up to 16 nested arenas
+- `push_arena` opcode creates a new `std.heap.ArenaAllocator` backed by the root allocator, pushes it. `pop_arena` calls `deinit()` and pops
+- `currentAlloc()` method on VM returns the top arena's allocator (or root allocator if no arena is active). replaces direct `self.alloc` usage in all allocation sites
+- allocations that use currentAlloc: ObjString, ObjStruct, ObjEnum, ObjArray, ObjClosure creation, temp buffers, string concat, valueToString, native function allocator arg
+- allocations that stay on root allocator: globals hashmap (program lifetime), ConcatState buffer (persists across arena boundaries)
+- string literals are slices into the source buffer, not arena-allocated. they remain valid across arena boundaries
+- values that escape an arena scope (e.g. assigned to a variable in the parent scope) will have dangling pointers after the arena is freed. currently the programmer's responsibility to avoid this. future: explicit `escape()` function or implicit escape analysis
+- push_arena/pop_arena are in run() only, not fastLoop - they're not hot-path opcodes
+- the arena approach maps directly to arena-per-request in HTTP servers: handler wrapped in implicit arena block, all request allocations freed in one shot when response is sent

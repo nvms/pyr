@@ -496,6 +496,11 @@ pub const Compiler = struct {
                 self.patchJump(exit_jump);
                 self.emitOp(.pop);
             },
+            .arena_block => |blk| {
+                self.emitOp(.push_arena);
+                self.compileBlock(blk);
+                self.emitOp(.pop_arena);
+            },
             .expr_stmt => |expr| {
                 self.compileExpr(expr);
                 self.emitOp(.pop);
@@ -630,6 +635,7 @@ pub const Compiler = struct {
 
         self.locals[counter_idx].name = binding;
 
+        self.beginScope();
         for (body.stmts) |s| {
             self.compileStmt(s);
         }
@@ -637,6 +643,7 @@ pub const Compiler = struct {
             self.compileExpr(expr);
             self.emitOp(.pop);
         }
+        self.endScope();
 
         self.locals[counter_idx].name = "$counter";
         if (args.step == null) {
@@ -1775,6 +1782,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
                 i += 1;
                 i += @as(usize, uv_count) * 2;
             },
+            .push_arena, .pop_arena => {},
             .set_global, .define_global, .print, .println => return false,
         }
     }

@@ -21,6 +21,42 @@ pub const ConcatState = struct {
     }
 };
 
+pub const ArenaStack = struct {
+    arenas: [16]?std.heap.ArenaAllocator,
+    depth: u8,
+    root_alloc: std.mem.Allocator,
+
+    fn init(root: std.mem.Allocator) ArenaStack {
+        var as: ArenaStack = .{
+            .arenas = .{null} ** 16,
+            .depth = 0,
+            .root_alloc = root,
+        };
+        _ = &as;
+        return as;
+    }
+
+    fn currentAlloc(self: *ArenaStack) std.mem.Allocator {
+        if (self.depth > 0) {
+            return self.arenas[self.depth - 1].?.allocator();
+        }
+        return self.root_alloc;
+    }
+
+    fn push(self: *ArenaStack) void {
+        if (self.depth >= 16) @panic("arena stack overflow");
+        self.arenas[self.depth] = std.heap.ArenaAllocator.init(self.root_alloc);
+        self.depth += 1;
+    }
+
+    fn pop(self: *ArenaStack) void {
+        if (self.depth == 0) @panic("arena stack underflow");
+        self.depth -= 1;
+        self.arenas[self.depth].?.deinit();
+        self.arenas[self.depth] = null;
+    }
+};
+
 pub const VM = struct {
     frames: [64]CallFrame,
     frame_count: usize,
@@ -29,6 +65,7 @@ pub const VM = struct {
     globals: std.StringHashMapUnmanaged(Value),
     alloc: std.mem.Allocator,
     concat: *ConcatState,
+    arena_stack: *ArenaStack,
 
     pub const CallFrame = struct {
         function: *ObjFunction,
@@ -42,6 +79,8 @@ pub const VM = struct {
     pub fn init(alloc: std.mem.Allocator) VM {
         const cs = alloc.create(ConcatState) catch @panic("oom");
         cs.* = ConcatState.init();
+        const as = alloc.create(ArenaStack) catch @panic("oom");
+        as.* = ArenaStack.init(alloc);
         return .{
             .frames = undefined,
             .frame_count = 0,
@@ -50,7 +89,12 @@ pub const VM = struct {
             .globals = .{},
             .alloc = alloc,
             .concat = cs,
+            .arena_stack = as,
         };
+    }
+
+    fn currentAlloc(self: *VM) std.mem.Allocator {
+        return self.arena_stack.currentAlloc();
     }
 
     pub fn interpret(self: *VM, function: *ObjFunction) Error!void {
@@ -194,9 +238,10 @@ pub const VM = struct {
                     const name_idx = self.readU16();
                     const field_count = self.readByte();
                     const name = self.currentChunk().constants.items[name_idx].asString().chars;
+                    const ca = self.currentAlloc();
 
-                    const field_names = self.alloc.alloc([]const u8, field_count) catch @panic("oom");
-                    const temp_values = self.alloc.alloc(Value, field_count) catch @panic("oom");
+                    const field_names = ca.alloc([]const u8, field_count) catch @panic("oom");
+                    const temp_values = ca.alloc(Value, field_count) catch @panic("oom");
 
                     for (0..field_count) |fi| {
                         const fi_idx = self.readU16();
@@ -209,8 +254,8 @@ pub const VM = struct {
                         temp_values[fc] = self.pop();
                     }
 
-                    const s = ObjStruct.create(self.alloc, name, field_names, temp_values);
-                    self.alloc.free(temp_values);
+                    const s = ObjStruct.create(ca, name, field_names, temp_values);
+                    ca.free(temp_values);
                     self.push(s.toValue());
                 },
 
@@ -325,15 +370,16 @@ pub const VM = struct {
                     const vi = self.readByte();
                     const variant_name = self.currentChunk().constants.items[variant_idx].asString().chars;
                     const type_name = self.currentChunk().constants.items[type_idx].asString().chars;
+                    const ca = self.currentAlloc();
 
-                    const payloads = self.alloc.alloc(Value, payload_count) catch @panic("oom");
+                    const payloads = ca.alloc(Value, payload_count) catch @panic("oom");
                     var pc: usize = payload_count;
                     while (pc > 0) {
                         pc -= 1;
                         payloads[pc] = self.pop();
                     }
 
-                    const e = ObjEnum.create(self.alloc, type_name, variant_name, vi, payloads);
+                    const e = ObjEnum.create(ca, type_name, variant_name, vi, payloads);
                     self.push(e.toValue());
                 },
 
@@ -351,7 +397,8 @@ pub const VM = struct {
                     const idx = self.readU16();
                     const uv_count = self.readByte();
                     const func = self.currentChunk().constants.items[idx].asFunction();
-                    const upvalues = self.alloc.alloc(Value, uv_count) catch @panic("oom");
+                    const ca = self.currentAlloc();
+                    const upvalues = ca.alloc(Value, uv_count) catch @panic("oom");
                     var i: u8 = 0;
                     while (i < uv_count) : (i += 1) {
                         const is_local = self.readByte() == 1;
@@ -366,7 +413,7 @@ pub const VM = struct {
                             upvalues[i] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
                         }
                     }
-                    const cl = ObjClosure.create(self.alloc, func, upvalues);
+                    const cl = ObjClosure.create(ca, func, upvalues);
                     self.push(cl.toValue());
                 },
 
@@ -483,7 +530,7 @@ pub const VM = struct {
                 .array_create => {
                     const count = self.readByte();
                     const items = self.stack[self.sp - count .. self.sp];
-                    const arr = ObjArray.create(self.alloc, items);
+                    const arr = ObjArray.create(self.currentAlloc(), items);
                     self.sp -= count;
                     self.push(arr.toValue());
                 },
@@ -504,7 +551,7 @@ pub const VM = struct {
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
                             const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
-                            self.push(ObjString.create(self.alloc, ch).toValue());
+                            self.push(ObjString.create(self.currentAlloc(), ch).toValue());
                         } else {
                             self.runtimeError("string index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
@@ -533,6 +580,8 @@ pub const VM = struct {
                     }
                 },
                 .array_push, .array_len => {},
+                .push_arena => self.arena_stack.push(),
+                .pop_arena => self.arena_stack.pop(),
                 .slide => {
                     const n = self.readByte();
                     const result = self.stack[self.sp - 1];
@@ -667,7 +716,7 @@ pub const VM = struct {
                 if (callee.tag == .native_fn) {
                     const nf = callee.asNativeFn();
                     const args = self.stack[self.sp - arg_count .. self.sp];
-                    const result = nf.func(self.alloc, args);
+                    const result = nf.func(self.currentAlloc(), args);
                     self.sp -= arg_count + 1;
                     self.stack[self.sp] = result;
                     self.sp += 1;
@@ -943,10 +992,11 @@ pub const VM = struct {
         if (a.tag == .string and b.tag == .string and op == .add) {
             const as = a.asString().chars;
             const bs = b.asString().chars;
-            const buf = self.alloc.alloc(u8, as.len + bs.len) catch @panic("oom");
+            const ca = self.currentAlloc();
+            const buf = ca.alloc(u8, as.len + bs.len) catch @panic("oom");
             @memcpy(buf[0..as.len], as);
             @memcpy(buf[as.len..], bs);
-            const str = ObjString.create(self.alloc, buf);
+            const str = ObjString.create(ca, buf);
             self.stack[self.sp - 1] = str.toValue();
             return;
         }
@@ -979,7 +1029,7 @@ pub const VM = struct {
                 return error.RuntimeError;
             }
             const args = self.stack[self.sp - arg_count .. self.sp];
-            const result = nf.func(self.alloc, args);
+            const result = nf.func(self.currentAlloc(), args);
             self.sp -= arg_count + 1;
             self.push(result);
             return;
@@ -1039,9 +1089,10 @@ pub const VM = struct {
             .nil => "nil",
             else => "?",
         };
-        const copy = self.alloc.alloc(u8, s.len) catch @panic("oom");
+        const ca = self.currentAlloc();
+        const copy = ca.alloc(u8, s.len) catch @panic("oom");
         @memcpy(copy, s);
-        return ObjString.create(self.alloc, copy).toValue();
+        return ObjString.create(ca, copy).toValue();
     }
 
     fn binaryOp(self: *VM, op: OpCode) Error!void {
@@ -1079,10 +1130,11 @@ pub const VM = struct {
         if (a.tag == .string and b.tag == .string and op == .add) {
             const as = a.asString().chars;
             const bs = b.asString().chars;
-            const buf = self.alloc.alloc(u8, as.len + bs.len) catch @panic("oom");
+            const ca = self.currentAlloc();
+            const buf = ca.alloc(u8, as.len + bs.len) catch @panic("oom");
             @memcpy(buf[0..as.len], as);
             @memcpy(buf[as.len..], bs);
-            const str = ObjString.create(self.alloc, buf);
+            const str = ObjString.create(ca, buf);
             self.push(str.toValue());
             return;
         }
@@ -1389,4 +1441,32 @@ test "vm: compound assignment on array element" {
 
 test "vm: array mutation in loop" {
     try testRun("fn main() {\n  mut arr = [0, 0, 0]\n  for i in range(3) {\n    arr[i] = i * i\n  }\n  println(arr[0])\n  println(arr[1])\n  println(arr[2])\n}");
+}
+
+test "vm: explicit return" {
+    try testRun("fn double(x: int) -> int {\n  return x * 2\n}\nfn main() {\n  println(double(7))\n}");
+}
+
+test "vm: early return from nested block" {
+    try testRun("fn find(items, target: int) -> int {\n  for i in range(len(items)) {\n    if items[i] == target {\n      return i\n    }\n  }\n  return -1\n}\nfn main() {\n  arr = [10, 20, 30, 40, 50]\n  println(find(arr, 30))\n  println(find(arr, 99))\n}");
+}
+
+test "vm: bare return for early exit" {
+    try testRun("fn f(items, limit: int) -> int {\n  mut c = 0\n  for i in range(len(items)) {\n    if items[i] > limit {\n      return c\n    }\n    c = c + 1\n  }\n  c\n}\nfn main() {\n  println(f([1, 3, 5, 7, 9], 5))\n}");
+}
+
+test "vm: for-range body scope cleanup" {
+    try testRun("struct P { x: int }\nfn main() {\n  mut s = 0\n  for i in range(500) {\n    p = P { x: i }\n    s = s + p.x\n  }\n  println(s)\n}");
+}
+
+test "vm: arena block basic" {
+    try testRun("struct P { x: int }\nfn main() {\n  mut r = 0\n  arena {\n    p = P { x: 42 }\n    r = p.x\n  }\n  println(r)\n}");
+}
+
+test "vm: arena block nested" {
+    try testRun("fn main() {\n  mut r = 0\n  arena {\n    arena {\n      r = 99\n    }\n  }\n  println(r)\n}");
+}
+
+test "vm: arena block in loop" {
+    try testRun("struct D { v: int }\nfn main() {\n  mut s = 0\n  for i in range(10) {\n    arena {\n      d = D { v: i }\n      s = s + d.v\n    }\n  }\n  println(s)\n}");
 }

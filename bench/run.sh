@@ -110,3 +110,14 @@ else
     printf "  %-12s (not installed)\n" "lua"
 fi
 echo ""
+
+echo "arena_alloc - 1M struct create (no arena vs scoped arena)"
+bench "pyr" $PYR run arena_alloc.pyr
+bench "pyr+arena" $PYR run arena_alloc_scoped.pyr
+bench "python" python3 arena_alloc.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua arena_alloc.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""

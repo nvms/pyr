@@ -79,6 +79,8 @@ pub const OpCode = enum(u8) {
     slide,
     match_jump,
     inc_local,
+    push_arena,
+    pop_arena,
 };
 
 pub const Chunk = struct {

@@ -248,6 +248,32 @@ imp db/postgres as pg
 
 `pub struct` makes all fields visible. encapsulation via module boundaries, not field-level access control.
 
+## arena memory
+
+arena blocks scope all allocations to a region freed in bulk on exit:
+```
+fn process(data: str) {
+  arena {
+    parsed = parse(data)
+    result = transform(parsed)
+    save(result)
+  }
+  // all memory from arena block freed here
+}
+```
+
+arenas nest. inner arenas are freed before outer ones:
+```
+arena {
+  arena {
+    // allocations freed here
+  }
+  // outer arena still alive
+}
+```
+
+the server stdlib wraps each request handler in an implicit arena block.
+
 ## pointers (systems work)
 
 high-level code never sees pointers. for systems/FFI work:

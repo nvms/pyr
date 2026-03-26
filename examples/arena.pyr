@@ -1,0 +1,47 @@
+struct Point {
+  x: int
+  y: int
+}
+
+fn process() -> int {
+  mut result = 0
+  for i in range(5) {
+    arena {
+      p = Point { x: i, y: i * 2 }
+      result = result + p.x + p.y
+    }
+  }
+  result
+}
+
+fn nested_arenas() -> int {
+  mut total = 0
+  arena {
+    a = [1, 2, 3]
+    arena {
+      b = [4, 5, 6]
+      for i in range(3) {
+        total = total + a[i] + b[i]
+      }
+    }
+    total = total + len(a)
+  }
+  total
+}
+
+fn arena_with_strings() -> str {
+  mut msg = ""
+  arena {
+    parts = ["hello", " ", "arena", " ", "world"]
+    for p in parts {
+      msg = msg + p
+    }
+  }
+  msg
+}
+
+fn main() {
+  println(process())
+  println(nested_arenas())
+  println(arena_with_strings())
+}

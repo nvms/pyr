@@ -365,6 +365,16 @@ pub const Parser = struct {
             return self.parseWhileStmt(start);
         }
 
+        if (self.peek() == .kw_arena) {
+            _ = self.expect(.kw_arena) orelse return null;
+            self.skipNewlines();
+            const body = self.parseBlock() orelse return null;
+            return .{
+                .span = self.spanFrom(start),
+                .kind = .{ .arena_block = body },
+            };
+        }
+
         if (self.peek() == .kw_mut) {
             const binding = self.parseMutBinding() orelse return null;
             return .{ .span = self.spanFrom(start), .kind = .{ .binding = binding } };
@@ -1589,6 +1599,13 @@ test "parse while loop" {
     try expectNoErrors(result);
     const stmt = result.items[0].kind.fn_decl.body.block.stmts[0];
     try std.testing.expectEqual(ast.Stmt.Kind.while_loop, std.meta.activeTag(stmt.kind));
+}
+
+test "parse arena block" {
+    const result = testParse("fn f() {\n  arena {\n    x = 1\n  }\n}");
+    try expectNoErrors(result);
+    const stmt = result.items[0].kind.fn_decl.body.block.stmts[0];
+    try std.testing.expectEqual(ast.Stmt.Kind.arena_block, std.meta.activeTag(stmt.kind));
 }
 
 test "parse pipeline" {

@@ -1,0 +1,17 @@
+struct Data {
+  x: int
+  y: int
+  z: int
+}
+
+fn main() {
+  n = 1000000
+  mut total = 0
+  for i in range(n) {
+    arena {
+      d = Data { x: i, y: i + 1, z: i + 2 }
+      total = total + d.x + d.y + d.z
+    }
+  }
+  println(total)
+}
