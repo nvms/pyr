@@ -1,0 +1,11 @@
+imp std/io { println }
+imp std/fs
+
+fn main() {
+  fs.write("/tmp/pyr_test.txt", "hello from pyr")
+  println(fs.exists("/tmp/pyr_test.txt"))
+  content = fs.read("/tmp/pyr_test.txt")
+  println(content)
+  fs.remove("/tmp/pyr_test.txt")
+  println(fs.exists("/tmp/pyr_test.txt"))
+}

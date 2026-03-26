@@ -1,0 +1,29 @@
+enum Shape {
+  Circle(float)
+  Rect(float, float)
+  Point
+}
+
+fn area(s: Shape) -> float = match s {
+  Circle(r) -> 3.14159 * r * r
+  Rect(w, h) -> w * h
+  Point -> 0.0
+}
+
+fn describe(s: Shape) -> str = match s {
+  Circle(r) -> "circle with radius {r}"
+  Rect(w, h) -> "rect {w}x{h}"
+  Point -> "point"
+}
+
+fn main() {
+  c = Circle(5.0)
+  r = Rect(3.0, 4.0)
+  p = Point
+
+  println(area(c))
+  println(area(r))
+  println(area(p))
+  println(describe(c))
+  println(describe(r))
+}

@@ -569,7 +569,7 @@ pub const Parser = struct {
                 _ = self.advance();
                 return self.create(ast.Expr, .{ .span = self.spanFrom(start), .kind = .none_literal });
             },
-            .identifier => {
+            .identifier, .kw_int, .kw_float, .kw_str, .kw_bool, .kw_byte => {
                 const name = self.tokenSlice(self.advance());
                 const ident_expr = self.create(ast.Expr, .{
                     .span = self.spanFrom(start),

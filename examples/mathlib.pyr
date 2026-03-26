@@ -1,0 +1,3 @@
+pub fn add(a: int, b: int) -> int = a + b
+pub fn mul(a: int, b: int) -> int = a * b
+pub fn square(x: int) -> int = x * x

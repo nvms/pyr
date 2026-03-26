@@ -1,0 +1,20 @@
+imp std/io { println }
+imp std/fs
+imp std/os
+
+fn main() {
+  io_ok = fs.write("/tmp/pyr_mod_test.txt", "test data")
+  assert(io_ok)
+  assert(fs.exists("/tmp/pyr_mod_test.txt"))
+
+  content = fs.read("/tmp/pyr_mod_test.txt")
+  assert_eq(content, "test data")
+
+  fs.remove("/tmp/pyr_mod_test.txt")
+  assert(fs.exists("/tmp/pyr_mod_test.txt") == false)
+
+  home = os.env("HOME")
+  assert(len(home) > 0)
+
+  println("module tests passed")
+}

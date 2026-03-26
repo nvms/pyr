@@ -1,0 +1,7 @@
+imp mathlib { add, mul }
+
+fn main() {
+  assert_eq(add(3, 4), 7)
+  assert_eq(mul(5, 6), 30)
+  println("import tests passed")
+}

@@ -1,0 +1,9 @@
+imp std/io
+imp std/os
+
+fn main() {
+  io.println("namespace import works")
+  home = os.env("HOME")
+  io.println(home)
+  io.println(os.args())
+}

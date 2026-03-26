@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const ModuleLoader = @import("module.zig").ModuleLoader;
+const stdlib = @import("stdlib.zig");
 
 pub const Type = union(enum) {
     void,
@@ -155,6 +156,8 @@ pub const Sema = struct {
         self.define("abs", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("int", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("float", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("assert", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("assert_eq", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
     }
 
     // ---------------------------------------------------------------
@@ -228,6 +231,11 @@ pub const Sema = struct {
     }
 
     fn registerImport(self: *Sema, imp: ast.Import) void {
+        if (stdlib.findModule(imp.path)) |std_mod| {
+            self.registerStdImport(imp, std_mod);
+            return;
+        }
+
         const loader = self.module_loader orelse return;
         const mod = loader.load(imp.path, self.module_dir) orelse return;
 
@@ -262,6 +270,30 @@ pub const Sema = struct {
                         }
                     },
                     else => {},
+                }
+            }
+        } else {
+            const ns_name = imp.alias orelse imp.path[imp.path.len - 1];
+            self.define(ns_name, .{
+                .ty = &t_err,
+                .is_mut = false,
+                .kind = .variable,
+            });
+        }
+    }
+
+    fn registerStdImport(self: *Sema, imp: ast.Import, std_mod: *const stdlib.StdModule) void {
+        if (imp.items.len > 0) {
+            for (std_mod.functions) |def| {
+                for (imp.items) |wanted| {
+                    if (std.mem.eql(u8, def.name, wanted)) {
+                        self.define(def.name, .{
+                            .ty = &t_err,
+                            .is_mut = false,
+                            .kind = .function,
+                        });
+                        break;
+                    }
                 }
             }
         } else {

@@ -220,9 +220,9 @@ pub const ObjEnum = struct {
 pub const ObjNativeFn = struct {
     name: []const u8,
     arity: u8,
-    func: *const fn ([]const Value) Value,
+    func: *const fn (std.mem.Allocator, []const Value) Value,
 
-    pub fn create(alloc: std.mem.Allocator, name: []const u8, arity: u8, func: *const fn ([]const Value) Value) *ObjNativeFn {
+    pub fn create(alloc: std.mem.Allocator, name: []const u8, arity: u8, func: *const fn (std.mem.Allocator, []const Value) Value) *ObjNativeFn {
         const nf = alloc.create(ObjNativeFn) catch @panic("oom");
         nf.* = .{ .name = name, .arity = arity, .func = func };
         return nf;

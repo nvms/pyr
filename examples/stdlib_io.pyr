@@ -1,0 +1,11 @@
+imp std/io { println, print }
+
+fn main() {
+  println("hello from std/io")
+  print("a")
+  print("b")
+  println("c")
+  println(42)
+  println(3.14)
+  println(true)
+}

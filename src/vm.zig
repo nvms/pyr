@@ -535,7 +535,7 @@ pub const VM = struct {
                 if (callee.tag == .native_fn) {
                     const nf = callee.asNativeFn();
                     const args = self.stack[self.sp - arg_count .. self.sp];
-                    const result = nf.func(args);
+                    const result = nf.func(self.alloc, args);
                     self.sp -= arg_count + 1;
                     self.stack[self.sp] = result;
                     self.sp += 1;
@@ -782,7 +782,7 @@ pub const VM = struct {
                 return error.RuntimeError;
             }
             const args = self.stack[self.sp - arg_count .. self.sp];
-            const result = nf.func(args);
+            const result = nf.func(self.alloc, args);
             self.sp -= arg_count + 1;
             self.push(result);
             return;

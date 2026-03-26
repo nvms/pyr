@@ -133,4 +133,5 @@ test {
     _ = @import("value.zig");
     _ = @import("vm.zig");
     _ = @import("module.zig");
+    _ = @import("stdlib.zig");
 }

@@ -7,10 +7,36 @@ test: ## Run tests
 run: ## Run pyr (usage: make run ARGS="build example.pyr")
 	zig build run -- $(ARGS)
 
-examples: build ## Compile example programs
-	./zig-out/bin/pyr run examples/hello.pyr
-	./zig-out/bin/pyr run examples/basics.pyr
-	./zig-out/bin/pyr run examples/strings.pyr
+examples: build ## Run and validate example programs
+	@failed=0; total=0; \
+	for f in examples/*.pyr; do \
+		name=$$(basename $$f .pyr); \
+		if [ "$$name" = "mathlib" ]; then continue; fi; \
+		total=$$((total + 1)); \
+		expected="examples/$$name.expected"; \
+		if [ -f "$$expected" ]; then \
+			actual=$$(./zig-out/bin/pyr run $$f 2>&1); \
+			exp=$$(cat $$expected); \
+			if [ "$$actual" != "$$exp" ]; then \
+				echo "FAIL $$f (output mismatch)"; \
+				echo "  expected: $$exp"; \
+				echo "  actual:   $$actual"; \
+				failed=$$((failed + 1)); \
+			else \
+				echo "ok   $$f"; \
+			fi; \
+		else \
+			if ./zig-out/bin/pyr run $$f > /dev/null 2>&1; then \
+				echo "ok   $$f"; \
+			else \
+				echo "FAIL $$f (exit code $$?)"; \
+				failed=$$((failed + 1)); \
+			fi; \
+		fi; \
+	done; \
+	echo ""; \
+	echo "$$total examples, $$failed failed"; \
+	if [ $$failed -gt 0 ]; then exit 1; fi
 
 bench: ## Run benchmarks (release build)
 	./bench/run.sh

@@ -8,6 +8,7 @@ const ObjFunction = @import("value.zig").ObjFunction;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ModuleLoader = @import("module.zig").ModuleLoader;
 const Module = @import("module.zig").Module;
+const stdlib = @import("stdlib.zig");
 
 const VariantInfo = struct {
     type_name: []const u8,
@@ -39,6 +40,8 @@ pub const Compiler = struct {
     module_loader: ?*ModuleLoader,
     module_dir: []const u8,
     module_namespaces: std.StringHashMapUnmanaged(*Module),
+    std_modules: std.StringHashMapUnmanaged(*const stdlib.StdModule),
+    native_fns: std.StringHashMapUnmanaged(*ObjNativeFn),
 
     pub const Local = struct {
         name: []const u8,
@@ -73,6 +76,8 @@ pub const Compiler = struct {
             .module_loader = loader,
             .module_dir = dir,
             .module_namespaces = .{},
+            .std_modules = .{},
+            .native_fns = .{},
         };
 
         compiler.defineNatives();
@@ -98,9 +103,11 @@ pub const Compiler = struct {
         self.defineNativeFn("int", 1, &nativeInt);
         self.defineNativeFn("float", 1, &nativeFloat);
         self.defineNativeFn("len", 1, &nativeLen);
+        self.defineNativeFn("assert", 1, &nativeAssert);
+        self.defineNativeFn("assert_eq", 2, &nativeAssertEq);
     }
 
-    fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn ([]const Value) Value) void {
+    fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn (std.mem.Allocator, []const Value) Value) void {
         const nf = ObjNativeFn.create(self.alloc, name, arity, func);
         self.emitConstant(nf.toValue());
         const name_idx = self.addStringConstant(name);
@@ -108,13 +115,13 @@ pub const Compiler = struct {
         self.emitU16(name_idx);
     }
 
-    fn nativeSqrt(args: []const Value) Value {
+    fn nativeSqrt(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
         const f: f64 = if (v.tag == .float) v.asFloat() else if (v.tag == .int) @floatFromInt(v.asInt()) else 0.0;
         return Value.initFloat(@sqrt(f));
     }
 
-    fn nativeAbs(args: []const Value) Value {
+    fn nativeAbs(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
         if (v.tag == .int) {
             const i = v.asInt();
@@ -124,7 +131,7 @@ pub const Compiler = struct {
         return Value.initInt(0);
     }
 
-    fn nativeInt(args: []const Value) Value {
+    fn nativeInt(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
         if (v.tag == .int) return v;
         if (v.tag == .float) return Value.initInt(@intFromFloat(v.asFloat()));
@@ -132,17 +139,37 @@ pub const Compiler = struct {
         return Value.initInt(0);
     }
 
-    fn nativeFloat(args: []const Value) Value {
+    fn nativeFloat(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
         if (v.tag == .float) return v;
         if (v.tag == .int) return Value.initFloat(@floatFromInt(v.asInt()));
         return Value.initFloat(0.0);
     }
 
-    fn nativeLen(args: []const Value) Value {
+    fn nativeLen(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
         if (v.tag == .string) return Value.initInt(@intCast(v.asString().chars.len));
         return Value.initInt(0);
+    }
+
+    fn nativeAssert(_: std.mem.Allocator, args: []const Value) Value {
+        if (!args[0].isTruthy()) {
+            std.debug.print("assertion failed\n", .{});
+            std.process.exit(1);
+        }
+        return Value.initNil();
+    }
+
+    fn nativeAssertEq(_: std.mem.Allocator, args: []const Value) Value {
+        if (!Value.eql(args[0], args[1])) {
+            std.debug.print("assertion failed: ", .{});
+            args[0].dump();
+            std.debug.print(" != ", .{});
+            args[1].dump();
+            std.debug.print("\n", .{});
+            std.process.exit(1);
+        }
+        return Value.initNil();
     }
 
     // ---------------------------------------------------------------
@@ -180,6 +207,11 @@ pub const Compiler = struct {
     }
 
     fn registerImport(self: *Compiler, imp: ast.Import) void {
+        if (stdlib.findModule(imp.path)) |std_mod| {
+            self.registerStdImport(imp, std_mod);
+            return;
+        }
+
         const loader = self.module_loader orelse return;
         const mod = loader.load(imp.path, self.module_dir) orelse return;
 
@@ -237,6 +269,28 @@ pub const Compiler = struct {
         }
     }
 
+    fn registerStdImport(self: *Compiler, imp: ast.Import, std_mod: *const stdlib.StdModule) void {
+        for (std_mod.functions) |def| {
+            if (imp.items.len > 0) {
+                var wanted = false;
+                for (imp.items) |name| {
+                    if (std.mem.eql(u8, def.name, name)) {
+                        wanted = true;
+                        break;
+                    }
+                }
+                if (!wanted) continue;
+            }
+            const nf = ObjNativeFn.create(self.alloc, def.name, def.arity, def.func);
+            self.native_fns.put(self.alloc, def.name, nf) catch @panic("oom");
+        }
+
+        if (imp.items.len == 0) {
+            const ns_name = imp.alias orelse imp.path[imp.path.len - 1];
+            self.std_modules.put(self.alloc, ns_name, std_mod) catch @panic("oom");
+        }
+    }
+
     // ---------------------------------------------------------------
     // items
     // ---------------------------------------------------------------
@@ -251,6 +305,11 @@ pub const Compiler = struct {
     }
 
     fn compileImport(self: *Compiler, imp: ast.Import) void {
+        if (stdlib.findModule(imp.path) != null) {
+            self.compileStdImport(imp);
+            return;
+        }
+
         const loader = self.module_loader orelse return;
         const mod = loader.load(imp.path, self.module_dir) orelse return;
         for (mod.tree.items) |item| {
@@ -274,6 +333,27 @@ pub const Compiler = struct {
         }
     }
 
+    fn compileStdImport(self: *Compiler, imp: ast.Import) void {
+        const std_mod = stdlib.findModule(imp.path) orelse return;
+        for (std_mod.functions) |def| {
+            if (imp.items.len > 0) {
+                var wanted = false;
+                for (imp.items) |name| {
+                    if (std.mem.eql(u8, def.name, name)) {
+                        wanted = true;
+                        break;
+                    }
+                }
+                if (!wanted) continue;
+            }
+            const nf = self.native_fns.get(def.name) orelse continue;
+            self.emitConstant(nf.toValue());
+            const name_idx = self.addStringConstant(def.name);
+            self.emitOp(.define_global);
+            self.emitU16(name_idx);
+        }
+    }
+
     fn compileFnDecl(self: *Compiler, decl: ast.FnDecl) void {
         const func = self.findFunction(decl.name) orelse ObjFunction.create(self.alloc, decl.name, @intCast(decl.params.len));
 
@@ -293,6 +373,8 @@ pub const Compiler = struct {
             .module_loader = self.module_loader,
             .module_dir = self.module_dir,
             .module_namespaces = .{},
+            .std_modules = .{},
+            .native_fns = .{},
         };
         sub.addLocal("");
 
@@ -559,8 +641,8 @@ pub const Compiler = struct {
             .call => |call| self.compileCall(call),
             .field_access => |fa| {
                 if (fa.target.kind == .identifier) {
-                    if (self.resolveModuleFunction(fa.target.kind.identifier, fa.field)) |func| {
-                        self.emitConstant(func.toValue());
+                    if (self.resolveModuleValue(fa.target.kind.identifier, fa.field)) |val| {
+                        self.emitConstant(val);
                         return;
                     }
                 }
@@ -632,11 +714,16 @@ pub const Compiler = struct {
         }
     }
 
-    fn resolveModuleFunction(self: *Compiler, ns: []const u8, name: []const u8) ?*ObjFunction {
+    fn resolveModuleValue(self: *Compiler, ns: []const u8, name: []const u8) ?Value {
         var c: ?*Compiler = self;
         while (c) |cur| {
             if (cur.module_namespaces.get(ns)) |_| {
-                return cur.fn_table.get(name);
+                if (cur.fn_table.get(name)) |func| return func.toValue();
+                return null;
+            }
+            if (cur.std_modules.get(ns)) |_| {
+                if (cur.native_fns.get(name)) |nf| return nf.toValue();
+                return null;
             }
             c = cur.enclosing;
         }
@@ -992,6 +1079,8 @@ pub const Compiler = struct {
             .module_loader = self.module_loader,
             .module_dir = self.module_dir,
             .module_namespaces = .{},
+            .std_modules = .{},
+            .native_fns = .{},
         };
         sub.addLocal("");
 
@@ -1062,11 +1151,22 @@ pub const Compiler = struct {
             self.emitByte(uv);
         } else if (self.findFunction(name)) |func| {
             self.emitConstant(func.toValue());
+        } else if (self.findNative(name)) |nf| {
+            self.emitConstant(nf.toValue());
         } else {
             const idx = self.addStringConstant(name);
             self.emitOp(.get_global);
             self.emitU16(idx);
         }
+    }
+
+    fn findNative(self: *Compiler, name: []const u8) ?*ObjNativeFn {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.native_fns.get(name)) |nf| return nf;
+            c = cur.enclosing;
+        }
+        return null;
     }
 
     fn compileSetTarget(self: *Compiler, expr: *const ast.Expr) void {
