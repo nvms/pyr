@@ -219,13 +219,13 @@ test "lex simple tokens" {
 }
 
 test "lex keywords" {
-    var lex = Lexer.init("struct enum trait pub mut import");
+    var lex = Lexer.init("struct enum trait pub mut imp");
     try std.testing.expectEqual(Token.Tag.kw_struct, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.kw_enum, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.kw_trait, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.kw_pub, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.kw_mut, lex.next().tag);
-    try std.testing.expectEqual(Token.Tag.kw_import, lex.next().tag);
+    try std.testing.expectEqual(Token.Tag.kw_imp, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.eof, lex.next().tag);
 }
 

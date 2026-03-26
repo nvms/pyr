@@ -55,7 +55,7 @@ pub const Parser = struct {
             .kw_struct => self.parseStructDeclItem(is_pub, start),
             .kw_enum => self.parseEnumDeclItem(is_pub, start),
             .kw_trait => self.parseTraitDeclItem(is_pub, start),
-            .kw_import => blk: {
+            .kw_imp => blk: {
                 if (is_pub) {
                     self.emitError("imports cannot be pub");
                     break :blk null;
@@ -299,7 +299,7 @@ pub const Parser = struct {
     }
 
     fn parseImportItem(self: *Parser, start: usize) ?ast.Item {
-        _ = self.expect(.kw_import) orelse return null;
+        _ = self.expect(.kw_imp) orelse return null;
 
         var path = std.ArrayListUnmanaged([]const u8){};
         const first = self.expectIdent() orelse return null;
@@ -1276,7 +1276,7 @@ pub const Parser = struct {
     fn synchronize(self: *Parser) void {
         while (!self.atEnd()) {
             switch (self.peek()) {
-                .kw_fn, .kw_struct, .kw_enum, .kw_trait, .kw_import, .kw_pub => return,
+                .kw_fn, .kw_struct, .kw_enum, .kw_trait, .kw_imp, .kw_pub => return,
                 else => _ = self.advance(),
             }
         }
@@ -1408,7 +1408,7 @@ test "parse trait" {
 }
 
 test "parse import" {
-    const result = testParse("import std/http");
+    const result = testParse("imp std/http");
     try expectNoErrors(result);
     const imp = result.items[0].kind.import;
     try std.testing.expectEqual(@as(usize, 2), imp.path.len);
@@ -1417,7 +1417,7 @@ test "parse import" {
 }
 
 test "parse import with items" {
-    const result = testParse("import models { User, Post }");
+    const result = testParse("imp models { User, Post }");
     try expectNoErrors(result);
     const imp = result.items[0].kind.import;
     try std.testing.expectEqual(@as(usize, 2), imp.items.len);
@@ -1425,7 +1425,7 @@ test "parse import with items" {
 }
 
 test "parse import with alias" {
-    const result = testParse("import db/postgres as pg");
+    const result = testParse("imp db/postgres as pg");
     try expectNoErrors(result);
     const imp = result.items[0].kind.import;
     try std.testing.expectEqualStrings("pg", imp.alias.?);
@@ -1653,7 +1653,7 @@ test "parse struct literal" {
 
 test "parse multiple items" {
     const source =
-        \\import std/io
+        \\imp std/io
         \\
         \\struct Point {
         \\  x: int
