@@ -21,6 +21,7 @@ pub const Compiler = struct {
     scope_depth: u32,
     struct_defs: std.StringHashMapUnmanaged([]const []const u8),
     enum_variants: std.StringHashMapUnmanaged(VariantInfo),
+    fn_table: std.StringHashMapUnmanaged(*ObjFunction),
     upvalues: [256]Upvalue,
     upvalue_count: u8,
 
@@ -45,6 +46,7 @@ pub const Compiler = struct {
             .scope_depth = 0,
             .struct_defs = .{},
             .enum_variants = .{},
+            .fn_table = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
         };
@@ -125,6 +127,10 @@ pub const Compiler = struct {
 
     fn registerDecl(self: *Compiler, item: ast.Item) void {
         switch (item.kind) {
+            .fn_decl => |decl| {
+                const func = ObjFunction.create(self.alloc, decl.name, @intCast(decl.params.len));
+                self.fn_table.put(self.alloc, decl.name, func) catch @panic("oom");
+            },
             .struct_decl => |decl| {
                 const names = self.alloc.alloc([]const u8, decl.fields.len) catch @panic("oom");
                 for (decl.fields, 0..) |field, i| {
@@ -157,7 +163,7 @@ pub const Compiler = struct {
     }
 
     fn compileFnDecl(self: *Compiler, decl: ast.FnDecl) void {
-        var func = ObjFunction.create(self.alloc, decl.name, @intCast(decl.params.len));
+        const func = self.findFunction(decl.name) orelse ObjFunction.create(self.alloc, decl.name, @intCast(decl.params.len));
 
         var sub = Compiler{
             .alloc = self.alloc,
@@ -168,6 +174,7 @@ pub const Compiler = struct {
             .scope_depth = 1,
             .struct_defs = .{},
             .enum_variants = .{},
+            .fn_table = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
         };
@@ -762,6 +769,7 @@ pub const Compiler = struct {
             .scope_depth = 1,
             .struct_defs = .{},
             .enum_variants = .{},
+            .fn_table = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
         };
@@ -830,6 +838,8 @@ pub const Compiler = struct {
         } else if (self.resolveUpvalue(name)) |uv| {
             self.emitOp(.get_upvalue);
             self.emitByte(uv);
+        } else if (self.findFunction(name)) |func| {
+            self.emitConstant(func.toValue());
         } else {
             const idx = self.addStringConstant(name);
             self.emitOp(.get_global);
@@ -961,6 +971,15 @@ pub const Compiler = struct {
         return null;
     }
 
+    fn findFunction(self: *Compiler, name: []const u8) ?*ObjFunction {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.fn_table.get(name)) |func| return func;
+            c = cur.enclosing;
+        }
+        return null;
+    }
+
     // ---------------------------------------------------------------
     // emit helpers
     // ---------------------------------------------------------------
@@ -1005,9 +1024,13 @@ pub const Compiler = struct {
     }
 
     fn emitCall(self: *Compiler, name: []const u8, arity: u8) void {
-        const idx = self.addStringConstant(name);
-        self.emitOp(.get_global);
-        self.emitU16(idx);
+        if (self.findFunction(name)) |func| {
+            self.emitConstant(func.toValue());
+        } else {
+            const idx = self.addStringConstant(name);
+            self.emitOp(.get_global);
+            self.emitU16(idx);
+        }
         self.emitOp(.call);
         self.emitByte(arity);
     }
