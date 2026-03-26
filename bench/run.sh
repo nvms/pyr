@@ -7,14 +7,22 @@ PYR=../zig-out/bin/pyr
 bench() {
     local name="$1"
     shift
-    local elapsed
-    elapsed=$(python3 -c "
+    local result
+    result=$(python3 -c "
 import subprocess, time, sys
 start = time.perf_counter()
-subprocess.run(sys.argv[1:], capture_output=True)
-print(f'{time.perf_counter() - start:.3f}')
+r = subprocess.run(sys.argv[1:], capture_output=True)
+elapsed = time.perf_counter() - start
+if r.returncode != 0:
+    print(f'FAIL:{r.stderr.decode().strip()[:80]}')
+else:
+    print(f'{elapsed:.3f}')
 " "$@")
-    printf "  %-12s %ss\n" "$name" "$elapsed"
+    if [[ "$result" == FAIL:* ]]; then
+        printf "  %-12s %s\n" "$name" "${result#FAIL:}"
+    else
+        printf "  %-12s %ss\n" "$name" "$result"
+    fi
 }
 
 verify() {

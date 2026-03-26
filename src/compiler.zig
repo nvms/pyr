@@ -18,6 +18,7 @@ const TypeHint = enum {
     float_,
     string_,
     bool_,
+    struct_,
 };
 
 pub const Compiler = struct {
@@ -197,7 +198,7 @@ pub const Compiler = struct {
         sub.addLocal("");
 
         for (decl.params) |param| {
-            sub.addLocalTyped(param.name, typeHintFromExpr(param.type_expr));
+            sub.addLocalTyped(param.name, sub.resolveTypeHint(param.type_expr));
         }
 
         switch (decl.body) {
@@ -369,7 +370,7 @@ pub const Compiler = struct {
         self.emitOp(.get_local);
         self.emitByte(self.resolveLocal("$counter").?);
         self.compileExpr(args.end);
-        self.emitOp(.less);
+        self.emitOp(.less_int);
         const exit_jump = self.emitJump(.jump_if_false);
         self.emitOp(.pop);
 
@@ -395,7 +396,7 @@ pub const Compiler = struct {
         } else {
             self.emitConstant(Value.initInt(1));
         }
-        self.emitOp(.add);
+        self.emitOp(.add_int);
         self.emitOp(.set_local);
         self.emitByte(counter_slot);
         self.emitOp(.pop);
@@ -457,11 +458,31 @@ pub const Compiler = struct {
             },
             .call => |call| self.compileCall(call),
             .field_access => |fa| {
-                self.compileExpr(fa.target);
-                if (self.resolveFieldIndex(fa.field)) |idx| {
-                    self.emitOp(.get_field_idx);
-                    self.emitByte(idx);
+                if (self.resolveFieldIndex(fa.field)) |field_idx| {
+                    if (fa.target.kind == .identifier) {
+                        if (self.resolveLocal(fa.target.kind.identifier)) |slot| {
+                            if (self.localTypeHint(fa.target.kind.identifier) == .struct_) {
+                                self.emitOp(.get_local_field);
+                                self.emitByte(slot);
+                                self.emitByte(field_idx);
+                            } else {
+                                self.emitOp(.get_local);
+                                self.emitByte(slot);
+                                self.emitOp(.get_field_idx);
+                                self.emitByte(field_idx);
+                            }
+                        } else {
+                            self.compileExpr(fa.target);
+                            self.emitOp(.get_field_idx);
+                            self.emitByte(field_idx);
+                        }
+                    } else {
+                        self.compileExpr(fa.target);
+                        self.emitOp(.get_field_idx);
+                        self.emitByte(field_idx);
+                    }
                 } else {
+                    self.compileExpr(fa.target);
                     const name_idx = self.addStringConstant(fa.field);
                     self.emitOp(.get_field);
                     self.emitU16(name_idx);
@@ -560,6 +581,9 @@ pub const Compiler = struct {
                 .minus => .sub_int,
                 .lt => .less_int,
                 .gt => .greater_int,
+                .star => .mul_int,
+                .slash => .div_int,
+                .percent => .mod_int,
                 else => null,
             };
             if (specialized) |op| {
@@ -568,9 +592,19 @@ pub const Compiler = struct {
             }
         }
 
-        if ((lt == .float_ or (lt == .int_ and rt == .float_)) and (rt == .float_ or (rt == .int_ and lt == .float_))) {
-            if (bin.op == .plus) {
-                self.emitOp(.add_float);
+        const either_float = (lt == .float_ or rt == .float_) and (lt == .float_ or lt == .int_) and (rt == .float_ or rt == .int_);
+        if (either_float) {
+            const specialized: ?OpCode = switch (bin.op) {
+                .plus => .add_float,
+                .minus => .sub_float,
+                .star => .mul_float,
+                .slash => .div_float,
+                .lt => .less_float,
+                .gt => .greater_float,
+                else => null,
+            };
+            if (specialized) |op| {
+                self.emitOp(op);
                 return;
             }
         }
@@ -834,6 +868,8 @@ pub const Compiler = struct {
             sub.emitOp(.return_);
         }
 
+        func.locals_only = analyzeLocalsOnly(&func.chunk);
+
         if (sub.upvalue_count > 0) {
             const idx = self.chunk().addConstant(self.alloc, func.toValue());
             self.emitOp(.make_closure);
@@ -952,6 +988,15 @@ pub const Compiler = struct {
         if (self.local_count == 255) return;
         self.locals[self.local_count] = .{ .name = name, .depth = self.scope_depth, .type_hint = hint };
         self.local_count += 1;
+    }
+
+    fn resolveTypeHint(self: *Compiler, type_expr: ?*const ast.TypeExpr) TypeHint {
+        const hint = typeHintFromExpr(type_expr);
+        if (hint != .unknown) return hint;
+        const te = type_expr orelse return .unknown;
+        if (te.kind != .named) return .unknown;
+        if (self.findStructDef(te.kind.named) != null) return .struct_;
+        return .unknown;
     }
 
     fn beginScope(self: *Compiler) void {
@@ -1151,6 +1196,10 @@ pub const Compiler = struct {
 };
 
 fn typeHintFromExpr(type_expr: ?*const ast.TypeExpr) TypeHint {
+    return typeHintFromExprWith(type_expr, null);
+}
+
+fn typeHintFromExprWith(type_expr: ?*const ast.TypeExpr, struct_defs: ?*const std.StringHashMapUnmanaged([]const []const u8)) TypeHint {
     const te = type_expr orelse return .unknown;
     if (te.kind != .named) return .unknown;
     const name = te.kind.named;
@@ -1158,6 +1207,9 @@ fn typeHintFromExpr(type_expr: ?*const ast.TypeExpr) TypeHint {
     if (std.mem.eql(u8, name, "float")) return .float_;
     if (std.mem.eql(u8, name, "str")) return .string_;
     if (std.mem.eql(u8, name, "bool")) return .bool_;
+    if (struct_defs) |sd| {
+        if (sd.contains(name)) return .struct_;
+    }
     return .unknown;
 }
 
@@ -1171,7 +1223,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .constant => i += 2,
             .nil, .true_, .false_, .pop => {},
             .get_local, .set_local => i += 1,
-            .add, .subtract, .multiply, .divide, .modulo, .negate, .add_int, .sub_int, .less_int, .greater_int, .add_float => {},
+            .add, .subtract, .multiply, .divide, .modulo, .negate, .add_int, .sub_int, .mul_int, .div_int, .mod_int, .less_int, .greater_int, .add_float, .sub_float, .mul_float, .div_float, .less_float, .greater_float => {},
             .not, .equal, .not_equal, .less, .greater, .less_equal, .greater_equal => {},
             .jump, .jump_if_false, .loop_ => i += 2,
             .call => i += 1,
@@ -1185,6 +1237,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .get_field => i += 2,
             .get_field_idx, .concat_local => i += 1,
+            .get_local_field => i += 2,
             .enum_variant => i += 5,
             .match_variant => i += 2,
             .get_payload => i += 1,

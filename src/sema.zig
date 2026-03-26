@@ -142,6 +142,10 @@ pub const Sema = struct {
         self.define("print", .{ .ty = &builtin_print_ty, .is_mut = false, .kind = .builtin });
         self.define("sqrt", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("len", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("range", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("abs", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("int", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("float", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
     }
 
     // ---------------------------------------------------------------
