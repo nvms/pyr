@@ -88,6 +88,8 @@ fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void {
         },
         .native_fn => writeBytes(fd, "<native fn>"),
         .closure => writeBytes(fd, "<closure>"),
+        .task => writeBytes(fd, "<task>"),
+        .channel => writeBytes(fd, "<channel>"),
         .array => {
             const arr = v.asArray();
             writeBytes(fd, "[");
@@ -299,7 +301,7 @@ fn jsonWriteValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v:
                 buf.appendSlice(alloc, "]}") catch return;
             }
         },
-        .function, .native_fn, .closure => buf.appendSlice(alloc, "null") catch return,
+        .function, .native_fn, .closure, .task, .channel => buf.appendSlice(alloc, "null") catch return,
     }
 }
 

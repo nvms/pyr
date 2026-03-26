@@ -16,6 +16,8 @@ pub const Value = struct {
         native_fn,
         closure,
         array,
+        task,
+        channel,
     };
 
     pub fn initNil() Value {
@@ -62,6 +64,14 @@ pub const Value = struct {
         return .{ .tag = .array, .data = @intFromPtr(ptr) };
     }
 
+    pub fn initTask(ptr: *ObjTask) Value {
+        return .{ .tag = .task, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initChannel(ptr: *ObjChannel) Value {
+        return .{ .tag = .channel, .data = @intFromPtr(ptr) };
+    }
+
     pub fn asBool(self: Value) bool {
         return self.data != 0;
     }
@@ -102,13 +112,21 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asTask(self: Value) *ObjTask {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
+    pub fn asChannel(self: Value) *ObjChannel {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel => true,
         };
     }
 
@@ -120,7 +138,7 @@ pub const Value = struct {
             .int => a.asInt() == b.asInt(),
             .float => a.asFloat() == b.asFloat(),
             .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
-            .function, .struct_, .enum_, .native_fn, .closure => a.data == b.data,
+            .function, .struct_, .enum_, .native_fn, .closure, .task, .channel => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -166,6 +184,8 @@ pub const Value = struct {
             },
             .native_fn => std.debug.print("<native fn>", .{}),
             .closure => std.debug.print("<closure>", .{}),
+            .task => std.debug.print("<task>", .{}),
+            .channel => std.debug.print("<channel>", .{}),
             .array => {
                 const arr = self.asArray();
                 std.debug.print("[", .{});
@@ -317,6 +337,149 @@ pub const ObjArray = struct {
 
     pub fn toValue(self: *ObjArray) Value {
         return Value.initArray(self);
+    }
+};
+
+pub const TaskState = enum(u8) {
+    ready,
+    running,
+    blocked_send,
+    blocked_recv,
+    blocked_await,
+    done,
+};
+
+pub const ObjTask = struct {
+    stack: []Value,
+    frames: []CallFrame,
+    frame_count: usize,
+    sp: usize,
+    state: TaskState,
+    result: Value,
+    waiting_on: ?*ObjTask,
+    pending_send: Value,
+
+    const CallFrame = @import("vm.zig").VM.CallFrame;
+
+    pub fn create(alloc: std.mem.Allocator, func: *ObjFunction, closure: ?*ObjClosure) *ObjTask {
+        const stack_size: usize = 256;
+        const max_frames: usize = 64;
+        const stack = alloc.alloc(Value, stack_size) catch @panic("oom");
+        const frames = alloc.alloc(CallFrame, max_frames) catch @panic("oom");
+        const t = alloc.create(ObjTask) catch @panic("oom");
+
+        stack[0] = if (closure) |cl| cl.toValue() else func.toValue();
+
+        frames[0] = .{
+            .function = func,
+            .ip = 0,
+            .slot_offset = 0,
+            .closure = closure,
+        };
+
+        t.* = .{
+            .stack = stack,
+            .frames = frames,
+            .frame_count = 1,
+            .sp = 1,
+            .state = .ready,
+            .result = Value.initNil(),
+            .waiting_on = null,
+            .pending_send = Value.initNil(),
+        };
+        return t;
+    }
+
+    pub fn toValue(self: *ObjTask) Value {
+        return Value.initTask(self);
+    }
+};
+
+pub const ObjChannel = struct {
+    buffer: []Value,
+    capacity: usize,
+    head: usize,
+    tail: usize,
+    count: usize,
+    send_waiters: [16]?*ObjTask,
+    send_waiter_count: u8,
+    recv_waiters: [16]?*ObjTask,
+    recv_waiter_count: u8,
+
+    pub fn create(alloc: std.mem.Allocator, capacity: usize) *ObjChannel {
+        const cap = if (capacity == 0) 1 else capacity;
+        const buf = alloc.alloc(Value, cap) catch @panic("oom");
+        const ch = alloc.create(ObjChannel) catch @panic("oom");
+        ch.* = .{
+            .buffer = buf,
+            .capacity = cap,
+            .head = 0,
+            .tail = 0,
+            .count = 0,
+            .send_waiters = .{null} ** 16,
+            .send_waiter_count = 0,
+            .recv_waiters = .{null} ** 16,
+            .recv_waiter_count = 0,
+        };
+        return ch;
+    }
+
+    pub fn trySend(self: *ObjChannel, val: Value) bool {
+        if (self.count >= self.capacity) return false;
+        self.buffer[self.tail] = val;
+        self.tail = (self.tail + 1) % self.capacity;
+        self.count += 1;
+        return true;
+    }
+
+    pub fn tryRecv(self: *ObjChannel) ?Value {
+        if (self.count == 0) return null;
+        const val = self.buffer[self.head];
+        self.head = (self.head + 1) % self.capacity;
+        self.count -= 1;
+        return val;
+    }
+
+    pub fn addSendWaiter(self: *ObjChannel, task: *ObjTask) void {
+        if (self.send_waiter_count < 16) {
+            self.send_waiters[self.send_waiter_count] = task;
+            self.send_waiter_count += 1;
+        }
+    }
+
+    pub fn addRecvWaiter(self: *ObjChannel, task: *ObjTask) void {
+        if (self.recv_waiter_count < 16) {
+            self.recv_waiters[self.recv_waiter_count] = task;
+            self.recv_waiter_count += 1;
+        }
+    }
+
+    pub fn popSendWaiter(self: *ObjChannel) ?*ObjTask {
+        if (self.send_waiter_count == 0) return null;
+        const t = self.send_waiters[0].?;
+        self.send_waiter_count -= 1;
+        var i: u8 = 0;
+        while (i < self.send_waiter_count) : (i += 1) {
+            self.send_waiters[i] = self.send_waiters[i + 1];
+        }
+        self.send_waiters[self.send_waiter_count] = null;
+        return t;
+    }
+
+    pub fn popRecvWaiter(self: *ObjChannel) ?*ObjTask {
+        if (self.recv_waiter_count == 0) return null;
+        const t = self.recv_waiters[0].?;
+        self.recv_waiter_count -= 1;
+        var i: u8 = 0;
+        while (i < self.recv_waiter_count) : (i += 1) {
+            self.recv_waiters[i] = self.recv_waiters[i + 1];
+        }
+        self.recv_waiters[self.recv_waiter_count] = null;
+        return t;
+    }
+
+    pub fn toValue(self: *ObjChannel) Value {
+        return Value.initChannel(self);
     }
 };
 

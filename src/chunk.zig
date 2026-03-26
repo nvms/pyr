@@ -81,6 +81,12 @@ pub const OpCode = enum(u8) {
     inc_local,
     push_arena,
     pop_arena,
+
+    spawn,
+    channel_create,
+    channel_send,
+    channel_recv,
+    await_task,
 };
 
 pub const Chunk = struct {

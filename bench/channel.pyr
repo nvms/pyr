@@ -1,0 +1,20 @@
+fn main() {
+  ch = channel(100)
+  n = 100000
+
+  spawn {
+    mut i = 0
+    while i < n {
+      ch.send(i)
+      i = i + 1
+    }
+  }
+
+  mut sum = 0
+  mut i = 0
+  while i < n {
+    sum = sum + ch.recv()
+    i = i + 1
+  }
+  println(sum)
+}

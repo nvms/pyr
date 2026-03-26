@@ -9,6 +9,9 @@ const ObjEnum = @import("value.zig").ObjEnum;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ObjClosure = @import("value.zig").ObjClosure;
 const ObjArray = @import("value.zig").ObjArray;
+const ObjTask = @import("value.zig").ObjTask;
+const ObjChannel = @import("value.zig").ObjChannel;
+const TaskState = @import("value.zig").TaskState;
 
 pub const ConcatState = struct {
     buf: std.ArrayListUnmanaged(u8),
@@ -57,6 +60,42 @@ pub const ArenaStack = struct {
     }
 };
 
+pub const Scheduler = struct {
+    run_queue: [64]?*ObjTask,
+    queue_head: u8,
+    queue_tail: u8,
+    queue_count: u8,
+    current_task: ?*ObjTask,
+    active: bool,
+
+    fn init() Scheduler {
+        return .{
+            .run_queue = .{null} ** 64,
+            .queue_head = 0,
+            .queue_tail = 0,
+            .queue_count = 0,
+            .current_task = null,
+            .active = false,
+        };
+    }
+
+    fn enqueue(self: *Scheduler, task: *ObjTask) void {
+        if (self.queue_count >= 64) @panic("scheduler queue overflow");
+        self.run_queue[self.queue_tail] = task;
+        self.queue_tail = (self.queue_tail + 1) % 64;
+        self.queue_count += 1;
+    }
+
+    fn dequeue(self: *Scheduler) ?*ObjTask {
+        if (self.queue_count == 0) return null;
+        const task = self.run_queue[self.queue_head].?;
+        self.run_queue[self.queue_head] = null;
+        self.queue_head = (self.queue_head + 1) % 64;
+        self.queue_count -= 1;
+        return task;
+    }
+};
+
 pub const VM = struct {
     frames: [64]CallFrame,
     frame_count: usize,
@@ -66,6 +105,7 @@ pub const VM = struct {
     alloc: std.mem.Allocator,
     concat: *ConcatState,
     arena_stack: *ArenaStack,
+    sched: *Scheduler,
 
     pub const CallFrame = struct {
         function: *ObjFunction,
@@ -81,6 +121,8 @@ pub const VM = struct {
         cs.* = ConcatState.init();
         const as = alloc.create(ArenaStack) catch @panic("oom");
         as.* = ArenaStack.init(alloc);
+        const sc = alloc.create(Scheduler) catch @panic("oom");
+        sc.* = Scheduler.init();
         return .{
             .frames = undefined,
             .frame_count = 0,
@@ -90,6 +132,7 @@ pub const VM = struct {
             .alloc = alloc,
             .concat = cs,
             .arena_stack = as,
+            .sched = sc,
         };
     }
 
@@ -219,9 +262,18 @@ pub const VM = struct {
                     const result = self.pop();
                     const slot = self.currentFrame().slot_offset;
                     self.frame_count -= 1;
-                    if (self.frame_count == 0) return;
-                    self.sp = slot;
-                    self.push(result);
+                    if (self.frame_count == 0) {
+                        if (self.sched.active) {
+                            self.sp = slot;
+                            self.push(result);
+                            if (!self.taskFinished()) return;
+                        } else {
+                            return;
+                        }
+                    } else {
+                        self.sp = slot;
+                        self.push(result);
+                    }
                 },
 
                 .print => {
@@ -582,6 +634,16 @@ pub const VM = struct {
                 .array_push, .array_len => {},
                 .push_arena => self.arena_stack.push(),
                 .pop_arena => self.arena_stack.pop(),
+
+                .spawn => try self.execSpawn(),
+                .channel_create => {
+                    const cap = self.readByte();
+                    const ch = ObjChannel.create(self.alloc, @intCast(cap));
+                    self.push(ch.toValue());
+                },
+                .channel_send => try self.execChannelSend(),
+                .channel_recv => try self.execChannelRecv(),
+                .await_task => try self.execAwaitTask(),
                 .slide => {
                     const n = self.readByte();
                     const result = self.stack[self.sp - 1];
@@ -1178,6 +1240,214 @@ pub const VM = struct {
     }
 
     // ---------------------------------------------------------------
+    // concurrency
+    // ---------------------------------------------------------------
+
+    fn saveToTask(self: *VM, task: *ObjTask) void {
+        @memcpy(task.frames[0..self.frame_count], self.frames[0..self.frame_count]);
+        @memcpy(task.stack[0..self.sp], self.stack[0..self.sp]);
+        task.frame_count = self.frame_count;
+        task.sp = self.sp;
+    }
+
+    fn restoreFromTask(self: *VM, task: *ObjTask) void {
+        @memcpy(self.frames[0..task.frame_count], task.frames[0..task.frame_count]);
+        @memcpy(self.stack[0..task.sp], task.stack[0..task.sp]);
+        self.frame_count = task.frame_count;
+        self.sp = task.sp;
+    }
+
+    fn switchTo(self: *VM, next: *ObjTask) void {
+        next.state = .running;
+        self.restoreFromTask(next);
+        self.sched.current_task = next;
+    }
+
+    fn yieldTo(self: *VM, next: *ObjTask) void {
+        if (self.sched.current_task) |ct| {
+            self.saveToTask(ct);
+        }
+        self.switchTo(next);
+    }
+
+    fn scheduleNext(self: *VM) bool {
+        if (self.sched.dequeue()) |next| {
+            self.yieldTo(next);
+            return true;
+        }
+        return false;
+    }
+
+    fn execSpawn(self: *VM) Error!void {
+        const callee = self.pop();
+
+        const func = if (callee.tag == .closure)
+            callee.asClosure().function
+        else if (callee.tag == .function)
+            callee.asFunction()
+        else {
+            self.runtimeError("spawn requires a function or closure", .{});
+            return error.RuntimeError;
+        };
+
+        const closure = if (callee.tag == .closure) callee.asClosure() else null;
+        const task = ObjTask.create(self.alloc, func, closure);
+        task.state = .ready;
+        self.sched.enqueue(task);
+
+        if (!self.sched.active) {
+            self.sched.active = true;
+            const main_task = ObjTask.create(self.alloc, self.frames[0].function, self.frames[0].closure);
+            main_task.state = .running;
+            self.sched.current_task = main_task;
+        }
+
+        self.push(task.toValue());
+    }
+
+    fn taskFinished(self: *VM) bool {
+        const sched = self.sched;
+        if (!sched.active) return false;
+
+        if (sched.current_task) |ct| {
+            ct.state = .done;
+            if (self.sp > 0) ct.result = self.stack[self.sp - 1];
+
+            self.wakeAwaiters(ct);
+        }
+
+        if (sched.dequeue()) |next| {
+            self.switchTo(next);
+            return true;
+        }
+
+        sched.active = false;
+        sched.current_task = null;
+        return false;
+    }
+
+    fn wakeAwaiters(self: *VM, finished: *ObjTask) void {
+        const sched = self.sched;
+        const i: u8 = sched.queue_head;
+        const count: u8 = sched.queue_count;
+        var checked: u8 = 0;
+        while (checked < count) : (checked += 1) {
+            const idx = (i + checked) % 64;
+            if (sched.run_queue[idx]) |queued| {
+                if (queued.state == .blocked_await and queued.waiting_on == finished) {
+                    queued.stack[queued.sp] = finished.result;
+                    queued.sp += 1;
+                    queued.state = .ready;
+                    queued.waiting_on = null;
+                }
+            }
+        }
+    }
+
+    fn execChannelSend(self: *VM) Error!void {
+        const val = self.pop();
+        const ch_val = self.pop();
+        if (ch_val.tag != .channel) {
+            self.runtimeError("send on non-channel value", .{});
+            return error.RuntimeError;
+        }
+        const ch = ch_val.asChannel();
+
+        if (ch.trySend(val)) {
+            if (ch.popRecvWaiter()) |waiter| {
+                const recv_val = ch.tryRecv().?;
+                waiter.stack[waiter.sp] = recv_val;
+                waiter.sp += 1;
+                waiter.state = .ready;
+                self.sched.enqueue(waiter);
+            }
+            self.push(Value.initNil());
+        } else if (self.sched.active) {
+            if (self.sched.current_task) |ct| {
+                self.push(Value.initNil());
+                self.saveToTask(ct);
+                ct.state = .blocked_send;
+                ct.pending_send = val;
+                ch.addSendWaiter(ct);
+
+                if (self.sched.dequeue()) |next| {
+                    self.switchTo(next);
+                } else {
+                    self.runtimeError("deadlock: all tasks blocked", .{});
+                    return error.RuntimeError;
+                }
+            }
+        } else {
+            self.push(Value.initNil());
+        }
+    }
+
+    fn execChannelRecv(self: *VM) Error!void {
+        const ch_val = self.pop();
+        if (ch_val.tag != .channel) {
+            self.runtimeError("recv on non-channel value", .{});
+            return error.RuntimeError;
+        }
+        const ch = ch_val.asChannel();
+
+        if (ch.tryRecv()) |val| {
+            if (ch.popSendWaiter()) |waiter| {
+                _ = ch.trySend(waiter.pending_send);
+                waiter.pending_send = Value.initNil();
+                waiter.state = .ready;
+                self.sched.enqueue(waiter);
+            }
+            self.push(val);
+        } else if (self.sched.active) {
+            if (self.sched.current_task) |ct| {
+                self.saveToTask(ct);
+                ct.state = .blocked_recv;
+                ch.addRecvWaiter(ct);
+
+                if (self.sched.dequeue()) |next| {
+                    self.switchTo(next);
+                } else {
+                    self.runtimeError("deadlock: all tasks blocked", .{});
+                    return error.RuntimeError;
+                }
+            }
+        } else {
+            self.push(Value.initNil());
+        }
+    }
+
+    fn execAwaitTask(self: *VM) Error!void {
+        const task_val = self.pop();
+        if (task_val.tag != .task) {
+            self.runtimeError("await requires a task value", .{});
+            return error.RuntimeError;
+        }
+        const task = task_val.asTask();
+
+        if (task.state == .done) {
+            self.push(task.result);
+            return;
+        }
+
+        if (self.sched.active) {
+            if (self.sched.current_task) |ct| {
+                self.saveToTask(ct);
+                ct.state = .blocked_await;
+                ct.waiting_on = task;
+
+                if (self.sched.dequeue()) |next| {
+                    self.switchTo(next);
+                } else {
+                    self.runtimeError("deadlock: all tasks blocked", .{});
+                    return error.RuntimeError;
+                }
+            }
+        } else {
+            self.push(Value.initNil());
+        }
+    }
+
+    // ---------------------------------------------------------------
     // stack and frame helpers
     // ---------------------------------------------------------------
 
@@ -1469,4 +1739,28 @@ test "vm: arena block nested" {
 
 test "vm: arena block in loop" {
     try testRun("struct D { v: int }\nfn main() {\n  mut s = 0\n  for i in range(10) {\n    arena {\n      d = D { v: i }\n      s = s + d.v\n    }\n  }\n  println(s)\n}");
+}
+
+test "vm: spawn basic" {
+    try testRun("fn work() {\n  println(42)\n}\nfn main() {\n  spawn { work() }\n  println(1)\n}");
+}
+
+test "vm: channel send recv" {
+    try testRun("fn main() {\n  ch = channel(10)\n  ch.send(99)\n  println(ch.recv())\n}");
+}
+
+test "vm: spawn with channel" {
+    try testRun("fn main() {\n  ch = channel(5)\n  spawn { ch.send(7) }\n  println(ch.recv())\n}");
+}
+
+test "vm: spawn channel blocking" {
+    try testRun("fn main() {\n  ch = channel(1)\n  spawn {\n    ch.send(10)\n    ch.send(20)\n  }\n  println(ch.recv())\n  println(ch.recv())\n}");
+}
+
+test "vm: multiple spawns" {
+    try testRun("fn main() {\n  ch = channel(10)\n  spawn { ch.send(1) }\n  spawn { ch.send(2) }\n  println(ch.recv())\n  println(ch.recv())\n}");
+}
+
+test "vm: spawn captures closure" {
+    try testRun("fn main() {\n  x = 100\n  ch = channel(1)\n  spawn { ch.send(x) }\n  println(ch.recv())\n}");
 }

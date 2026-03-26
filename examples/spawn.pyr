@@ -1,0 +1,15 @@
+imp std/io { println }
+
+fn worker(name: str, n: int) {
+  mut i = 0
+  while i < n {
+    println("{name}: {i}")
+    i = i + 1
+  }
+}
+
+fn main() {
+  spawn { worker("a", 3) }
+  spawn { worker("b", 2) }
+  worker("main", 3)
+}

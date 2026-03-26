@@ -762,7 +762,7 @@ pub const Compiler = struct {
             .match_expr => |me| self.compileMatch(me),
             .block => |block| self.compileBlock(block),
             .closure => |cl| self.compileClosure(cl),
-            .spawn => {},
+            .spawn => |inner| self.compileSpawn(inner),
             .struct_literal => |sl| self.compileStructLiteral(sl),
             .pipeline => |pl| self.compilePipeline(pl),
             .array_literal => |elems| {
@@ -955,6 +955,18 @@ pub const Compiler = struct {
                 return;
             }
 
+            if (std.mem.eql(u8, name, "channel")) {
+                const cap: u8 = if (call.args.len > 0) blk: {
+                    if (call.args[0].kind == .int_literal) {
+                        break :blk @intCast(std.fmt.parseInt(u8, call.args[0].kind.int_literal, 10) catch 16);
+                    }
+                    break :blk 16;
+                } else 16;
+                self.emitOp(.channel_create);
+                self.emitByte(cap);
+                return;
+            }
+
             if (self.findEnumVariant(name)) |info| {
                 if (info.payload_count > 0 and call.args.len == info.payload_count) {
                     for (call.args) |arg| {
@@ -969,6 +981,21 @@ pub const Compiler = struct {
                     self.emitByte(info.variant_index);
                     return;
                 }
+            }
+        }
+
+        if (call.callee.kind == .field_access) {
+            const fa = call.callee.kind.field_access;
+            if (std.mem.eql(u8, fa.field, "send") and call.args.len == 1) {
+                self.compileExpr(fa.target);
+                self.compileExpr(call.args[0]);
+                self.emitOp(.channel_send);
+                return;
+            }
+            if (std.mem.eql(u8, fa.field, "recv") and call.args.len == 0) {
+                self.compileExpr(fa.target);
+                self.emitOp(.channel_recv);
+                return;
             }
         }
 
@@ -1352,6 +1379,88 @@ pub const Compiler = struct {
             }
         } else {
             self.emitConstant(func.toValue());
+        }
+    }
+
+    fn compileSpawn(self: *Compiler, body: *const ast.Expr) void {
+        var func = ObjFunction.create(self.alloc, "<spawn>", 0);
+        var sub = Compiler{
+            .alloc = self.alloc,
+            .enclosing = self,
+            .function = func,
+            .locals = undefined,
+            .local_count = 0,
+            .scope_depth = 1,
+            .struct_defs = .{},
+            .enum_variants = .{},
+            .fn_table = .{},
+            .fn_returns = .{},
+            .upvalues = undefined,
+            .upvalue_count = 0,
+            .module_loader = self.module_loader,
+            .module_dir = self.module_dir,
+            .module_namespaces = .{},
+            .std_modules = .{},
+            .native_fns = .{},
+        };
+        sub.addLocal("");
+
+        sub.copyInheritedState(self);
+
+        if (body.kind == .block) {
+            sub.compileBlock(body.kind.block);
+        } else {
+            sub.compileExpr(body);
+            sub.emitOp(.return_);
+        }
+
+        if (!sub.lastOpIs(.return_)) {
+            sub.emitOp(.nil);
+            sub.emitOp(.return_);
+        }
+
+        func.locals_only = false;
+
+        if (sub.upvalue_count > 0) {
+            const idx = self.chunk().addConstant(self.alloc, func.toValue());
+            self.emitOp(.make_closure);
+            self.emitU16(idx);
+            self.emitByte(sub.upvalue_count);
+            var i: u8 = 0;
+            while (i < sub.upvalue_count) : (i += 1) {
+                self.emitByte(if (sub.upvalues[i].is_local) 1 else 0);
+                self.emitByte(sub.upvalues[i].index);
+            }
+        } else {
+            self.emitConstant(func.toValue());
+        }
+        self.emitOp(.spawn);
+    }
+
+    fn copyInheritedState(self: *Compiler, from: *Compiler) void {
+        var it = from.struct_defs.iterator();
+        while (it.next()) |entry| {
+            self.struct_defs.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
+        }
+        var eit = from.enum_variants.iterator();
+        while (eit.next()) |entry| {
+            self.enum_variants.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
+        }
+        var fit = from.fn_table.iterator();
+        while (fit.next()) |entry| {
+            self.fn_table.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
+        }
+        var frit = from.fn_returns.iterator();
+        while (frit.next()) |entry| {
+            self.fn_returns.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
+        }
+        var nit = from.native_fns.iterator();
+        while (nit.next()) |entry| {
+            self.native_fns.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
+        }
+        var sit = from.std_modules.iterator();
+        while (sit.next()) |entry| {
+            self.std_modules.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
         }
     }
 
@@ -1838,6 +1947,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .set_global, .define_global, .print, .println => return false,
+            .spawn, .channel_create, .channel_send, .channel_recv, .await_task => return false,
         }
     }
     return true;

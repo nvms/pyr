@@ -160,3 +160,20 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - values that escape an arena scope (e.g. assigned to a variable in the parent scope) will have dangling pointers after the arena is freed. currently the programmer's responsibility to avoid this. future: explicit `escape()` function or implicit escape analysis
 - push_arena/pop_arena are in run() only, not fastLoop - they're not hot-path opcodes
 - the arena approach maps directly to arena-per-request in HTTP servers: handler wrapped in implicit arena block, all request allocations freed in one shot when response is sent
+
+## concurrency runtime
+
+- cooperative green threads on a single OS thread. no preemption - context switches happen at channel send/recv boundaries and at task completion
+- Scheduler is a heap-allocated side struct (follows ConcatState/ArenaStack pattern to avoid LLVM perturbation). contains a circular run queue (64 slots), current_task pointer, and active flag
+- ObjTask holds a full VM state snapshot: heap-allocated stack (256 Values), frames (64 CallFrames), sp, frame_count, state, result, pending_send value, and waiting_on pointer for await
+- task state machine: ready -> running -> done, with blocked_send/blocked_recv/blocked_await intermediate states
+- `spawn { body }` compiles body as a zero-param closure (with upvalue capture), emits spawn opcode. VM creates ObjTask from the closure, enqueues it. the first spawn activates the scheduler and creates a main_task to track the main thread's state
+- channels are bounded ring buffers (ObjChannel). `channel(N)` creates one with capacity N. send/recv are opcodes, not function calls
+- when send blocks (buffer full): current task's pending_send value stored in ObjTask, task moves to channel's send_waiters queue, next ready task restored to VM
+- when recv blocks (buffer empty): task moves to channel's recv_waiters queue, next ready task restored
+- when recv succeeds and send_waiters exist: the waiter's pending_send is pushed into the now-available buffer slot, waiter re-enqueued as ready
+- when recv succeeds and recv_waiters exist after a send: the value is popped from buffer and placed directly in the waiter's stack
+- context switch: saveToTask copies VM frames/stack/counters to ObjTask, switchTo/restoreFromTask copies back. this is a full state copy, not a pointer swap
+- return_ at frame_count == 0 with scheduler active triggers taskFinished: marks task done, wakes any tasks blocked on await_task, dequeues next ready task. if no tasks remain, scheduler deactivates and main returns normally
+- all concurrency opcodes (spawn, channel_create, channel_send, channel_recv, await_task) are in run() only, never fastLoop
+- deadlock detection: if a blocking op has no next ready task to switch to, it reports "deadlock: all tasks blocked"
