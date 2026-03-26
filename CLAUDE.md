@@ -250,7 +250,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - `await_all(spawn { a() }, spawn { b() })` collects results from parallel tasks into an array
 - 71 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
-- 161 tests, 21 validated examples, 9 benchmarks
+- 179 tests, 21 validated examples, 9 benchmarks
 - benchmarks: fib(35) 0.74s (python 0.90s), loop 10M 0.26s (python 0.22s), closure 10M 0.25s (python 0.32s), struct 10M 0.37s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.62s (python 0.64s), match 30M 4.45s (python 2.21s), arena 1M 0.45s (python 0.21s), channel 100K 0.03s
 
 **not yet implemented (VM level):**

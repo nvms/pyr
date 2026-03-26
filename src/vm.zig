@@ -2207,92 +2207,230 @@ test "vm: await_all preserves order" {
     );
 }
 
-test "vm: std/http parse_request" {
+// --------------- std/http tests ---------------
+
+test "vm: parse_request GET" {
     try testRun(
         \\imp std/http { parse_request }
         \\fn main() {
         \\  req = parse_request("GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        \\  println(req.method)
-        \\  println(req.path)
+        \\  assert_eq(req.method, "GET")
+        \\  assert_eq(req.path, "/hello")
+        \\  assert_eq(req.headers, "Host: localhost")
+        \\  assert_eq(req.body, "")
+        \\  println("ok")
         \\}
     );
 }
 
-test "vm: std/http respond" {
+test "vm: parse_request POST with body" {
+    try testRun(
+        \\imp std/http { parse_request }
+        \\fn main() {
+        \\  req = parse_request("POST /users HTTP/1.1\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello")
+        \\  assert_eq(req.method, "POST")
+        \\  assert_eq(req.path, "/users")
+        \\  assert_eq(req.body, "hello")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: parse_request with query string" {
+    try testRun(
+        \\imp std/http { parse_request }
+        \\fn main() {
+        \\  req = parse_request("GET /search?q=test&page=2 HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        \\  assert_eq(req.method, "GET")
+        \\  assert_eq(req.path, "/search?q=test&page=2")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: parse_request malformed returns nil" {
+    try testRun(
+        \\imp std/http { parse_request }
+        \\fn main() {
+        \\  req = parse_request("garbage")
+        \\  assert_eq(req, none)
+        \\  req2 = parse_request("")
+        \\  assert_eq(req2, none)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: respond produces valid HTTP" {
     try testRun(
         \\imp std/http { respond }
+        \\imp std/json { decode }
         \\fn main() {
-        \\  r = respond("hello")
+        \\  r = respond("hello world")
+        \\  assert(len(r) > 0)
+        \\  parts = r
+        \\  assert(r[0] == "H")
+        \\  assert(r[1] == "T")
+        \\  assert(r[2] == "T")
+        \\  assert(r[3] == "P")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: respond content-length matches body" {
+    try testRun(
+        \\imp std/http { respond, parse_request }
+        \\fn main() {
+        \\  r = respond("exactly 17 chars!")
         \\  assert(len(r) > 0)
         \\  println("ok")
         \\}
     );
 }
 
-test "vm: std/http json_response" {
-    try testRun(
-        \\imp std/http { json_response }
-        \\fn main() {
-        \\  r = json_response(42)
-        \\  assert(len(r) > 0)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: std/http route and match_route" {
-    try testRun(
-        \\imp std/http { route, match_route }
-        \\fn handle() {
-        \\  println("matched")
-        \\}
-        \\fn main() {
-        \\  routes = [
-        \\    route("GET", "/hello", handle),
-        \\    route("POST", "/data", handle)
-        \\  ]
-        \\  h = match_route(routes, "GET", "/hello")
-        \\  h()
-        \\  h2 = match_route(routes, "POST", "/data")
-        \\  h2()
-        \\  h3 = match_route(routes, "GET", "/nope")
-        \\  assert_eq(h3, none)
-        \\}
-    );
-}
-
-test "vm: std/http respond_status" {
+test "vm: respond_status codes" {
     try testRun(
         \\imp std/http { respond_status }
         \\fn main() {
-        \\  r = respond_status(404, "not found")
+        \\  r200 = respond_status(200, "ok")
+        \\  r404 = respond_status(404, "not found")
+        \\  r500 = respond_status(500, "error")
+        \\  assert(len(r200) > 0)
+        \\  assert(len(r404) > 0)
+        \\  assert(len(r500) > 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: json_response with struct" {
+    try testRun(
+        \\imp std/http { json_response }
+        \\struct User {
+        \\  name: str
+        \\  age: int
+        \\}
+        \\fn main() {
+        \\  r = json_response(User { name: "alice", age: 30 })
         \\  assert(len(r) > 0)
         \\  println("ok")
         \\}
     );
 }
 
-test "vm: std/net imports compile" {
+test "vm: json_response with array" {
     try testRun(
-        \\imp std/net { listen, accept, connect, read, write, close }
+        \\imp std/http { json_response }
         \\fn main() {
+        \\  r = json_response([1, 2, 3])
+        \\  assert(len(r) > 0)
         \\  println("ok")
         \\}
     );
 }
 
-test "vm: std/net listen and close" {
+test "vm: json_response with nested data" {
+    try testRun(
+        \\imp std/http { json_response }
+        \\struct Point {
+        \\  x: int
+        \\  y: int
+        \\}
+        \\fn main() {
+        \\  r = json_response([Point { x: 1, y: 2 }, Point { x: 3, y: 4 }])
+        \\  assert(len(r) > 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: route creates struct with handler" {
+    try testRun(
+        \\imp std/http { route }
+        \\fn my_handler(req) { 42 }
+        \\fn main() {
+        \\  r = route("GET", "/test", my_handler)
+        \\  assert_eq(r.method, "GET")
+        \\  assert_eq(r.path, "/test")
+        \\  result = r.handler(none)
+        \\  assert_eq(result, 42)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: match_route first match wins" {
+    try testRun(
+        \\imp std/http { route, match_route }
+        \\fn first() { 1 }
+        \\fn second() { 2 }
+        \\fn main() {
+        \\  routes = [
+        \\    route("GET", "/x", first),
+        \\    route("GET", "/x", second)
+        \\  ]
+        \\  h = match_route(routes, "GET", "/x")
+        \\  assert_eq(h(), 1)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: match_route method must match" {
+    try testRun(
+        \\imp std/http { route, match_route }
+        \\fn handler() { 1 }
+        \\fn main() {
+        \\  routes = [route("GET", "/hello", handler)]
+        \\  assert_eq(match_route(routes, "POST", "/hello"), none)
+        \\  assert_eq(match_route(routes, "GET", "/other"), none)
+        \\  assert(match_route(routes, "GET", "/hello") != none)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: match_route empty routes" {
+    try testRun(
+        \\imp std/http { match_route }
+        \\fn main() {
+        \\  assert_eq(match_route([], "GET", "/"), none)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: match_route with closure handler" {
+    try testRun(
+        \\imp std/http { route, match_route }
+        \\fn main() {
+        \\  prefix = "hello"
+        \\  routes = [
+        \\    route("GET", "/greet", fn() { prefix })
+        \\  ]
+        \\  h = match_route(routes, "GET", "/greet")
+        \\  assert_eq(h(), "hello")
+        \\  println("ok")
+        \\}
+    );
+}
+
+// --------------- std/net tests ---------------
+
+test "vm: net listen and close" {
     try testRun(
         \\imp std/net { listen, close }
         \\fn main() {
         \\  server = listen("127.0.0.1", 0)
+        \\  assert(server != none)
         \\  close(server)
         \\  println("ok")
         \\}
     );
 }
 
-test "vm: std/net listen connect read write close" {
+test "vm: net echo round-trip" {
     try testRun(
         \\imp std/net as net
         \\fn main() {
@@ -2301,13 +2439,188 @@ test "vm: std/net listen connect read write close" {
         \\  conn = net.accept(server)
         \\  net.write(client, "hello")
         \\  data = net.read(conn)
-        \\  println(data)
+        \\  assert_eq(data, "hello")
         \\  net.write(conn, "world")
         \\  reply = net.read(client)
-        \\  println(reply)
+        \\  assert_eq(reply, "world")
         \\  net.close(conn)
         \\  net.close(client)
         \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: net multiple messages same connection" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19877)
+        \\  client = net.connect("127.0.0.1", 19877)
+        \\  conn = net.accept(server)
+        \\  net.write(client, "one")
+        \\  assert_eq(net.read(conn), "one")
+        \\  net.write(client, "two")
+        \\  assert_eq(net.read(conn), "two")
+        \\  net.write(client, "three")
+        \\  assert_eq(net.read(conn), "three")
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: net read returns nil on closed connection" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19878)
+        \\  client = net.connect("127.0.0.1", 19878)
+        \\  conn = net.accept(server)
+        \\  net.close(client)
+        \\  data = net.read(conn)
+        \\  assert_eq(data, none)
+        \\  net.close(conn)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: net connect to non-listening port returns nil" {
+    try testRun(
+        \\imp std/net { connect }
+        \\fn main() {
+        \\  conn = connect("127.0.0.1", 19899)
+        \\  assert_eq(conn, none)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: net write returns bool" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19879)
+        \\  client = net.connect("127.0.0.1", 19879)
+        \\  conn = net.accept(server)
+        \\  result = net.write(client, "test")
+        \\  assert_eq(result, true)
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: net namespace import" {
+    try testRun(
+        \\imp std/net as tcp
+        \\fn main() {
+        \\  s = tcp.listen("127.0.0.1", 0)
+        \\  assert(s != none)
+        \\  tcp.close(s)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: net selective import" {
+    try testRun(
+        \\imp std/net { listen, close }
+        \\fn main() {
+        \\  s = listen("127.0.0.1", 0)
+        \\  close(s)
+        \\  println("ok")
+        \\}
+    );
+}
+
+// --------------- std/net + std/http integration ---------------
+
+test "vm: http over tcp round-trip" {
+    try testRun(
+        \\imp std/net as net
+        \\imp std/http { parse_request, respond, route, match_route }
+        \\fn handle_hello(req) {
+        \\  respond("hello from pyr")
+        \\}
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19880)
+        \\  routes = [route("GET", "/hello", handle_hello)]
+        \\  client = net.connect("127.0.0.1", 19880)
+        \\  conn = net.accept(server)
+        \\  net.write(client, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        \\  raw = net.read(conn)
+        \\  req = parse_request(raw)
+        \\  assert_eq(req.method, "GET")
+        \\  assert_eq(req.path, "/hello")
+        \\  handler = match_route(routes, req.method, req.path)
+        \\  resp = handler(req)
+        \\  net.write(conn, resp)
+        \\  net.close(conn)
+        \\  reply = net.read(client)
+        \\  assert(len(reply) > 0)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: http 404 for unmatched route" {
+    try testRun(
+        \\imp std/net as net
+        \\imp std/http { parse_request, respond_status, route, match_route }
+        \\fn handler(req) { 1 }
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19881)
+        \\  routes = [route("GET", "/exists", handler)]
+        \\  client = net.connect("127.0.0.1", 19881)
+        \\  conn = net.accept(server)
+        \\  net.write(client, "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        \\  raw = net.read(conn)
+        \\  req = parse_request(raw)
+        \\  h = match_route(routes, req.method, req.path)
+        \\  assert_eq(h, none)
+        \\  net.write(conn, respond_status(404, "not found"))
+        \\  net.close(conn)
+        \\  reply = net.read(client)
+        \\  assert(len(reply) > 0)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: http json response over tcp" {
+    try testRun(
+        \\imp std/net as net
+        \\imp std/http { parse_request, json_response }
+        \\struct User {
+        \\  name: str
+        \\  age: int
+        \\}
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19882)
+        \\  client = net.connect("127.0.0.1", 19882)
+        \\  conn = net.accept(server)
+        \\  net.write(client, "GET /user HTTP/1.1\r\n\r\n")
+        \\  raw = net.read(conn)
+        \\  req = parse_request(raw)
+        \\  resp = json_response(User { name: "alice", age: 30 })
+        \\  net.write(conn, resp)
+        \\  net.close(conn)
+        \\  reply = net.read(client)
+        \\  assert(len(reply) > 0)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
         \\}
     );
 }

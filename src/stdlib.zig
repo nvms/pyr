@@ -621,7 +621,8 @@ fn httpParseRequest(alloc: std.mem.Allocator, args: []const Value) Value {
     const path = parts.next() orelse return Value.initNil();
 
     const header_end = std.mem.indexOf(u8, raw, "\r\n\r\n") orelse raw.len;
-    const headers = raw[line_end + 2 .. header_end];
+    const header_start = line_end + 2;
+    const headers = if (header_start <= header_end) raw[header_start..header_end] else "";
     const body_start = if (header_end + 4 <= raw.len) header_end + 4 else raw.len;
     const body = raw[body_start..];
 
