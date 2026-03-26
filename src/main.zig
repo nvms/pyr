@@ -2,7 +2,8 @@ const std = @import("std");
 const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
-const codegen = @import("codegen.zig");
+const compiler = @import("compiler.zig");
+const vm_mod = @import("vm.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -19,18 +20,18 @@ pub fn main() !void {
 
     const command = args[1];
 
-    if (std.mem.eql(u8, command, "build")) {
-        if (args.len < 3) {
-            std.debug.print("error: pyr build requires a file argument\n", .{});
-            std.process.exit(1);
-        }
-        try buildFile(allocator, args[2]);
-    } else if (std.mem.eql(u8, command, "run")) {
+    if (std.mem.eql(u8, command, "run")) {
         if (args.len < 3) {
             std.debug.print("error: pyr run requires a file argument\n", .{});
             std.process.exit(1);
         }
         try runFile(allocator, args[2]);
+    } else if (std.mem.eql(u8, command, "build")) {
+        if (args.len < 3) {
+            std.debug.print("error: pyr build requires a file argument\n", .{});
+            std.process.exit(1);
+        }
+        try buildFile(allocator, args[2]);
     } else if (std.mem.eql(u8, command, "version")) {
         std.debug.print("pyr 0.1.0\n", .{});
     } else {
@@ -40,15 +41,14 @@ pub fn main() !void {
     }
 }
 
-fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
-    const source = std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024) catch |err| {
+fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@import("value.zig").ObjFunction, arena: std.heap.ArenaAllocator } {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+
+    const source = std.fs.cwd().readFileAlloc(arena.allocator(), path, 10 * 1024 * 1024) catch |err| {
         std.debug.print("error: could not read '{s}': {}\n", .{ path, err });
         std.process.exit(1);
     };
-    defer allocator.free(source);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
 
     const tokens = parser.tokenize(arena.allocator(), source);
     var p = parser.Parser.init(tokens, source, arena.allocator());
@@ -63,7 +63,6 @@ fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
     }
 
     const analysis = sema.Sema.analyze(arena.allocator(), result);
-
     if (analysis.errors.len > 0) {
         for (analysis.errors) |err| {
             const loc = lineCol(source, err.span.start);
@@ -72,25 +71,28 @@ fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
         std.process.exit(1);
     }
 
-    const zig_source = codegen.Codegen.generate(arena.allocator(), result);
-
-    const out_path = blk: {
-        if (std.mem.endsWith(u8, path, ".pyr")) {
-            break :blk std.fmt.allocPrint(arena.allocator(), "{s}.zig", .{path[0 .. path.len - 4]}) catch @panic("oom");
-        }
-        break :blk std.fmt.allocPrint(arena.allocator(), "{s}.zig", .{path}) catch @panic("oom");
-    };
-
-    std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = zig_source }) catch |write_err| {
-        std.debug.print("error: could not write '{s}': {}\n", .{ out_path, write_err });
+    const func = compiler.Compiler.compile(arena.allocator(), result) orelse {
+        std.debug.print("error: compilation failed\n", .{});
         std.process.exit(1);
     };
 
-    std.debug.print("compiled {s} -> {s}\n", .{ path, out_path });
+    return .{ .func = func, .arena = arena };
 }
 
 fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
-    try buildFile(allocator, path);
+    var result = try compile(allocator, path);
+    defer result.arena.deinit();
+
+    var vm = vm_mod.VM.init(result.arena.allocator());
+    vm.interpret(result.func) catch {
+        std.process.exit(1);
+    };
+}
+
+fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
+    var result = try compile(allocator, path);
+    defer result.arena.deinit();
+    std.debug.print("compiled {s}\n", .{path});
 }
 
 const LineLoc = struct { line: usize, col: usize };
@@ -114,8 +116,8 @@ fn printUsage() void {
         \\usage: pyr <command> [args]
         \\
         \\commands:
-        \\  build <file>    compile a .pyr file
-        \\  run <file>      compile and run a .pyr file
+        \\  run <file>      run a .pyr file
+        \\  build <file>    check a .pyr file
         \\  version         print version
         \\
     , .{});
@@ -125,5 +127,6 @@ test {
     _ = lexer;
     _ = @import("parser.zig");
     _ = @import("sema.zig");
-    _ = @import("codegen.zig");
+    _ = @import("value.zig");
+    _ = @import("vm.zig");
 }
