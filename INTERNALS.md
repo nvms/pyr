@@ -210,3 +210,16 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - `route(method, path, handler)` creates a Route struct (method, path, handler fields). handler is stored as a Value - can be a function, closure, or native fn
 - `match_route(routes, method, path)` scans a routes array, returns the handler for the first matching method+path, or nil if no match
 - the server pattern: listen -> accept loop -> read -> parse_request -> match_route -> call handler -> write response -> close. arena blocks per request for automatic memory cleanup
+
+## FFI
+
+- `extern "lib" { fn name(type, ...) -> type }` parsed as ExternBlock AST node
+- compiler pass 1 collects FfiDesc entries (lib, name, param types, return type) and registers them in ffi_funcs map
+- compiler pass 2 detects calls to FFI functions via findFfiFunc and emits ffi_call opcode with u16 descriptor index + u8 arg count
+- VM.setFfiDescs creates a heap-allocated FfiState (avoids LLVM perturbation) and resolves all symbols at init via dlopen/dlsym
+- ffi_call opcode: reads descriptor index and arg count, marshals pyr Values to C types, dispatches through typed trampolines, marshals result back
+- trampolines in src/ffi.zig: trampoline0 through trampoline6, each casting fn_ptr to the right `fn(usize, ...) callconv(.c) usize` signature. all int/ptr args unified as usize (works because C ABI promotes smaller ints to register width)
+- cstr marshaling: allocates a null-terminated copy for each string argument (pyr strings are not null-terminated). cstr returns are copied into pyr-managed memory via ObjString.create
+- ptr values: new Value tag `.ptr` stores raw C pointers as u64. null pointers map to nil
+- dlopen/dlsym are declared as manual extern declarations (no @cImport, per learnings.md). library "c" resolves to dlopen(null) for libc access
+- build.zig must have link_libc = true on both exe and test modules for dlopen/dlsym to resolve

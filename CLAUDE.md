@@ -204,8 +204,9 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - string value equality (compares chars, not pointer identity)
 - closures with copy-capture (ObjClosure wraps ObjFunction + captured values)
   - make_closure opcode with upvalue descriptors (is_local flag + index)
-  - get_upvalue opcode for reading captured values
-  - compiler walks enclosing scope chain to resolve upvalues
+  - get_upvalue/set_upvalue opcodes for reading/writing captured values
+  - mutable closure capture: set_upvalue writes to the closure's own copy (counter pattern works). outer scope unaffected (copy semantics)
+  - compiler walks enclosing scope chain to resolve upvalues. binding handler checks resolveUpvalue before creating new locals
   - closures callable from both run() and fastLoop
 - for loops with range: `for i in range(n)`, `for i in range(start, end)`, `for i in range(start, end, step)`
   - compiled to while loops at compile time - no iterator protocol overhead
@@ -214,7 +215,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - arrays: `[1, 2, 3]` literals, `arr[i]` indexing (also works on strings), `push(arr, val)`, `len(arr)`, deep equality via `==`, `for x in arr` iteration
   - ObjArray with growable backing store (capacity doubling). array_create, index_get, index_set opcodes in run()
   - for-in compiles to hidden `$iter` + `$idx` locals, index-based loop with len check and index_get per iteration
-- value types: nil, bool, int (i64), float (f64), string (*ObjString), function (*ObjFunction), struct_ (*ObjStruct), enum_ (*ObjEnum), native_fn (*ObjNativeFn), closure (*ObjClosure), array (*ObjArray), task (*ObjTask), channel (*ObjChannel), listener (*ObjListener), conn (*ObjConn)
+- value types: nil, bool, int (i64), float (f64), string (*ObjString), function (*ObjFunction), struct_ (*ObjStruct), enum_ (*ObjEnum), native_fn (*ObjNativeFn), closure (*ObjClosure), array (*ObjArray), task (*ObjTask), channel (*ObjChannel), listener (*ObjListener), conn (*ObjConn), ptr (raw C pointer for FFI)
 - arena memory model: `arena { ... }` blocks create child arena allocators. all allocations inside use the child arena. freed in bulk on block exit. ArenaStack side struct (heap-allocated, avoids LLVM perturbation) holds up to 16 nested arenas. push_arena/pop_arena opcodes. VM.currentAlloc() routes allocations to active arena
 - concat_local opcode: compile-time detection of `s = s + expr` pattern. compiler emits concat_local instead of get_local+add+set_local. VM maintains a growable ConcatState buffer (heap-allocated, avoids LLVM perturbation). amortized O(1) append instead of O(n) realloc per iteration. also handles `s += expr` compound assignment
 - type-specialized opcodes: add_int, sub_int, mul_int, div_int, mod_int, less_int, greater_int, add_float, sub_float, mul_float, div_float, less_float, greater_float - skip tag checks entirely when compiler can prove operand types. int ops in fastLoop, float ops in run() only (fastLoop size limit)
@@ -248,19 +249,18 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - task state machine: ready -> running -> done, with blocked_send/blocked_recv/blocked_await
   - deadlock detection when all tasks blocked
   - `await_all(spawn { a() }, spawn { b() })` collects results from parallel tasks into an array
-- 73 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read
+- FFI: `extern "lib" { fn name(type, ...) -> type }` syntax. dlopen/dlsym resolution at VM init. trampoline dispatch for up to 6 int/ptr args. cstr auto null-termination. "c" library resolves to libc. FfiState is a heap-allocated side struct (avoids LLVM perturbation). ffi_call opcode with u16 descriptor index + u8 arg count. src/ffi.zig contains FfiState, trampolines, marshaling. build.zig links libc
+- `nil` keyword (not `none`) for null values. Value tag is `.nil`
+- 76 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, ffi_call
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
-- 188 tests, 22 validated examples, 9 benchmarks
-- benchmarks: fib(35) 0.74s (python 0.90s), loop 10M 0.26s (python 0.22s), closure 10M 0.25s (python 0.32s), struct 10M 0.37s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.62s (python 0.64s), match 30M 4.45s (python 2.21s), arena 1M 0.45s (python 0.21s), channel 100K 0.03s
-
-**not yet implemented (VM level):**
-- mutable closure capture (closures currently use copy-capture)
+- 196 tests, 23 validated examples, 9 benchmarks
+- benchmarks: fib(35) 0.84s (python 0.88s), loop 10M 0.20s (python 0.20s), closure 10M 0.25s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.53s (python 0.64s), match 30M 4.35s (python 2.09s), arena 1M 0.49s (python 0.20s), channel 100K 0.03s
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** FFI (zero-cost zig/C interop), non-blocking write (partial write buffering), async connect
+**next:** non-blocking write (partial write buffering), async connect, package manager / module resolution
 
 ## roadmap
 
@@ -274,7 +274,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 8. ~~concurrency runtime - green threads, channels, cooperative scheduler~~
 9. ~~std/http - server module with arena-per-request~~ (v1: utility module with parse_request, respond, route, match_route. server loop in pyr using std/net)
 10. ~~std/json - parsing and serialization~~
-11. FFI - zero-cost zig/C interop
+11. ~~FFI - zero-cost zig/C interop~~ (extern blocks, dlopen/dlsym, trampoline dispatch for up to 6 args)
 12. package manager / module resolution
 
 ## implementation notes

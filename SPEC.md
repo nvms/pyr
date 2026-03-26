@@ -285,6 +285,28 @@ next = ptr.offset(1)
 value = ptr.*
 ```
 
+## FFI (foreign function interface)
+
+call C functions from shared libraries via `extern` blocks:
+```
+extern "c" {
+  fn getpid() -> cint
+  fn strlen(s: cstr) -> cint
+  fn getenv(name: cstr) -> cstr
+}
+
+extern "sqlite3" {
+  fn sqlite3_open(path: cstr, db: ptr) -> cint
+  fn sqlite3_close(db: ptr) -> cint
+}
+```
+
+FFI types: `cint` (32-bit int), `cstr` (null-terminated string), `ptr` (raw pointer), `f64` (double), `void` (no return).
+
+library `"c"` resolves to libc. other names are resolved via dlopen with platform-appropriate extensions (.dylib, .so, .dll).
+
+strings are automatically null-terminated when passed as `cstr`. C strings returned as `cstr` are copied into pyr-managed memory. null pointers return `nil`.
+
 ## server stdlib
 
 the killer app - arena-per-request, compiled route tables, native async I/O:
