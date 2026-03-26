@@ -1400,21 +1400,58 @@ pub const Compiler = struct {
     }
 
     fn compileSetTarget(self: *Compiler, expr: *const ast.Expr) void {
-        if (expr.kind == .identifier) {
-            const name = expr.kind.identifier;
-            if (self.resolveLocal(name)) |slot| {
-                self.emitOp(.set_local);
-                self.emitByte(slot);
-            } else {
-                const idx = self.addStringConstant(name);
-                self.emitOp(.set_global);
-                self.emitU16(idx);
-            }
+        switch (expr.kind) {
+            .identifier => |name| {
+                if (self.resolveLocal(name)) |slot| {
+                    self.emitOp(.set_local);
+                    self.emitByte(slot);
+                } else {
+                    const idx = self.addStringConstant(name);
+                    self.emitOp(.set_global);
+                    self.emitU16(idx);
+                }
+            },
+            .field_access => |fa| {
+                self.compileExpr(fa.target);
+                if (self.resolveFieldIndex(fa.field)) |fi| {
+                    self.emitOp(.set_field_idx);
+                    self.emitByte(fi);
+                } else {
+                    const idx = self.addStringConstant(fa.field);
+                    self.emitOp(.set_field);
+                    self.emitU16(idx);
+                }
+            },
+            .index => |ix| {
+                self.compileExpr(ix.target);
+                self.compileExpr(ix.idx);
+                self.emitOp(.index_set);
+            },
+            else => {},
         }
     }
 
     fn compileGetTarget(self: *Compiler, expr: *const ast.Expr) void {
-        self.compileGetVar(if (expr.kind == .identifier) expr.kind.identifier else "");
+        switch (expr.kind) {
+            .identifier => |name| self.compileGetVar(name),
+            .field_access => |fa| {
+                self.compileExpr(fa.target);
+                if (self.resolveFieldIndex(fa.field)) |fi| {
+                    self.emitOp(.get_field_idx);
+                    self.emitByte(fi);
+                } else {
+                    const idx = self.addStringConstant(fa.field);
+                    self.emitOp(.get_field);
+                    self.emitU16(idx);
+                }
+            },
+            .index => |ix| {
+                self.compileExpr(ix.target);
+                self.compileExpr(ix.idx);
+                self.emitOp(.index_get);
+            },
+            else => self.compileGetVar(""),
+        }
     }
 
     fn resolveLocal(self: *Compiler, name: []const u8) ?u8 {
@@ -1715,8 +1752,8 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
                 i += 1;
                 i += @as(usize, fc) * 2;
             },
-            .get_field => i += 2,
-            .get_field_idx, .concat_local => i += 1,
+            .get_field, .set_field => i += 2,
+            .get_field_idx, .set_field_idx, .concat_local => i += 1,
             .get_local_field => i += 2,
             .enum_variant => i += 6,
             .match_variant => i += 1,

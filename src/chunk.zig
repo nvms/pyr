@@ -41,6 +41,8 @@ pub const OpCode = enum(u8) {
 
     struct_create,
     get_field,
+    set_field,
+    set_field_idx,
     enum_variant,
     match_variant,
     get_payload,

@@ -263,6 +263,40 @@ pub const VM = struct {
                     }
                 },
 
+                .set_field => {
+                    const name_idx = self.readU16();
+                    const field_name = self.currentChunk().constants.items[name_idx].asString().chars;
+                    const target = self.pop();
+                    const val = self.stack[self.sp - 1];
+                    if (target.tag == .struct_) {
+                        if (!target.asStruct().setField(field_name, val)) {
+                            self.runtimeError("struct has no field '{s}'", .{field_name});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot set field on non-struct value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+
+                .set_field_idx => {
+                    const idx = self.readByte();
+                    const target = self.pop();
+                    const val = self.stack[self.sp - 1];
+                    if (target.tag == .struct_) {
+                        const s = target.asStruct();
+                        if (idx < s.field_count) {
+                            s.fieldValues()[idx] = val;
+                        } else {
+                            self.runtimeError("field index out of bounds", .{});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot set field on non-struct value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+
                 .get_local_field => {
                     const slot = self.readByte();
                     const field_idx = self.readByte();
@@ -481,9 +515,9 @@ pub const VM = struct {
                     }
                 },
                 .index_set => {
-                    const val = self.pop();
                     const idx_val = self.pop();
                     const target = self.pop();
+                    const val = self.stack[self.sp - 1];
                     if (target.tag == .array and idx_val.tag == .int) {
                         const arr = target.asArray();
                         const idx = idx_val.asInt();
@@ -1335,4 +1369,24 @@ test "vm: inline match expression" {
 
 test "vm: inline match in loop" {
     try testRun("enum Op { Add(int)\n  Nop }\nfn main() {\n  a = Add(1)\n  mut r = 0\n  for i in range(5) {\n    r = match a {\n      Add(n) -> r + n\n      Nop -> r\n    }\n  }\n  println(r)\n}");
+}
+
+test "vm: struct field mutation" {
+    try testRun("struct Point { x: int\n  y: int }\nfn main() {\n  mut p = Point { x: 1, y: 2 }\n  p.x = 10\n  p.y = 20\n  println(p.x)\n  println(p.y)\n}");
+}
+
+test "vm: array element assignment" {
+    try testRun("fn main() {\n  mut arr = [1, 2, 3]\n  arr[0] = 99\n  arr[2] = arr[0] + 1\n  println(arr[0])\n  println(arr[1])\n  println(arr[2])\n}");
+}
+
+test "vm: compound assignment on field" {
+    try testRun("struct C { val: int }\nfn main() {\n  mut c = C { val: 5 }\n  c.val += 3\n  println(c.val)\n}");
+}
+
+test "vm: compound assignment on array element" {
+    try testRun("fn main() {\n  mut arr = [10, 20]\n  arr[0] += 5\n  arr[1] *= 2\n  println(arr[0])\n  println(arr[1])\n}");
+}
+
+test "vm: array mutation in loop" {
+    try testRun("fn main() {\n  mut arr = [0, 0, 0]\n  for i in range(3) {\n    arr[i] = i * i\n  }\n  println(arr[0])\n  println(arr[1])\n  println(arr[2])\n}");
 }

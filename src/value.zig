@@ -223,6 +223,16 @@ pub const ObjStruct = struct {
         return null;
     }
 
+    pub fn setField(self: *ObjStruct, name: []const u8, val: Value) bool {
+        for (self.field_names, 0..) |fname, i| {
+            if (std.mem.eql(u8, fname, name)) {
+                self.fieldValues()[i] = val;
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn toValue(self: *ObjStruct) Value {
         return Value.initStruct(self);
     }
