@@ -403,8 +403,11 @@ pub const Sema = struct {
     fn analyzeBinding(self: *Sema, binding: ast.Binding, span: ast.Span) void {
         self.analyzeExpr(binding.value);
 
-        if (self.scope.lookupLocal(binding.name)) |existing| {
+        if (self.scope.lookup(binding.name)) |existing| {
             if (existing.is_mut) return;
+        }
+
+        if (self.scope.lookupLocal(binding.name)) |_| {
             self.emitError(span, "redefinition of '{s}'", .{binding.name});
             return;
         }

@@ -1,7 +1,5 @@
-arr = []
-for i in range(1000000):
-    arr.append(i)
+arr = list(range(100))
 s = 0
-for x in arr:
-    s += x
+for i in range(10000000):
+    s += arr[i % 100]
 print(s)

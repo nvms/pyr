@@ -1,11 +1,11 @@
 fn main() {
   arr = []
-  for i in range(1000000) {
+  for i in range(100) {
     push(arr, i)
   }
   mut sum = 0
-  for x in arr {
-    sum = sum + x
+  for i in range(10000000) {
+    sum = sum + arr[i % 100]
   }
   println(sum)
 }

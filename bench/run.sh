@@ -91,11 +91,21 @@ else
 fi
 echo ""
 
-echo "array_sum - 1M push + iterate"
+echo "array_sum - 10M index reads"
 bench "pyr" $PYR run array_sum.pyr
 bench "python" python3 array_sum.py
 if command -v lua > /dev/null 2>&1; then
     bench "lua" lua array_sum.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""
+
+echo "match - 30M enum dispatch"
+bench "pyr" $PYR run match.pyr
+bench "python" python3 match.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua match.lua
 else
     printf "  %-12s (not installed)\n" "lua"
 fi

@@ -1,0 +1,27 @@
+enum Op {
+  Add(int)
+  Sub(int)
+  Nop
+}
+
+fn apply(op: Op, val: int) -> int = match op {
+  Add(n) -> val + n
+  Sub(n) -> val - n
+  Nop -> val
+}
+
+fn main() {
+  a = Add(3)
+  s = Sub(1)
+  n = Nop
+
+  mut result = 0
+  mut i = 0
+  while i < 10000000 {
+    result = apply(a, result)
+    result = apply(s, result)
+    result = apply(n, result)
+    i = i + 1
+  }
+  println(result)
+}
