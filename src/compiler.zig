@@ -231,16 +231,24 @@ pub const Compiler = struct {
     fn compileStmt(self: *Compiler, stmt: ast.Stmt) void {
         switch (stmt.kind) {
             .binding => |b| {
-                self.compileExpr(b.value);
                 if (self.scope_depth > 0) {
                     if (self.resolveLocal(b.name)) |slot| {
-                        self.emitOp(.set_local);
-                        self.emitByte(slot);
-                        self.emitOp(.pop);
+                        if (self.isConcatPattern(b.name, b.value)) {
+                            self.compileConcatRhs(b.value);
+                            self.emitOp(.concat_local);
+                            self.emitByte(slot);
+                        } else {
+                            self.compileExpr(b.value);
+                            self.emitOp(.set_local);
+                            self.emitByte(slot);
+                            self.emitOp(.pop);
+                        }
                     } else {
+                        self.compileExpr(b.value);
                         self.addLocal(b.name);
                     }
                 } else {
+                    self.compileExpr(b.value);
                     const name_idx = self.addStringConstant(b.name);
                     self.emitOp(.define_global);
                     self.emitU16(name_idx);
@@ -251,19 +259,7 @@ pub const Compiler = struct {
                 self.compileSetTarget(a.target);
                 self.emitOp(.pop);
             },
-            .compound_assign => |ca| {
-                self.compileGetTarget(ca.target);
-                self.compileExpr(ca.value);
-                self.emitOp(switch (ca.op) {
-                    .plus_eq => .add,
-                    .minus_eq => .subtract,
-                    .star_eq => .multiply,
-                    .slash_eq => .divide,
-                    else => .add,
-                });
-                self.compileSetTarget(ca.target);
-                self.emitOp(.pop);
-            },
+            .compound_assign => |ca| self.compileCompoundAssign(ca),
             .ret => |r| {
                 if (r.value) |val| {
                     self.compileExpr(val);
@@ -288,6 +284,40 @@ pub const Compiler = struct {
                 self.emitOp(.pop);
             },
         }
+    }
+
+    fn compileCompoundAssign(self: *Compiler, ca: ast.CompoundAssign) void {
+        if (ca.op == .plus_eq and ca.target.kind == .identifier) {
+            if (self.resolveLocal(ca.target.kind.identifier)) |slot| {
+                self.compileExpr(ca.value);
+                self.emitOp(.concat_local);
+                self.emitByte(slot);
+                return;
+            }
+        }
+        self.compileGetTarget(ca.target);
+        self.compileExpr(ca.value);
+        self.emitOp(switch (ca.op) {
+            .plus_eq => .add,
+            .minus_eq => .subtract,
+            .star_eq => .multiply,
+            .slash_eq => .divide,
+            else => .add,
+        });
+        self.compileSetTarget(ca.target);
+        self.emitOp(.pop);
+    }
+
+    fn isConcatPattern(self: *Compiler, name: []const u8, value: *const ast.Expr) bool {
+        if (value.kind != .binary) return false;
+        const bin = value.kind.binary;
+        if (bin.op != .plus) return false;
+        if (bin.lhs.kind != .identifier) return false;
+        return std.mem.eql(u8, bin.lhs.kind.identifier, name) and self.resolveLocal(name) != null;
+    }
+
+    fn compileConcatRhs(self: *Compiler, value: *const ast.Expr) void {
+        self.compileExpr(value.kind.binary.rhs);
     }
 
     fn compileForLoop(self: *Compiler, fl: ast.ForLoop) void {
@@ -1016,7 +1046,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
                 i += @as(usize, fc) * 2;
             },
             .get_field => i += 2,
-            .get_field_idx => i += 1,
+            .get_field_idx, .concat_local => i += 1,
             .enum_variant => i += 5,
             .match_variant => i += 2,
             .get_payload => i += 1,

@@ -9,6 +9,17 @@ const ObjEnum = @import("value.zig").ObjEnum;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ObjClosure = @import("value.zig").ObjClosure;
 
+pub const ConcatState = struct {
+    buf: std.ArrayListUnmanaged(u8),
+    slot: u8,
+    frame: usize,
+    active: bool,
+
+    fn init() ConcatState {
+        return .{ .buf = .{}, .slot = 0, .frame = 0, .active = false };
+    }
+};
+
 pub const VM = struct {
     frames: [64]CallFrame,
     frame_count: usize,
@@ -16,6 +27,7 @@ pub const VM = struct {
     sp: usize,
     globals: std.StringHashMapUnmanaged(Value),
     alloc: std.mem.Allocator,
+    concat: *ConcatState,
 
     pub const CallFrame = struct {
         function: *ObjFunction,
@@ -27,6 +39,8 @@ pub const VM = struct {
     pub const Error = error{RuntimeError};
 
     pub fn init(alloc: std.mem.Allocator) VM {
+        const cs = alloc.create(ConcatState) catch @panic("oom");
+        cs.* = ConcatState.init();
         return .{
             .frames = undefined,
             .frame_count = 0,
@@ -34,6 +48,7 @@ pub const VM = struct {
             .sp = 0,
             .globals = .{},
             .alloc = alloc,
+            .concat = cs,
         };
     }
 
@@ -315,6 +330,12 @@ pub const VM = struct {
                         self.push(Value.initNil());
                     }
                 },
+
+                .concat_local => {
+                    const slot = self.readByte();
+                    const rhs = self.pop();
+                    self.concatAppend(slot, rhs);
+                },
             }
         }
     }
@@ -485,6 +506,12 @@ pub const VM = struct {
                 };
                 self.stack[self.sp] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
                 self.sp += 1;
+            } else if (byte == @intFromEnum(OpCode.concat_local)) {
+                const slot = code[frame.ip];
+                frame.ip += 1;
+                const rhs = self.stack[self.sp - 1];
+                self.sp -= 1;
+                self.concatAppend(slot, rhs);
             } else if (byte == @intFromEnum(OpCode.get_field_idx)) {
                 const idx = code[frame.ip];
                 frame.ip += 1;
@@ -792,6 +819,47 @@ pub const VM = struct {
     // stack and frame helpers
     // ---------------------------------------------------------------
 
+    fn concatAppend(self: *VM, slot: u8, rhs: Value) void {
+        const cs = self.concat;
+        const abs_slot = self.currentFrame().slot_offset + slot;
+        const lhs = self.stack[abs_slot];
+
+        if (lhs.tag != .string or rhs.tag != .string) {
+            self.push(lhs);
+            self.push(rhs);
+            self.binaryOp(.add) catch {};
+            self.stack[abs_slot] = self.pop();
+            return;
+        }
+
+        const rhs_chars = rhs.asString().chars;
+
+        if (cs.active and cs.slot == slot and cs.frame == self.frame_count) {
+            cs.buf.appendSlice(self.alloc, rhs_chars) catch @panic("oom");
+            self.stack[abs_slot].asString().chars = cs.buf.items;
+            return;
+        }
+
+        if (cs.active) self.concatFinalize();
+
+        const lhs_chars = lhs.asString().chars;
+
+        cs.buf.clearRetainingCapacity();
+        cs.buf.appendSlice(self.alloc, lhs_chars) catch @panic("oom");
+        cs.buf.appendSlice(self.alloc, rhs_chars) catch @panic("oom");
+        cs.slot = slot;
+        cs.frame = self.frame_count;
+        cs.active = true;
+
+        self.stack[abs_slot].asString().chars = cs.buf.items;
+    }
+
+    fn concatFinalize(self: *VM) void {
+        const cs = self.concat;
+        if (!cs.active) return;
+        cs.active = false;
+    }
+
     fn push(self: *VM, val: Value) void {
         self.stack[self.sp] = val;
         self.sp += 1;
@@ -963,4 +1031,12 @@ test "vm: string inequality" {
 
 test "vm: get_field_idx optimization" {
     try testRun("struct Vec2 {\n  x: float\n  y: float\n}\nfn sum(v: Vec2) -> float = v.x + v.y\nfn main() {\n  v = Vec2 { x: 10.0, y: 20.0 }\n  println(sum(v))\n}");
+}
+
+test "vm: concat_local in loop" {
+    try testRun("fn main() {\n  mut s = \"\"\n  mut i = 0\n  while i < 5 {\n    s = s + \"x\"\n    i = i + 1\n  }\n  println(s)\n  println(len(s))\n}");
+}
+
+test "vm: concat_local preserves other values" {
+    try testRun("fn main() {\n  mut s = \"hello\"\n  s = s + \" \"\n  s = s + \"world\"\n  println(s)\n}");
 }
