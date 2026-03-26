@@ -1,0 +1,51 @@
+imp std/json { encode, decode }
+imp std/io { println }
+
+struct Point {
+  x: int
+  y: int
+}
+
+struct User {
+  name: str
+  age: int
+  active: bool
+}
+
+fn main() {
+  println(encode(42))
+  println(encode(3.14))
+  println(encode("hello"))
+  println(encode(true))
+  println(encode(none))
+
+  println(encode([1, 2, 3]))
+  println(encode(["a", "b"]))
+
+  p = Point { x: 10, y: 20 }
+  println(encode(p))
+
+  u = User { name: "alice", age: 30, active: true }
+  println(encode(u))
+
+  arr = decode("[1, 2, 3]")
+  println(len(arr))
+  println(arr[0])
+  println(arr[1])
+  println(arr[2])
+
+  println(decode("true"))
+  println(decode("false"))
+  println(decode("null"))
+  println(decode("42"))
+  println(decode("3.14"))
+
+  s = encode(u)
+  u2 = decode(s)
+  println(u2.name)
+  println(u2.age)
+  println(u2.active)
+
+  roundtrip = encode(decode("[10,20,30]"))
+  println(roundtrip)
+}
