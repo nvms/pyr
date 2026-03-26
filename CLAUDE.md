@@ -231,7 +231,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - std/fs: read, write, append, exists, remove. file operations via std.fs.cwd()
   - std/os: env (environment variables), args (returns string array), exit
   - std/json: encode (any pyr value -> JSON string), decode (JSON string -> pyr value). encode handles int, float, str, bool, nil, array, struct, enum. decode returns int/float/str/bool/nil for primitives, ObjArray for arrays, ObjStruct (name "object") for objects. round-trip: decode(encode(v)) preserves structure for structs/arrays
-  - std/net: listen, accept, connect, read, write, close. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd) value types. blocking I/O (v1). loopback connect-before-accept works because kernel handles TCP handshake in backlog
+  - std/net: listen, accept, connect, read, write, close. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd) value types. method-call syntax (`server.accept()`, `conn.read()`) compiles to net_accept/net_read opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`) uses blocking native functions. all sockets set to O_NONBLOCK via fcntl
   - std/http: parse_request, respond, respond_status, json_response, route, match_route. HTTP utility module - server loop written in pyr using std/net primitives. handlers are regular pyr functions. route/match_route pattern for declarative routing
 - type keywords (int, float, str, bool, byte) usable in expression position as conversion functions: `int(3.7)`, `float(5)`
 - assert and assert_eq builtins: assert(condition) exits on failure, assert_eq(a, b) exits with diff on mismatch
@@ -248,9 +248,9 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - task state machine: ready -> running -> done, with blocked_send/blocked_recv/blocked_await
   - deadlock detection when all tasks blocked
   - `await_all(spawn { a() }, spawn { b() })` collects results from parallel tasks into an array
-- 71 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all
+- 73 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
-- 179 tests, 21 validated examples, 9 benchmarks
+- 188 tests, 22 validated examples, 9 benchmarks
 - benchmarks: fib(35) 0.74s (python 0.90s), loop 10M 0.26s (python 0.22s), closure 10M 0.25s (python 0.32s), struct 10M 0.37s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.62s (python 0.64s), match 30M 4.45s (python 2.21s), arena 1M 0.45s (python 0.21s), channel 100K 0.03s
 
 **not yet implemented (VM level):**
@@ -260,7 +260,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** non-blocking I/O (integrate accept/read with scheduler for true async), FFI (zero-cost zig/C interop)
+**next:** FFI (zero-cost zig/C interop), non-blocking write (partial write buffering), async connect
 
 ## roadmap
 

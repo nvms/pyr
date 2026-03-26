@@ -190,7 +190,15 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - `write(conn, data)` writes all bytes to the connection. returns bool
 - `close(handle)` closes a listener or conn fd. accepts either tag
 - address parsing: "0.0.0.0", "localhost", "127.0.0.1", or dotted-decimal notation
-- all I/O is blocking. in v1, `accept()` and `read()` block the entire VM. loopback connections (connect before accept) work because the kernel completes the TCP handshake in the backlog. future: non-blocking I/O with scheduler integration
+- method-call syntax (`server.accept()`, `conn.read()`) compiles to `net_accept`/`net_read` opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`) uses blocking native functions
+- `setNonBlocking(fd)` uses fcntl F_GETFL/F_SETFL with O.NONBLOCK. called on listener fds and accepted connection fds
+- when accept/read would block (WouldBlock) and scheduler is active: task is parked in scheduler's I/O waiter arrays (io_fds, io_ops, io_tasks), state set to `blocked_io`, scheduler switches to next ready task
+- when accept/read would block and no scheduler: blocking `poll` on single fd then retry. transparent fallback to old behavior
+- I/O polling integrated into scheduler via `scheduleNextOrPoll`: tries dequeue, if empty and I/O waiters exist calls `pollAndWake` (blocking `std.posix.poll`), retries dequeue
+- `pollAndWake` performs the actual I/O when an fd is ready, pushes result onto waiting task's stack, enqueues as ready
+- all deadlock-detection sites use `scheduleNextOrPoll` so I/O-blocked tasks don't trigger false deadlocks
+- I/O waiter data stored in Scheduler struct (not a new VM field) to avoid LLVM perturbation
+- connect and write remain blocking. non-blocking connect/write are future optimizations
 
 ## std/http (HTTP utilities)
 

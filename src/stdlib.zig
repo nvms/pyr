@@ -589,6 +589,14 @@ fn netWrite(_: std.mem.Allocator, args: []const Value) Value {
     return Value.initBool(true);
 }
 
+pub fn setNonBlocking(fd: std.posix.fd_t) void {
+    const flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return;
+    const o_flags: std.posix.O = @bitCast(@as(u32, @truncate(flags)));
+    var new_flags = o_flags;
+    new_flags.NONBLOCK = true;
+    _ = std.posix.fcntl(fd, std.posix.F.SETFL, @as(usize, @as(u32, @bitCast(new_flags)))) catch return;
+}
+
 fn netClose(_: std.mem.Allocator, args: []const Value) Value {
     if (args[0].tag == .listener) {
         std.posix.close(args[0].asListener().fd);

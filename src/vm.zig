@@ -11,7 +11,10 @@ const ObjClosure = @import("value.zig").ObjClosure;
 const ObjArray = @import("value.zig").ObjArray;
 const ObjTask = @import("value.zig").ObjTask;
 const ObjChannel = @import("value.zig").ObjChannel;
+const ObjListener = @import("value.zig").ObjListener;
+const ObjConn = @import("value.zig").ObjConn;
 const TaskState = @import("value.zig").TaskState;
+const stdlib = @import("stdlib.zig");
 
 pub const ConcatState = struct {
     buf: std.ArrayListUnmanaged(u8),
@@ -69,6 +72,12 @@ pub const Scheduler = struct {
     active: bool,
     await_waiters: [16]?*ObjTask,
     await_waiter_count: u8,
+    io_fds: [64]std.posix.fd_t,
+    io_ops: [64]IoOp,
+    io_tasks: [64]?*ObjTask,
+    io_count: u8,
+
+    const IoOp = enum(u8) { accept, read };
 
     fn init() Scheduler {
         return .{
@@ -80,6 +89,10 @@ pub const Scheduler = struct {
             .active = false,
             .await_waiters = .{null} ** 16,
             .await_waiter_count = 0,
+            .io_fds = .{0} ** 64,
+            .io_ops = .{.accept} ** 64,
+            .io_tasks = .{null} ** 64,
+            .io_count = 0,
         };
     }
 
@@ -97,6 +110,87 @@ pub const Scheduler = struct {
         self.queue_head = (self.queue_head + 1) % 64;
         self.queue_count -= 1;
         return task;
+    }
+
+    fn parkIo(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, op: IoOp) void {
+        if (self.io_count >= 64) @panic("io poller overflow");
+        self.io_fds[self.io_count] = fd;
+        self.io_ops[self.io_count] = op;
+        self.io_tasks[self.io_count] = task;
+        self.io_count += 1;
+    }
+
+    fn removeIoWaiter(self: *Scheduler, idx: u8) void {
+        self.io_count -= 1;
+        self.io_fds[idx] = self.io_fds[self.io_count];
+        self.io_ops[idx] = self.io_ops[self.io_count];
+        self.io_tasks[idx] = self.io_tasks[self.io_count];
+        self.io_tasks[self.io_count] = null;
+    }
+
+    fn pollAndWake(self: *Scheduler, alloc: std.mem.Allocator) void {
+        if (self.io_count == 0) return;
+
+        var pollfds: [64]std.posix.pollfd = undefined;
+        var i: u8 = 0;
+        while (i < self.io_count) : (i += 1) {
+            pollfds[i] = .{ .fd = self.io_fds[i], .events = std.posix.POLL.IN, .revents = 0 };
+        }
+
+        _ = std.posix.poll(pollfds[0..self.io_count], -1) catch return;
+
+        var j: u8 = self.io_count;
+        while (j > 0) {
+            j -= 1;
+            if (pollfds[j].revents & (std.posix.POLL.IN | std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
+                const task = self.io_tasks[j].?;
+
+                switch (self.io_ops[j]) {
+                    .accept => {
+                        const client_fd = std.posix.accept(self.io_fds[j], null, null, 0) catch {
+                            task.stack[task.sp] = Value.initNil();
+                            task.sp += 1;
+                            task.state = .ready;
+                            self.enqueue(task);
+                            self.removeIoWaiter(j);
+                            continue;
+                        };
+                        stdlib.setNonBlocking(client_fd);
+                        task.stack[task.sp] = ObjConn.create(alloc, client_fd).toValue();
+                        task.sp += 1;
+                    },
+                    .read => {
+                        var buf: [8192]u8 = undefined;
+                        const n = std.posix.read(self.io_fds[j], &buf) catch {
+                            task.stack[task.sp] = Value.initNil();
+                            task.sp += 1;
+                            task.state = .ready;
+                            self.enqueue(task);
+                            self.removeIoWaiter(j);
+                            continue;
+                        };
+                        if (n == 0) {
+                            task.stack[task.sp] = Value.initNil();
+                        } else {
+                            const owned = alloc.dupe(u8, buf[0..n]) catch {
+                                task.stack[task.sp] = Value.initNil();
+                                task.sp += 1;
+                                task.state = .ready;
+                                self.enqueue(task);
+                                self.removeIoWaiter(j);
+                                continue;
+                            };
+                            task.stack[task.sp] = ObjString.create(alloc, owned).toValue();
+                        }
+                        task.sp += 1;
+                    },
+                }
+
+                task.state = .ready;
+                self.enqueue(task);
+                self.removeIoWaiter(j);
+            }
+        }
     }
 };
 
@@ -651,6 +745,8 @@ pub const VM = struct {
                 .await_all => {
                     _ = self.readByte();
                 },
+                .net_accept => try self.execNetAccept(),
+                .net_read => try self.execNetRead(),
                 .slide => {
                     const n = self.readByte();
                     const result = self.stack[self.sp - 1];
@@ -1323,7 +1419,7 @@ pub const VM = struct {
             self.wakeAwaiters(ct);
         }
 
-        if (sched.dequeue()) |next| {
+        if (self.scheduleNextOrPoll()) |next| {
             self.switchTo(next);
             return true;
         }
@@ -1381,7 +1477,7 @@ pub const VM = struct {
                 ct.pending_send = val;
                 ch.addSendWaiter(ct);
 
-                if (self.sched.dequeue()) |next| {
+                if (self.scheduleNextOrPoll()) |next| {
                     self.switchTo(next);
                 } else {
                     self.runtimeError("deadlock: all tasks blocked", .{});
@@ -1416,7 +1512,7 @@ pub const VM = struct {
                 ct.state = .blocked_recv;
                 ch.addRecvWaiter(ct);
 
-                if (self.sched.dequeue()) |next| {
+                if (self.scheduleNextOrPoll()) |next| {
                     self.switchTo(next);
                 } else {
                     self.runtimeError("deadlock: all tasks blocked", .{});
@@ -1449,7 +1545,7 @@ pub const VM = struct {
                 ct.waiting_on = task;
                 self.addAwaitWaiter(ct);
 
-                if (self.sched.dequeue()) |next| {
+                if (self.scheduleNextOrPoll()) |next| {
                     self.switchTo(next);
                 } else {
                     self.runtimeError("deadlock: all tasks blocked", .{});
@@ -1467,6 +1563,124 @@ pub const VM = struct {
             sched.await_waiters[sched.await_waiter_count] = task;
             sched.await_waiter_count += 1;
         }
+    }
+
+    fn scheduleNextOrPoll(self: *VM) ?*ObjTask {
+        if (self.sched.dequeue()) |next| return next;
+        if (self.sched.io_count > 0) {
+            self.sched.pollAndWake(self.alloc);
+            return self.sched.dequeue();
+        }
+        return null;
+    }
+
+    fn execNetAccept(self: *VM) Error!void {
+        const target = self.pop();
+        if (target.tag != .listener) {
+            self.runtimeError("accept on non-listener value", .{});
+            return error.RuntimeError;
+        }
+        const fd = target.asListener().fd;
+        stdlib.setNonBlocking(fd);
+
+        const client_fd = std.posix.accept(fd, null, null, 0) catch |err| {
+            if (err == error.WouldBlock) {
+                if (self.sched.active) {
+                    if (self.sched.current_task) |ct| {
+                        self.saveToTask(ct);
+                        ct.state = .blocked_io;
+                        self.sched.parkIo(ct, fd, .accept);
+
+                        if (self.scheduleNextOrPoll()) |next| {
+                            self.switchTo(next);
+                        } else {
+                            self.runtimeError("deadlock: all tasks blocked", .{});
+                            return error.RuntimeError;
+                        }
+                        return;
+                    }
+                }
+                var pollfds = [1]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+                _ = std.posix.poll(&pollfds, -1) catch {
+                    self.push(Value.initNil());
+                    return;
+                };
+                const retry_fd = std.posix.accept(fd, null, null, 0) catch {
+                    self.push(Value.initNil());
+                    return;
+                };
+                stdlib.setNonBlocking(retry_fd);
+                self.push(ObjConn.create(self.currentAlloc(), retry_fd).toValue());
+                return;
+            }
+            self.push(Value.initNil());
+            return;
+        };
+
+        stdlib.setNonBlocking(client_fd);
+        self.push(ObjConn.create(self.currentAlloc(), client_fd).toValue());
+    }
+
+    fn execNetRead(self: *VM) Error!void {
+        const target = self.pop();
+        if (target.tag != .conn) {
+            self.runtimeError("read on non-conn value", .{});
+            return error.RuntimeError;
+        }
+        const fd = target.asConn().fd;
+        stdlib.setNonBlocking(fd);
+
+        var buf: [8192]u8 = undefined;
+        const n = std.posix.read(fd, &buf) catch |err| {
+            if (err == error.WouldBlock) {
+                if (self.sched.active) {
+                    if (self.sched.current_task) |ct| {
+                        self.saveToTask(ct);
+                        ct.state = .blocked_io;
+                        self.sched.parkIo(ct, fd, .read);
+
+                        if (self.scheduleNextOrPoll()) |next| {
+                            self.switchTo(next);
+                        } else {
+                            self.runtimeError("deadlock: all tasks blocked", .{});
+                            return error.RuntimeError;
+                        }
+                        return;
+                    }
+                }
+                var pollfds = [1]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+                _ = std.posix.poll(&pollfds, -1) catch {
+                    self.push(Value.initNil());
+                    return;
+                };
+                const retry_n = std.posix.read(fd, &buf) catch {
+                    self.push(Value.initNil());
+                    return;
+                };
+                if (retry_n == 0) {
+                    self.push(Value.initNil());
+                    return;
+                }
+                const owned = self.currentAlloc().dupe(u8, buf[0..retry_n]) catch {
+                    self.push(Value.initNil());
+                    return;
+                };
+                self.push(ObjString.create(self.currentAlloc(), owned).toValue());
+                return;
+            }
+            self.push(Value.initNil());
+            return;
+        };
+
+        if (n == 0) {
+            self.push(Value.initNil());
+            return;
+        }
+        const owned = self.currentAlloc().dupe(u8, buf[0..n]) catch {
+            self.push(Value.initNil());
+            return;
+        };
+        self.push(ObjString.create(self.currentAlloc(), owned).toValue());
     }
 
     // ---------------------------------------------------------------
@@ -2618,6 +2832,245 @@ test "vm: http json response over tcp" {
         \\  net.close(conn)
         \\  reply = net.read(client)
         \\  assert(len(reply) > 0)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+// --------------- async I/O tests ---------------
+
+test "vm: method-call accept and read" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19900)
+        \\  client = net.connect("127.0.0.1", 19900)
+        \\  conn = server.accept()
+        \\  net.write(client, "hello")
+        \\  data = conn.read()
+        \\  assert_eq(data, "hello")
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: method-call read returns nil on close" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19901)
+        \\  client = net.connect("127.0.0.1", 19901)
+        \\  conn = server.accept()
+        \\  net.close(client)
+        \\  data = conn.read()
+        \\  assert_eq(data, none)
+        \\  net.close(conn)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: spawned acceptor with channel" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19902)
+        \\  ch = channel(1)
+        \\  spawn {
+        \\    conn = server.accept()
+        \\    data = conn.read()
+        \\    ch.send(data)
+        \\    net.close(conn)
+        \\  }
+        \\  client = net.connect("127.0.0.1", 19902)
+        \\  net.write(client, "async hello")
+        \\  result = ch.recv()
+        \\  assert_eq(result, "async hello")
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: two spawned acceptors" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19903)
+        \\  ch = channel(2)
+        \\  spawn {
+        \\    conn = server.accept()
+        \\    data = conn.read()
+        \\    ch.send(data)
+        \\    net.close(conn)
+        \\  }
+        \\  spawn {
+        \\    conn = server.accept()
+        \\    data = conn.read()
+        \\    ch.send(data)
+        \\    net.close(conn)
+        \\  }
+        \\  c1 = net.connect("127.0.0.1", 19903)
+        \\  c2 = net.connect("127.0.0.1", 19903)
+        \\  net.write(c1, "first")
+        \\  net.write(c2, "second")
+        \\  r1 = ch.recv()
+        \\  r2 = ch.recv()
+        \\  assert(len(r1) > 0)
+        \\  assert(len(r2) > 0)
+        \\  net.close(c1)
+        \\  net.close(c2)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: spawn echo server handles multiple clients" {
+    try testRun(
+        \\imp std/net as net
+        \\fn handle(server, ch) {
+        \\  conn = server.accept()
+        \\  data = conn.read()
+        \\  net.write(conn, data)
+        \\  net.close(conn)
+        \\  ch.send(1)
+        \\}
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19904)
+        \\  ch = channel(3)
+        \\  spawn { handle(server, ch) }
+        \\  spawn { handle(server, ch) }
+        \\  spawn { handle(server, ch) }
+        \\  c1 = net.connect("127.0.0.1", 19904)
+        \\  c2 = net.connect("127.0.0.1", 19904)
+        \\  c3 = net.connect("127.0.0.1", 19904)
+        \\  net.write(c1, "a")
+        \\  net.write(c2, "b")
+        \\  net.write(c3, "c")
+        \\  r1 = c1.read()
+        \\  r2 = c2.read()
+        \\  r3 = c3.read()
+        \\  assert_eq(r1, "a")
+        \\  assert_eq(r2, "b")
+        \\  assert_eq(r3, "c")
+        \\  ch.recv()
+        \\  ch.recv()
+        \\  ch.recv()
+        \\  net.close(c1)
+        \\  net.close(c2)
+        \\  net.close(c3)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: async accept yields to main when blocked" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19905)
+        \\  ch = channel(1)
+        \\  spawn {
+        \\    conn = server.accept()
+        \\    ch.send(42)
+        \\    net.close(conn)
+        \\  }
+        \\  client = net.connect("127.0.0.1", 19905)
+        \\  result = ch.recv()
+        \\  assert_eq(result, 42)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: async read yields to main when blocked" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19906)
+        \\  ch = channel(1)
+        \\  client = net.connect("127.0.0.1", 19906)
+        \\  conn = server.accept()
+        \\  spawn {
+        \\    data = conn.read()
+        \\    ch.send(data)
+        \\  }
+        \\  net.write(client, "delayed")
+        \\  result = ch.recv()
+        \\  assert_eq(result, "delayed")
+        \\  net.close(conn)
+        \\  net.close(client)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: async accept with multiple sequential connections" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19907)
+        \\  ch = channel(2)
+        \\  spawn {
+        \\    conn1 = server.accept()
+        \\    data1 = conn1.read()
+        \\    net.close(conn1)
+        \\    conn2 = server.accept()
+        \\    data2 = conn2.read()
+        \\    net.close(conn2)
+        \\    ch.send(data1)
+        \\    ch.send(data2)
+        \\  }
+        \\  c1 = net.connect("127.0.0.1", 19907)
+        \\  net.write(c1, "one")
+        \\  c2 = net.connect("127.0.0.1", 19907)
+        \\  net.write(c2, "two")
+        \\  r1 = ch.recv()
+        \\  r2 = ch.recv()
+        \\  assert_eq(r1, "one")
+        \\  assert_eq(r2, "two")
+        \\  net.close(c1)
+        \\  net.close(c2)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: async io mixed with channels" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19908)
+        \\  request_ch = channel(1)
+        \\  response_ch = channel(1)
+        \\  spawn {
+        \\    conn = server.accept()
+        \\    data = conn.read()
+        \\    request_ch.send(data)
+        \\    reply = response_ch.recv()
+        \\    net.write(conn, reply)
+        \\    net.close(conn)
+        \\  }
+        \\  client = net.connect("127.0.0.1", 19908)
+        \\  net.write(client, "ping")
+        \\  req = request_ch.recv()
+        \\  assert_eq(req, "ping")
+        \\  response_ch.send("pong")
+        \\  reply = client.read()
+        \\  assert_eq(reply, "pong")
         \\  net.close(client)
         \\  net.close(server)
         \\  println("ok")

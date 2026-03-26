@@ -1,0 +1,79 @@
+imp std/net as net
+imp std/http { parse_request, respond, respond_status, json_response, route, match_route }
+imp std/io { println }
+
+fn handle_hello(req) {
+  respond("hello from async pyr")
+}
+
+fn handle_echo(req) {
+  respond(req.body)
+}
+
+fn handle_json(req) {
+  json_response([1, 2, 3])
+}
+
+fn serve_request(server, routes, done) {
+  conn = server.accept()
+  raw = conn.read()
+  if raw == none {
+    net.close(conn)
+    done.send(1)
+  } else {
+    req = parse_request(raw)
+    if req != none {
+      handler = match_route(routes, req.method, req.path)
+      if handler != none {
+        resp = handler(req)
+        net.write(conn, resp)
+      } else {
+        net.write(conn, respond_status(404, "not found"))
+      }
+    }
+    net.close(conn)
+    done.send(1)
+  }
+}
+
+fn main() {
+  server = net.listen("127.0.0.1", 19910)
+
+  routes = [
+    route("GET", "/hello", handle_hello),
+    route("POST", "/echo", handle_echo),
+    route("GET", "/json", handle_json)
+  ]
+
+  done = channel(3)
+  spawn { serve_request(server, routes, done) }
+  spawn { serve_request(server, routes, done) }
+  spawn { serve_request(server, routes, done) }
+
+  c1 = net.connect("127.0.0.1", 19910)
+  c2 = net.connect("127.0.0.1", 19910)
+  c3 = net.connect("127.0.0.1", 19910)
+
+  net.write(c1, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  net.write(c2, "GET /json HTTP/1.1\r\nHost: localhost\r\n\r\n")
+  net.write(c3, "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n")
+
+  r1 = c1.read()
+  r2 = c2.read()
+  r3 = c3.read()
+
+  assert(len(r1) > 0)
+  assert(len(r2) > 0)
+  assert(len(r3) > 0)
+
+  done.recv()
+  done.recv()
+  done.recv()
+
+  net.close(c1)
+  net.close(c2)
+  net.close(c3)
+  net.close(server)
+
+  println("handled 3 concurrent requests")
+}

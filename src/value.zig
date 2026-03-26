@@ -366,6 +366,7 @@ pub const TaskState = enum(u8) {
     blocked_send,
     blocked_recv,
     blocked_await,
+    blocked_io,
     done,
 };
 
