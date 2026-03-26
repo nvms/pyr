@@ -1430,10 +1430,10 @@ pub const Compiler = struct {
         return switch (bin.op) {
             .plus, .minus, .star, .slash, .percent => blk: {
                 if (lt == .int_ and rt == .int_) break :blk .int_;
-                if ((lt == .float_ or lt == .int_) and (rt == .float_ or rt == .int_)) {
-                    if (lt == .float_ or rt == .float_) break :blk .float_;
-                }
                 if (lt == .string_ and rt == .string_ and bin.op == .plus) break :blk .string_;
+                const l_numeric = lt == .float_ or lt == .int_ or lt == .unknown;
+                const r_numeric = rt == .float_ or rt == .int_ or rt == .unknown;
+                if ((lt == .float_ or rt == .float_) and l_numeric and r_numeric) break :blk .float_;
                 break :blk .unknown;
             },
             .lt, .gt, .lt_eq, .gt_eq, .eq_eq, .bang_eq => .bool_,
