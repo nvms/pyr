@@ -50,6 +50,12 @@ pub const OpCode = enum(u8) {
 
     get_field_idx,
     concat_local,
+
+    add_int,
+    sub_int,
+    less_int,
+    greater_int,
+    add_float,
 };
 
 pub const Chunk = struct {

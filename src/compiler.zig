@@ -12,6 +12,14 @@ const VariantInfo = struct {
     payload_count: u8,
 };
 
+const TypeHint = enum {
+    unknown,
+    int_,
+    float_,
+    string_,
+    bool_,
+};
+
 pub const Compiler = struct {
     alloc: std.mem.Allocator,
     enclosing: ?*Compiler,
@@ -22,12 +30,14 @@ pub const Compiler = struct {
     struct_defs: std.StringHashMapUnmanaged([]const []const u8),
     enum_variants: std.StringHashMapUnmanaged(VariantInfo),
     fn_table: std.StringHashMapUnmanaged(*ObjFunction),
+    fn_returns: std.StringHashMapUnmanaged(TypeHint),
     upvalues: [256]Upvalue,
     upvalue_count: u8,
 
     pub const Local = struct {
         name: []const u8,
         depth: u32,
+        type_hint: TypeHint = .unknown,
     };
 
     pub const Upvalue = struct {
@@ -47,6 +57,7 @@ pub const Compiler = struct {
             .struct_defs = .{},
             .enum_variants = .{},
             .fn_table = .{},
+            .fn_returns = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
         };
@@ -130,6 +141,10 @@ pub const Compiler = struct {
             .fn_decl => |decl| {
                 const func = ObjFunction.create(self.alloc, decl.name, @intCast(decl.params.len));
                 self.fn_table.put(self.alloc, decl.name, func) catch @panic("oom");
+                const ret = typeHintFromExpr(decl.return_type);
+                if (ret != .unknown) {
+                    self.fn_returns.put(self.alloc, decl.name, ret) catch @panic("oom");
+                }
             },
             .struct_decl => |decl| {
                 const names = self.alloc.alloc([]const u8, decl.fields.len) catch @panic("oom");
@@ -175,13 +190,14 @@ pub const Compiler = struct {
             .struct_defs = .{},
             .enum_variants = .{},
             .fn_table = .{},
+            .fn_returns = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
         };
         sub.addLocal("");
 
         for (decl.params) |param| {
-            sub.addLocal(param.name);
+            sub.addLocalTyped(param.name, typeHintFromExpr(param.type_expr));
         }
 
         switch (decl.body) {
@@ -251,8 +267,9 @@ pub const Compiler = struct {
                             self.emitOp(.pop);
                         }
                     } else {
+                        const hint = self.exprType(b.value);
                         self.compileExpr(b.value);
-                        self.addLocal(b.name);
+                        self.addLocalTyped(b.name, hint);
                     }
                 } else {
                     self.compileExpr(b.value);
@@ -345,7 +362,7 @@ pub const Compiler = struct {
         } else {
             self.emitConstant(Value.initInt(0));
         }
-        self.addLocal("$counter");
+        self.addLocalTyped("$counter", .int_);
 
         const loop_start = self.chunk().count();
 
@@ -359,7 +376,7 @@ pub const Compiler = struct {
         self.beginScope();
         self.emitOp(.get_local);
         self.emitByte(self.resolveLocal("$counter").?);
-        self.addLocal(binding);
+        self.addLocalTyped(binding, .int_);
 
         for (body.stmts) |s| {
             self.compileStmt(s);
@@ -533,6 +550,30 @@ pub const Compiler = struct {
 
         self.compileExpr(bin.lhs);
         self.compileExpr(bin.rhs);
+
+        const lt = self.exprType(bin.lhs);
+        const rt = self.exprType(bin.rhs);
+
+        if (lt == .int_ and rt == .int_) {
+            const specialized: ?OpCode = switch (bin.op) {
+                .plus => .add_int,
+                .minus => .sub_int,
+                .lt => .less_int,
+                .gt => .greater_int,
+                else => null,
+            };
+            if (specialized) |op| {
+                self.emitOp(op);
+                return;
+            }
+        }
+
+        if ((lt == .float_ or (lt == .int_ and rt == .float_)) and (rt == .float_ or (rt == .int_ and lt == .float_))) {
+            if (bin.op == .plus) {
+                self.emitOp(.add_float);
+                return;
+            }
+        }
 
         const op: OpCode = switch (bin.op) {
             .plus => .add,
@@ -770,6 +811,7 @@ pub const Compiler = struct {
             .struct_defs = .{},
             .enum_variants = .{},
             .fn_table = .{},
+            .fn_returns = .{},
             .upvalues = undefined,
             .upvalue_count = 0,
         };
@@ -903,8 +945,12 @@ pub const Compiler = struct {
     }
 
     fn addLocal(self: *Compiler, name: []const u8) void {
+        self.addLocalTyped(name, .unknown);
+    }
+
+    fn addLocalTyped(self: *Compiler, name: []const u8, hint: TypeHint) void {
         if (self.local_count == 255) return;
-        self.locals[self.local_count] = .{ .name = name, .depth = self.scope_depth };
+        self.locals[self.local_count] = .{ .name = name, .depth = self.scope_depth, .type_hint = hint };
         self.local_count += 1;
     }
 
@@ -969,6 +1015,64 @@ pub const Compiler = struct {
             c = cur.enclosing;
         }
         return null;
+    }
+
+    fn findReturnType(self: *Compiler, name: []const u8) TypeHint {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.fn_returns.get(name)) |hint| return hint;
+            c = cur.enclosing;
+        }
+        return .unknown;
+    }
+
+    fn localTypeHint(self: *Compiler, name: []const u8) TypeHint {
+        if (self.local_count == 0) return .unknown;
+        var i: u8 = self.local_count;
+        while (i > 0) {
+            i -= 1;
+            if (std.mem.eql(u8, self.locals[i].name, name)) return self.locals[i].type_hint;
+        }
+        return .unknown;
+    }
+
+    fn exprType(self: *Compiler, expr: *const ast.Expr) TypeHint {
+        return switch (expr.kind) {
+            .int_literal => .int_,
+            .float_literal => .float_,
+            .string_literal => .string_,
+            .bool_literal => .bool_,
+            .identifier => |name| self.localTypeHint(name),
+            .binary => |bin| self.binaryType(bin),
+            .unary => |un| switch (un.op) {
+                .negate => self.exprType(un.operand),
+                .not => .bool_,
+                else => .unknown,
+            },
+            .call => |call| if (call.callee.kind == .identifier)
+                self.findReturnType(call.callee.kind.identifier)
+            else
+                .unknown,
+            .if_expr => |ie| self.exprType(ie.then_block.trailing orelse return .unknown),
+            else => .unknown,
+        };
+    }
+
+    fn binaryType(self: *Compiler, bin: ast.Binary) TypeHint {
+        const lt = self.exprType(bin.lhs);
+        const rt = self.exprType(bin.rhs);
+        return switch (bin.op) {
+            .plus, .minus, .star, .slash, .percent => blk: {
+                if (lt == .int_ and rt == .int_) break :blk .int_;
+                if ((lt == .float_ or lt == .int_) and (rt == .float_ or rt == .int_)) {
+                    if (lt == .float_ or rt == .float_) break :blk .float_;
+                }
+                if (lt == .string_ and rt == .string_ and bin.op == .plus) break :blk .string_;
+                break :blk .unknown;
+            },
+            .lt, .gt, .lt_eq, .gt_eq, .eq_eq, .bang_eq => .bool_,
+            else => .unknown,
+        };
     }
 
     fn findFunction(self: *Compiler, name: []const u8) ?*ObjFunction {
@@ -1046,6 +1150,17 @@ pub const Compiler = struct {
     }
 };
 
+fn typeHintFromExpr(type_expr: ?*const ast.TypeExpr) TypeHint {
+    const te = type_expr orelse return .unknown;
+    if (te.kind != .named) return .unknown;
+    const name = te.kind.named;
+    if (std.mem.eql(u8, name, "int")) return .int_;
+    if (std.mem.eql(u8, name, "float")) return .float_;
+    if (std.mem.eql(u8, name, "str")) return .string_;
+    if (std.mem.eql(u8, name, "bool")) return .bool_;
+    return .unknown;
+}
+
 fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
     const code = c.code.items;
     var i: usize = 0;
@@ -1056,7 +1171,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .constant => i += 2,
             .nil, .true_, .false_, .pop => {},
             .get_local, .set_local => i += 1,
-            .add, .subtract, .multiply, .divide, .modulo, .negate => {},
+            .add, .subtract, .multiply, .divide, .modulo, .negate, .add_int, .sub_int, .less_int, .greater_int, .add_float => {},
             .not, .equal, .not_equal, .less, .greater, .less_equal, .greater_equal => {},
             .jump, .jump_if_false, .loop_ => i += 2,
             .call => i += 1,

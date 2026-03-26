@@ -336,6 +336,34 @@ pub const VM = struct {
                     const rhs = self.pop();
                     self.concatAppend(slot, rhs);
                 },
+
+                .add_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(Value.initInt(a.asInt() + b.asInt()));
+                },
+                .sub_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(Value.initInt(a.asInt() - b.asInt()));
+                },
+                .less_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(Value.initBool(a.asInt() < b.asInt()));
+                },
+                .greater_int => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(Value.initBool(a.asInt() > b.asInt()));
+                },
+                .add_float => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    self.push(Value.initFloat(af + bf));
+                },
             }
         }
     }
@@ -506,6 +534,25 @@ pub const VM = struct {
                 };
                 self.stack[self.sp] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
                 self.sp += 1;
+            } else if (byte == @intFromEnum(OpCode.add_int)) {
+                self.sp -= 1;
+                self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() + self.stack[self.sp].asInt());
+            } else if (byte == @intFromEnum(OpCode.sub_int)) {
+                self.sp -= 1;
+                self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() - self.stack[self.sp].asInt());
+            } else if (byte == @intFromEnum(OpCode.less_int)) {
+                self.sp -= 1;
+                self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() < self.stack[self.sp].asInt());
+            } else if (byte == @intFromEnum(OpCode.greater_int)) {
+                self.sp -= 1;
+                self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() > self.stack[self.sp].asInt());
+            } else if (byte == @intFromEnum(OpCode.add_float)) {
+                const b = self.stack[self.sp - 1];
+                const a = self.stack[self.sp - 2];
+                self.sp -= 1;
+                const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
+                const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                self.stack[self.sp - 1] = Value.initFloat(af + bf);
             } else if (byte == @intFromEnum(OpCode.concat_local)) {
                 const slot = code[frame.ip];
                 frame.ip += 1;
