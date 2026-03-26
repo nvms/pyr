@@ -307,6 +307,91 @@ library `"c"` resolves to libc. other names are resolved via dlopen with platfor
 
 strings are automatically null-terminated when passed as `cstr`. C strings returned as `cstr` are copied into pyr-managed memory. null pointers return `nil`.
 
+## packages (draft)
+
+this section is a loose spec - directional, not final.
+
+### manifest: `pyr.pkg`
+
+go.mod-style, purpose-built minimal format. not toml, not json - just a flat declarative file:
+
+```
+name httpserver
+version 0.2.0
+
+require (
+  github.com/nvms/pyr-router v0.3.1
+  github.com/nvms/pyr-json v1.0.0
+)
+```
+
+that's it. no nested tables, no arrays of objects. `name`, `version`, and a `require` block with git-based package references and version tags.
+
+versions are git tags. a commit hash works too for pinning:
+
+```
+require (
+  github.com/nvms/pyr-router v0.3.1
+  github.com/nvms/pyr-json abc1234
+)
+```
+
+### lockfile: `pyr.lock`
+
+auto-generated, records resolved commit hashes for every dependency (including transitive). ensures reproducible builds. never hand-edited.
+
+### import syntax
+
+packages are imported by their registered name (the `name` field from their pyr.pkg):
+
+```
+imp router { serve, get, post }
+imp json { encode, decode }
+```
+
+if two packages export the same name, alias:
+
+```
+imp router as r
+imp json as j
+```
+
+this extends the existing `imp` syntax naturally - std modules are `std/io`, local modules are `math`, packages are `router`.
+
+### resolution
+
+- `imp std/io` - stdlib (compiled-in)
+- `imp math` - local file first (math.pyr relative to entry)
+- `imp router` - if not local, check pyr.pkg dependencies
+
+### local cache
+
+```
+~/.pyr/cache/
+  github.com/
+    nvms/
+      pyr-router/
+        v0.3.1/     <- git checkout at tag
+          pyr.pkg
+          src/
+```
+
+mirroring the git path like Go does. versions are directories. `pyr install` fetches, `pyr update` bumps within semver constraints.
+
+### CLI
+
+- `pyr init` - create pyr.pkg
+- `pyr install` - fetch all dependencies into cache
+- `pyr update [pkg]` - update to latest compatible version
+- `pyr add <url> [version]` - add dependency
+
+### open questions
+
+- semver ranges vs exact pinning? (go uses minimum version selection - worth considering)
+- how to handle packages with native/FFI dependencies?
+- should packages declare their pyr version compatibility?
+- private repos - ssh vs https auth?
+
 ## server stdlib
 
 the killer app - arena-per-request, compiled route tables, native async I/O:
