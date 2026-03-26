@@ -8,8 +8,10 @@ run: ## Run pyr (usage: make run ARGS="build example.pyr")
 	zig build run -- $(ARGS)
 
 examples: build ## Compile example programs
-	./zig-out/bin/pyr build examples/hello.pyr
-	./zig-out/bin/pyr build examples/basics.pyr
+	./zig-out/bin/pyr run examples/hello.pyr
+
+bench: ## Run benchmarks (release build)
+	./bench/run.sh
 
 clean: ## Clean build artifacts
 	rm -rf zig-out .zig-cache zig-cache
