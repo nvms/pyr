@@ -1,50 +1,51 @@
 # Roadmap
 
+pyr is a bytecode VM language. Source compiles to bytecode, bytecode runs on a stack-based interpreter written in Zig.
+
 ## Compiler Foundation
 
-- [x] **Lexer** - tokenize .pyr source files
-  - All token types: keywords, operators, literals, symbols
-  - Number formats: hex, binary, octal, underscores, floats
-  - String literals with escape handling
-  - Comment skipping
-  - 8 tests
+- [x] **Lexer** - tokenize .pyr source files (8 tests)
+- [x] **Parser** - recursive descent + Pratt precedence climbing (42 tests)
+- [x] **Semantic analysis** - scope analysis, name resolution, basic type checking (17 tests)
+- [x] **Bytecode compiler** - AST to bytecode. Each function compiles to its own chunk. Locals are slot-indexed. Two-pass: register globals, then call main()
+- [x] **VM interpreter** - switch-based dispatch. CallFrame stack, value stack, global variable table (8 tests)
 
-- [x] **Parser** - recursive descent with Pratt precedence climbing
-  - Declarations: fn, struct (packed), enum (generic, payloads), trait, import
-  - Expressions: arithmetic, comparison, logical, calls, field access, indexing, if/else, match (patterns, guards), blocks, closures, spawn, pipeline, struct literals, coalesce (??)
-  - Statements: bindings (mut/immutable/typed), assignments, compound assignments, return, for/while
-  - Type expressions: named, generic, optional, pointer, slice
-  - Newline handling: Go-style significance with nesting-aware suppression
-  - 42 tests
+**Status:** Hello world runs end-to-end on the VM. 81 tests passing. Supports: integer/float arithmetic, string values, boolean logic, variable bindings, function definitions and calls, if/else control flow, comparison operators, negation, print/println.
 
-- [x] **Semantic analysis** - scope analysis, name resolution, basic type checking
-  - Two-phase: register declarations, then analyze bodies (forward references)
-  - Scope chain with lexical scoping
-  - Mutability checking, arity checking
-  - Pattern binding in match arms
-  - Built-in functions: println, print, sqrt, len
-  - 17 tests
+## Architecture
 
-- [x] **Zig codegen** - transpile AST to valid Zig source
-  - Functions, structs, enums (tagged unions), bindings
-  - Type mapping: int->i64, float->f64, str->[]const u8, bool->bool, byte->u8
-  - Control flow: if/else, match->switch, for, while
-  - Pipeline desugaring to nested calls
-  - Operator mapping: ??->orelse, &&->and, ||->or
-  - Built-in function mapping: println/print -> std.debug.print
-  - 9 tests
+```
+.pyr source
+  -> lexer -> tokens
+  -> parser -> AST
+  -> sema -> error check
+  -> compiler -> bytecode (Chunk per function)
+  -> VM interpreter -> output
+```
 
-**Status:** Hello world compiles and runs end-to-end (.pyr -> .zig -> native binary). 77 tests passing.
+**Value representation:** Tagged struct - 1 byte tag + 8 byte data. Tags: nil, bool, int (i64), float (f64), string (*ObjString), function (*ObjFunction). No NaN-boxing - clean and debuggable, optimize later if profiling shows it matters.
 
-## In Progress
+**Bytecode:** Single-byte opcodes with u8/u16 inline operands. Stack-based evaluation. 28 opcodes covering constants, locals, globals, arithmetic, comparison, logic, jumps, calls, return, print.
 
-- [ ] **CLI completion** - `pyr build` invokes zig compiler to produce native binary, `pyr run` compiles and executes
+**Memory:** Arena allocator per compilation. All objects (strings, functions) are arena-allocated. No GC needed - arena freed when done.
 
 ## Up Next
 
-- [ ] **Language gaps** - array literals, string interpolation, raw/multiline strings, range expressions, enum variant constructor codegen, import/module resolution
-- [ ] **Stdlib foundation** - std/io, std/fs, std/os, std/net
-- [ ] **Concurrency runtime** - green threads, channels, work-stealing scheduler
-- [ ] **std/http** - server module with arena-per-request memory
-- [ ] **std/json** - JSON parsing and serialization
-- [ ] **Package manager** - module resolution and dependency management
+- [ ] **While loops** in VM (compiler + opcodes done, needs testing)
+- [ ] **Mutable variables** - `set_local`/`set_global` for `mut` bindings
+- [ ] **String operations** - concatenation, length, slicing
+- [ ] **Struct support** - creation, field access, field mutation
+- [ ] **Enum support** - tagged union values, pattern matching
+- [ ] **Closures** - upvalue capture mechanism
+- [ ] **For loops** - iterator protocol or range-based
+- [ ] **Module system** - import resolution
+
+## Long-term
+
+- [ ] **Arena-per-request** - VM-level memory model for the server runtime
+- [ ] **Green threads** - cooperative scheduling, channels
+- [ ] **std/http** - server module with compiled route tables
+- [ ] **std/json** - parsing and serialization
+- [ ] **FFI** - zero-cost calls to Zig/C libraries
+- [ ] **Type-specialized opcodes** - int-specific arithmetic for known types
+- [ ] **Package manager** - module resolution and dependencies
