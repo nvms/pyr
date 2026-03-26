@@ -72,3 +72,13 @@ else
     printf "  %-12s (not installed)\n" "lua"
 fi
 echo ""
+
+echo "string_ops - 100K concatenations"
+bench "pyr" $PYR run string_ops.pyr
+bench "python" python3 string_ops.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua string_ops.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""

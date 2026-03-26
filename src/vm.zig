@@ -209,6 +209,30 @@ pub const VM = struct {
                             self.runtimeError("struct '{s}' has no field '{s}'", .{ s.name, field_name });
                             return error.RuntimeError;
                         }
+                    } else if (val.tag == .string) {
+                        if (std.mem.eql(u8, field_name, "len")) {
+                            self.push(Value.initInt(@intCast(val.asString().chars.len)));
+                        } else {
+                            self.runtimeError("string has no field '{s}'", .{field_name});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot access field on this value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+
+                .get_field_idx => {
+                    const idx = self.readByte();
+                    const val = self.pop();
+                    if (val.tag == .struct_) {
+                        const s = val.asStruct();
+                        if (idx < s.field_values.len) {
+                            self.push(s.field_values[idx]);
+                        } else {
+                            self.runtimeError("field index out of bounds", .{});
+                            return error.RuntimeError;
+                        }
                     } else {
                         self.runtimeError("cannot access field on non-struct value", .{});
                         return error.RuntimeError;
@@ -461,6 +485,16 @@ pub const VM = struct {
                 };
                 self.stack[self.sp] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
                 self.sp += 1;
+            } else if (byte == @intFromEnum(OpCode.get_field_idx)) {
+                const idx = code[frame.ip];
+                frame.ip += 1;
+                const val = self.stack[self.sp - 1];
+                if (val.tag == .struct_) {
+                    self.stack[self.sp - 1] = val.asStruct().field_values[idx];
+                } else {
+                    frame.ip -= 2;
+                    return;
+                }
             } else if (byte == @intFromEnum(OpCode.get_field)) {
                 const hi: u16 = code[frame.ip];
                 const lo: u16 = code[frame.ip + 1];
@@ -583,6 +617,16 @@ pub const VM = struct {
             });
             return;
         }
+        if (a.tag == .string and b.tag == .string and op == .add) {
+            const as = a.asString().chars;
+            const bs = b.asString().chars;
+            const buf = self.alloc.alloc(u8, as.len + bs.len) catch @panic("oom");
+            @memcpy(buf[0..as.len], as);
+            @memcpy(buf[as.len..], bs);
+            const str = ObjString.create(self.alloc, buf);
+            self.stack[self.sp - 1] = str.toValue();
+            return;
+        }
         self.runtimeError("operands must be numbers", .{});
         return error.RuntimeError;
     }
@@ -692,6 +736,17 @@ pub const VM = struct {
                 .modulo => @mod(af, bf),
                 else => 0.0,
             }));
+            return;
+        }
+
+        if (a.tag == .string and b.tag == .string and op == .add) {
+            const as = a.asString().chars;
+            const bs = b.asString().chars;
+            const buf = self.alloc.alloc(u8, as.len + bs.len) catch @panic("oom");
+            @memcpy(buf[0..as.len], as);
+            @memcpy(buf[as.len..], bs);
+            const str = ObjString.create(self.alloc, buf);
+            self.push(str.toValue());
             return;
         }
 
@@ -884,4 +939,28 @@ test "vm: closure as argument" {
 
 test "vm: higher-order function" {
     try testRun("fn twice(f, x: int) -> int = f(f(x))\nfn main() {\n  inc = fn(n) n + 1\n  println(twice(inc, 5))\n}");
+}
+
+test "vm: string concatenation" {
+    try testRun("fn main() {\n  a = \"hello\"\n  b = \" world\"\n  println(a + b)\n}");
+}
+
+test "vm: string length via .len" {
+    try testRun("fn main() {\n  s = \"hello\"\n  println(s.len)\n}");
+}
+
+test "vm: string length via len()" {
+    try testRun("fn main() {\n  println(len(\"test\"))\n}");
+}
+
+test "vm: string equality" {
+    try testRun("fn main() {\n  a = \"hello\"\n  b = \"hello\"\n  println(a == b)\n}");
+}
+
+test "vm: string inequality" {
+    try testRun("fn main() {\n  a = \"hello\"\n  b = \"world\"\n  println(a == b)\n}");
+}
+
+test "vm: get_field_idx optimization" {
+    try testRun("struct Vec2 {\n  x: float\n  y: float\n}\nfn sum(v: Vec2) -> float = v.x + v.y\nfn main() {\n  v = Vec2 { x: 10.0, y: 20.0 }\n  println(sum(v))\n}");
 }

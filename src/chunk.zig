@@ -47,6 +47,8 @@ pub const OpCode = enum(u8) {
 
     make_closure,
     get_upvalue,
+
+    get_field_idx,
 };
 
 pub const Chunk = struct {

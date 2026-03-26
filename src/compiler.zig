@@ -71,6 +71,7 @@ pub const Compiler = struct {
         self.defineNativeFn("abs", 1, &nativeAbs);
         self.defineNativeFn("int", 1, &nativeInt);
         self.defineNativeFn("float", 1, &nativeFloat);
+        self.defineNativeFn("len", 1, &nativeLen);
     }
 
     fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn ([]const Value) Value) void {
@@ -110,6 +111,12 @@ pub const Compiler = struct {
         if (v.tag == .float) return v;
         if (v.tag == .int) return Value.initFloat(@floatFromInt(v.asInt()));
         return Value.initFloat(0.0);
+    }
+
+    fn nativeLen(args: []const Value) Value {
+        const v = args[0];
+        if (v.tag == .string) return Value.initInt(@intCast(v.asString().chars.len));
+        return Value.initInt(0);
     }
 
     // ---------------------------------------------------------------
@@ -397,9 +404,14 @@ pub const Compiler = struct {
             .call => |call| self.compileCall(call),
             .field_access => |fa| {
                 self.compileExpr(fa.target);
-                const name_idx = self.addStringConstant(fa.field);
-                self.emitOp(.get_field);
-                self.emitU16(name_idx);
+                if (self.resolveFieldIndex(fa.field)) |idx| {
+                    self.emitOp(.get_field_idx);
+                    self.emitByte(idx);
+                } else {
+                    const name_idx = self.addStringConstant(fa.field);
+                    self.emitOp(.get_field);
+                    self.emitU16(name_idx);
+                }
             },
             .index => |idx| {
                 self.compileExpr(idx.target);
@@ -888,6 +900,28 @@ pub const Compiler = struct {
         return null;
     }
 
+    fn resolveFieldIndex(self: *Compiler, field: []const u8) ?u8 {
+        var result: ?u8 = null;
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            var it = cur.struct_defs.iterator();
+            while (it.next()) |entry| {
+                for (entry.value_ptr.*, 0..) |fname, i| {
+                    if (std.mem.eql(u8, fname, field)) {
+                        const idx: u8 = @intCast(i);
+                        if (result) |prev| {
+                            if (prev != idx) return null;
+                        } else {
+                            result = idx;
+                        }
+                    }
+                }
+            }
+            c = cur.enclosing;
+        }
+        return result;
+    }
+
     fn findEnumVariant(self: *Compiler, name: []const u8) ?VariantInfo {
         var c: ?*Compiler = self;
         while (c) |cur| {
@@ -982,6 +1016,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
                 i += @as(usize, fc) * 2;
             },
             .get_field => i += 2,
+            .get_field_idx => i += 1,
             .enum_variant => i += 5,
             .match_variant => i += 2,
             .get_payload => i += 1,

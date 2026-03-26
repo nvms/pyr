@@ -1,0 +1,16 @@
+fn greet(name: str) -> str {
+  "hello " + name + "!"
+}
+
+fn main() {
+  msg = greet("world")
+  println(msg)
+  println(msg.len)
+
+  a = "foo"
+  b = "foo"
+  println(a == b)
+
+  c = "bar"
+  println(a == c)
+}

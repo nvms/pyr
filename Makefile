@@ -9,6 +9,8 @@ run: ## Run pyr (usage: make run ARGS="build example.pyr")
 
 examples: build ## Compile example programs
 	./zig-out/bin/pyr run examples/hello.pyr
+	./zig-out/bin/pyr run examples/basics.pyr
+	./zig-out/bin/pyr run examples/strings.pyr
 
 bench: ## Run benchmarks (release build)
 	./bench/run.sh

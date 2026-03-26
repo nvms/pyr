@@ -110,7 +110,8 @@ pub const Value = struct {
             .bool_ => a.asBool() == b.asBool(),
             .int => a.asInt() == b.asInt(),
             .float => a.asFloat() == b.asFloat(),
-            .string, .function, .struct_, .enum_, .native_fn, .closure => a.data == b.data,
+            .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
+            .function, .struct_, .enum_, .native_fn, .closure => a.data == b.data,
         };
     }
 
