@@ -1,5 +1,6 @@
 const std = @import("std");
 const lexer = @import("lexer.zig");
+const parser = @import("parser.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -44,18 +45,42 @@ fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
     };
     defer allocator.free(source);
 
-    var lex = lexer.Lexer.init(source);
-    var count: usize = 0;
-    while (true) {
-        const tok = lex.next();
-        count += 1;
-        if (tok.tag == .eof) break;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const tokens = parser.tokenize(arena.allocator(), source);
+    var p = parser.Parser.init(tokens, source, arena.allocator());
+    const result = p.parse();
+
+    if (result.errors.len > 0) {
+        for (result.errors) |err| {
+            const loc = lineCol(source, err.span.start);
+            std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ path, loc.line, loc.col, err.message });
+        }
+        std.process.exit(1);
     }
-    std.debug.print("lexed {s}: {} tokens\n", .{ path, count });
+
+    std.debug.print("parsed {s}: {d} items\n", .{ path, result.items.len });
 }
 
 fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
     try buildFile(allocator, path);
+}
+
+const LineLoc = struct { line: usize, col: usize };
+
+fn lineCol(source: []const u8, offset: usize) LineLoc {
+    var line: usize = 1;
+    var col: usize = 1;
+    for (source[0..@min(offset, source.len)]) |c| {
+        if (c == '\n') {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    return .{ .line = line, .col = col };
 }
 
 fn printUsage() void {
@@ -72,4 +97,5 @@ fn printUsage() void {
 
 test {
     _ = lexer;
+    _ = @import("parser.zig");
 }

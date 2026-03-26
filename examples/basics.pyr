@@ -1,0 +1,33 @@
+import std/io
+
+struct Point {
+  x: float
+  y: float
+}
+
+enum Shape {
+  Circle(float)
+  Rect(float, float)
+  Point
+}
+
+fn area(s: Shape) -> float = match s {
+  Circle(r) -> 3.14159 * r * r
+  Rect(w, h) -> w * h
+  Point -> 0.0
+}
+
+fn distance(a: Point, b: Point) -> float {
+  dx = a.x - b.x
+  dy = a.y - b.y
+  sqrt(dx * dx + dy * dy)
+}
+
+pub fn main() {
+  p1 = Point { x: 0.0, y: 0.0 }
+  p2 = Point { x: 3.0, y: 4.0 }
+  io.println(distance(p1, p2))
+
+  c = Circle(5.0)
+  io.println(area(c))
+}
