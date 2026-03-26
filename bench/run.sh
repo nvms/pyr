@@ -121,6 +121,16 @@ else
 fi
 echo ""
 
+echo "tcp_echo - 10K request/response round trips"
+bench "pyr" $PYR run tcp_echo.pyr
+bench "python" python3 tcp_echo.py
+if command -v lua > /dev/null 2>&1; then
+    bench "lua" lua tcp_echo.lua
+else
+    printf "  %-12s (not installed)\n" "lua"
+fi
+echo ""
+
 echo "arena_alloc - 1M struct create (no arena vs scoped arena)"
 bench "pyr" $PYR run arena_alloc.pyr
 bench "pyr+arena" $PYR run arena_alloc_scoped.pyr

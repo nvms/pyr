@@ -532,11 +532,23 @@ pub const ObjListener = struct {
 
 pub const ObjConn = struct {
     fd: std.posix.fd_t,
+    nonblock: bool,
 
     pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t) *ObjConn {
         const c = alloc.create(ObjConn) catch @panic("oom");
-        c.* = .{ .fd = fd };
+        c.* = .{ .fd = fd, .nonblock = false };
         return c;
+    }
+
+    pub fn ensureNonBlock(self: *ObjConn) void {
+        if (!self.nonblock) {
+            const flags = std.posix.fcntl(self.fd, std.posix.F.GETFL, 0) catch return;
+            const o_flags: std.posix.O = @bitCast(@as(u32, @truncate(flags)));
+            var new_flags = o_flags;
+            new_flags.NONBLOCK = true;
+            _ = std.posix.fcntl(self.fd, std.posix.F.SETFL, @as(usize, @as(u32, @bitCast(new_flags)))) catch return;
+            self.nonblock = true;
+        }
     }
 
     pub fn toValue(self: *ObjConn) Value {

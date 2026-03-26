@@ -1,0 +1,30 @@
+imp std/net as net
+
+fn main() {
+  n = 10000
+  server = net.listen("127.0.0.1", 19960)
+
+  spawn {
+    conn = server.accept()
+    mut i = 0
+    while i < n {
+      data = conn.read()
+      conn.write(data)
+      i = i + 1
+    }
+    net.close(conn)
+  }
+
+  client = net.connect("127.0.0.1", 19960)
+  spawn {
+    mut i = 0
+    while i < n {
+      client.write("ping")
+      reply = client.read()
+      i = i + 1
+    }
+    net.close(client)
+    net.close(server)
+    println(n)
+  }
+}

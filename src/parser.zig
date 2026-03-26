@@ -1263,7 +1263,7 @@ pub const Parser = struct {
 
     fn expect(self: *Parser, tag: Token.Tag) ?Token {
         if (self.peek() == tag) return self.advance();
-        self.emitErrorFmt("expected {s}", .{@tagName(tag)});
+        self.emitErrorFmt("expected {s}", .{tag.displayName()});
         return null;
     }
 

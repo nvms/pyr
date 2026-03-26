@@ -65,46 +65,80 @@ pub const ArenaStack = struct {
 };
 
 pub const Scheduler = struct {
-    run_queue: [64]?*ObjTask,
-    queue_head: u8,
-    queue_tail: u8,
-    queue_count: u8,
+    alloc: std.mem.Allocator,
+    run_queue: []?*ObjTask,
+    queue_head: u32,
+    queue_tail: u32,
+    queue_count: u32,
+    queue_cap: u32,
     current_task: ?*ObjTask,
     active: bool,
-    await_waiters: [16]?*ObjTask,
-    await_waiter_count: u8,
-    io_fds: [64]std.posix.fd_t,
-    io_ops: [64]IoOp,
-    io_tasks: [64]?*ObjTask,
-    io_count: u8,
-    io_write_data: [64][]const u8,
-    io_write_off: [64]usize,
+    await_waiters: []?*ObjTask,
+    await_waiter_count: u32,
+    await_cap: u32,
+    io_fds: []std.posix.fd_t,
+    io_ops: []IoOp,
+    io_tasks: []?*ObjTask,
+    io_count: u32,
+    io_cap: u32,
+    io_write_data: [][]const u8,
+    io_write_off: []usize,
 
     const IoOp = enum(u8) { accept, read, write, connect };
+    const INIT_QUEUE_CAP = 64;
+    const INIT_IO_CAP = 64;
+    const INIT_AWAIT_CAP = 16;
 
-    fn init() Scheduler {
+    fn init(alloc: std.mem.Allocator) Scheduler {
         return .{
-            .run_queue = .{null} ** 64,
+            .alloc = alloc,
+            .run_queue = allocSlice(?*ObjTask, alloc, INIT_QUEUE_CAP),
             .queue_head = 0,
             .queue_tail = 0,
             .queue_count = 0,
+            .queue_cap = INIT_QUEUE_CAP,
             .current_task = null,
             .active = false,
-            .await_waiters = .{null} ** 16,
+            .await_waiters = allocSlice(?*ObjTask, alloc, INIT_AWAIT_CAP),
             .await_waiter_count = 0,
-            .io_fds = .{0} ** 64,
-            .io_ops = .{.accept} ** 64,
-            .io_tasks = .{null} ** 64,
+            .await_cap = INIT_AWAIT_CAP,
+            .io_fds = allocSlice(std.posix.fd_t, alloc, INIT_IO_CAP),
+            .io_ops = allocSlice(IoOp, alloc, INIT_IO_CAP),
+            .io_tasks = allocSlice(?*ObjTask, alloc, INIT_IO_CAP),
             .io_count = 0,
-            .io_write_data = .{&.{}} ** 64,
-            .io_write_off = .{0} ** 64,
+            .io_cap = INIT_IO_CAP,
+            .io_write_data = allocSlice([]const u8, alloc, INIT_IO_CAP),
+            .io_write_off = allocSlice(usize, alloc, INIT_IO_CAP),
         };
     }
 
+    fn allocSlice(comptime T: type, alloc: std.mem.Allocator, cap: u32) []T {
+        const s = alloc.alloc(T, cap) catch @panic("oom");
+        @memset(s, std.mem.zeroes(T));
+        return s;
+    }
+
+    fn growQueue(self: *Scheduler) void {
+        const new_cap = self.queue_cap * 2;
+        const new_buf = self.alloc.alloc(?*ObjTask, new_cap) catch @panic("oom");
+        @memset(new_buf, null);
+        var i: u32 = 0;
+        var idx = self.queue_head;
+        while (i < self.queue_count) : (i += 1) {
+            new_buf[i] = self.run_queue[idx];
+            idx = (idx + 1) % self.queue_cap;
+        }
+        self.alloc.free(self.run_queue);
+        self.run_queue = new_buf;
+        self.queue_head = 0;
+        self.queue_tail = self.queue_count;
+        self.queue_cap = new_cap;
+    }
+
     fn enqueue(self: *Scheduler, task: *ObjTask) void {
-        if (self.queue_count >= 64) @panic("scheduler queue overflow");
+        if (self.queue_count >= self.queue_cap) self.growQueue();
         self.run_queue[self.queue_tail] = task;
-        self.queue_tail = (self.queue_tail + 1) % 64;
+        self.queue_tail = (self.queue_tail + 1) % self.queue_cap;
         self.queue_count += 1;
     }
 
@@ -112,13 +146,23 @@ pub const Scheduler = struct {
         if (self.queue_count == 0) return null;
         const task = self.run_queue[self.queue_head].?;
         self.run_queue[self.queue_head] = null;
-        self.queue_head = (self.queue_head + 1) % 64;
+        self.queue_head = (self.queue_head + 1) % self.queue_cap;
         self.queue_count -= 1;
         return task;
     }
 
+    fn growIo(self: *Scheduler) void {
+        const new_cap = self.io_cap * 2;
+        self.io_fds = self.alloc.realloc(self.io_fds, new_cap) catch @panic("oom");
+        self.io_ops = self.alloc.realloc(self.io_ops, new_cap) catch @panic("oom");
+        self.io_tasks = self.alloc.realloc(self.io_tasks, new_cap) catch @panic("oom");
+        self.io_write_data = self.alloc.realloc(self.io_write_data, new_cap) catch @panic("oom");
+        self.io_write_off = self.alloc.realloc(self.io_write_off, new_cap) catch @panic("oom");
+        self.io_cap = new_cap;
+    }
+
     fn parkIo(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, op: IoOp) void {
-        if (self.io_count >= 64) @panic("io poller overflow");
+        if (self.io_count >= self.io_cap) self.growIo();
         self.io_fds[self.io_count] = fd;
         self.io_ops[self.io_count] = op;
         self.io_tasks[self.io_count] = task;
@@ -126,7 +170,7 @@ pub const Scheduler = struct {
     }
 
     fn parkIoWrite(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, data: []const u8, offset: usize) void {
-        if (self.io_count >= 64) @panic("io poller overflow");
+        if (self.io_count >= self.io_cap) self.growIo();
         self.io_fds[self.io_count] = fd;
         self.io_ops[self.io_count] = .write;
         self.io_tasks[self.io_count] = task;
@@ -135,7 +179,7 @@ pub const Scheduler = struct {
         self.io_count += 1;
     }
 
-    fn removeIoWaiter(self: *Scheduler, idx: u8) void {
+    fn removeIoWaiter(self: *Scheduler, idx: u32) void {
         self.io_count -= 1;
         self.io_fds[idx] = self.io_fds[self.io_count];
         self.io_ops[idx] = self.io_ops[self.io_count];
@@ -145,19 +189,31 @@ pub const Scheduler = struct {
         self.io_tasks[self.io_count] = null;
     }
 
+    fn growAwaiters(self: *Scheduler) void {
+        const new_cap = self.await_cap * 2;
+        const new_buf = self.alloc.alloc(?*ObjTask, new_cap) catch @panic("oom");
+        @memset(new_buf, null);
+        @memcpy(new_buf[0..self.await_waiter_count], self.await_waiters[0..self.await_waiter_count]);
+        self.alloc.free(self.await_waiters);
+        self.await_waiters = new_buf;
+        self.await_cap = new_cap;
+    }
+
     fn pollAndWake(self: *Scheduler, alloc: std.mem.Allocator) void {
         if (self.io_count == 0) return;
 
-        var pollfds: [64]std.posix.pollfd = undefined;
-        var i: u8 = 0;
+        const pollfds = alloc.alloc(std.posix.pollfd, self.io_count) catch return;
+        defer alloc.free(pollfds);
+
+        var i: u32 = 0;
         while (i < self.io_count) : (i += 1) {
             const events: i16 = if (self.io_ops[i] == .write or self.io_ops[i] == .connect) std.posix.POLL.OUT else std.posix.POLL.IN;
             pollfds[i] = .{ .fd = self.io_fds[i], .events = events, .revents = 0 };
         }
 
-        _ = std.posix.poll(pollfds[0..self.io_count], -1) catch return;
+        _ = std.posix.poll(pollfds, -1) catch return;
 
-        var j: u8 = self.io_count;
+        var j: u32 = self.io_count;
         while (j > 0) {
             j -= 1;
             if (pollfds[j].revents & (std.posix.POLL.IN | std.posix.POLL.OUT | std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
@@ -174,7 +230,9 @@ pub const Scheduler = struct {
                             continue;
                         };
                         stdlib.setNonBlocking(client_fd);
-                        task.stack[task.sp] = ObjConn.create(alloc, client_fd).toValue();
+                        const accepted_conn = ObjConn.create(alloc, client_fd);
+                        accepted_conn.nonblock = true;
+                        task.stack[task.sp] = accepted_conn.toValue();
                         task.sp += 1;
                     },
                     .read => {
@@ -219,7 +277,9 @@ pub const Scheduler = struct {
                             std.posix.close(self.io_fds[j]);
                             task.stack[task.sp] = Value.initNil();
                         } else {
-                            task.stack[task.sp] = ObjConn.create(alloc, self.io_fds[j]).toValue();
+                            const connect_conn = ObjConn.create(alloc, self.io_fds[j]);
+                            connect_conn.nonblock = true;
+                            task.stack[task.sp] = connect_conn.toValue();
                         }
                         task.sp += 1;
                     },
@@ -260,7 +320,7 @@ pub const VM = struct {
         const as = alloc.create(ArenaStack) catch @panic("oom");
         as.* = ArenaStack.init(alloc);
         const sc = alloc.create(Scheduler) catch @panic("oom");
-        sc.* = Scheduler.init();
+        sc.* = Scheduler.init(alloc);
         return .{
             .frames = undefined,
             .frame_count = 0,
@@ -1500,7 +1560,7 @@ pub const VM = struct {
 
     fn wakeAwaiters(self: *VM, finished: *ObjTask) void {
         const sched = self.sched;
-        var i: u8 = 0;
+        var i: u32 = 0;
         while (i < sched.await_waiter_count) {
             if (sched.await_waiters[i]) |waiter| {
                 if (waiter.state == .blocked_await and waiter.waiting_on == finished) {
@@ -1628,10 +1688,9 @@ pub const VM = struct {
 
     fn addAwaitWaiter(self: *VM, task: *ObjTask) void {
         const sched = self.sched;
-        if (sched.await_waiter_count < 16) {
-            sched.await_waiters[sched.await_waiter_count] = task;
-            sched.await_waiter_count += 1;
-        }
+        if (sched.await_waiter_count >= sched.await_cap) sched.growAwaiters();
+        sched.await_waiters[sched.await_waiter_count] = task;
+        sched.await_waiter_count += 1;
     }
 
     fn scheduleNextOrPoll(self: *VM) ?*ObjTask {
@@ -1679,7 +1738,9 @@ pub const VM = struct {
                     return;
                 };
                 stdlib.setNonBlocking(retry_fd);
-                self.push(ObjConn.create(self.currentAlloc(), retry_fd).toValue());
+                const retry_conn = ObjConn.create(self.currentAlloc(), retry_fd);
+                retry_conn.nonblock = true;
+                self.push(retry_conn.toValue());
                 return;
             }
             self.push(Value.initNil());
@@ -1687,7 +1748,9 @@ pub const VM = struct {
         };
 
         stdlib.setNonBlocking(client_fd);
-        self.push(ObjConn.create(self.currentAlloc(), client_fd).toValue());
+        const conn = ObjConn.create(self.currentAlloc(), client_fd);
+        conn.nonblock = true;
+        self.push(conn.toValue());
     }
 
     fn execNetRead(self: *VM) Error!void {
@@ -1696,8 +1759,9 @@ pub const VM = struct {
             self.runtimeError("read on non-conn value", .{});
             return error.RuntimeError;
         }
-        const fd = target.asConn().fd;
-        stdlib.setNonBlocking(fd);
+        const conn_obj = target.asConn();
+        if (self.sched.active) conn_obj.ensureNonBlock();
+        const fd = conn_obj.fd;
 
         var buf: [8192]u8 = undefined;
         const n = std.posix.read(fd, &buf) catch |err| {
@@ -1759,12 +1823,10 @@ pub const VM = struct {
             self.push(Value.initBool(false));
             return;
         }
-        const fd = target.asConn().fd;
+        const conn_obj = target.asConn();
+        if (self.sched.active) conn_obj.ensureNonBlock();
+        const fd = conn_obj.fd;
         const data = data_val.asString().chars;
-
-        if (self.sched.active) {
-            stdlib.setNonBlocking(fd);
-        }
 
         var written: usize = 0;
         while (written < data.len) {
@@ -1841,7 +1903,9 @@ pub const VM = struct {
             };
         }
 
-        self.push(ObjConn.create(self.currentAlloc(), fd).toValue());
+        const nc = ObjConn.create(self.currentAlloc(), fd);
+        if (self.sched.active) nc.nonblock = true;
+        self.push(nc.toValue());
     }
 
     fn execFfiCall(self: *VM) Error!void {

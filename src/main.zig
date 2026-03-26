@@ -57,8 +57,7 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
 
     if (result.errors.len > 0) {
         for (result.errors) |err| {
-            const loc = lineCol(source, err.span.start);
-            std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ path, loc.line, loc.col, err.message });
+            printDiagnostic(path, source, err.span, err.message);
         }
         std.process.exit(1);
     }
@@ -69,8 +68,7 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
     const analysis = sema.Sema.analyzeModule(arena.allocator(), result, &loader, dir);
     if (analysis.errors.len > 0) {
         for (analysis.errors) |err| {
-            const loc = lineCol(source, err.span.start);
-            std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ path, loc.line, loc.col, err.message });
+            printDiagnostic(path, source, err.span, err.message);
         }
         std.process.exit(1);
     }
@@ -113,6 +111,63 @@ fn lineCol(source: []const u8, offset: usize) LineLoc {
         }
     }
     return .{ .line = line, .col = col };
+}
+
+fn getSourceLine(source: []const u8, offset: usize) struct { text: []const u8, line_start: usize } {
+    const clamped = @min(offset, source.len);
+    var start: usize = clamped;
+    while (start > 0 and source[start - 1] != '\n') start -= 1;
+    var end: usize = clamped;
+    while (end < source.len and source[end] != '\n') end += 1;
+    return .{ .text = source[start..end], .line_start = start };
+}
+
+fn printDiagnostic(path: []const u8, source: []const u8, span: @import("ast.zig").Span, message: []const u8) void {
+    const loc = lineCol(source, span.start);
+    const line_info = getSourceLine(source, span.start);
+    const line_text = line_info.text;
+    const col = loc.col;
+
+    const span_len = if (span.end > span.start) @min(span.end - span.start, line_text.len - @min(col - 1, line_text.len)) else 1;
+
+    var line_buf: [8]u8 = undefined;
+    const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{loc.line}) catch "?";
+    const gutter = line_str.len + 1;
+
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+
+    pos += (std.fmt.bufPrint(buf[pos..], "\nerror: {s}\n", .{message}) catch return).len;
+    pos += (std.fmt.bufPrint(buf[pos..], "{s}--> {s}:{d}:{d}\n", .{ pad(gutter), path, loc.line, col }) catch return).len;
+    pos += (std.fmt.bufPrint(buf[pos..], "{s} |\n", .{pad(gutter)}) catch return).len;
+    pos += (std.fmt.bufPrint(buf[pos..], " {s} | {s}\n", .{ line_str, line_text }) catch return).len;
+    pos += (std.fmt.bufPrint(buf[pos..], "{s} | ", .{pad(gutter)}) catch return).len;
+
+    var i: usize = 0;
+    while (i < col - 1) : (i += 1) {
+        if (pos < buf.len) {
+            buf[pos] = ' ';
+            pos += 1;
+        }
+    }
+    var j: usize = 0;
+    while (j < span_len) : (j += 1) {
+        if (pos < buf.len) {
+            buf[pos] = '^';
+            pos += 1;
+        }
+    }
+    if (pos < buf.len) {
+        buf[pos] = '\n';
+        pos += 1;
+    }
+
+    _ = std.posix.write(2, buf[0..pos]) catch {};
+}
+
+fn pad(n: usize) []const u8 {
+    const spaces = "                ";
+    return spaces[0..@min(n, spaces.len)];
 }
 
 fn printUsage() void {
