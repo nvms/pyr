@@ -1832,6 +1832,10 @@ pub const VM = struct {
 
     fn execNetRead(self: *VM) Error!void {
         const target = self.pop();
+        if (target.tag == .tls_conn) {
+            self.execTlsRead(target.asTlsConn());
+            return;
+        }
         if (target.tag != .conn) {
             self.runtimeError("read on non-conn value", .{});
             return error.RuntimeError;
@@ -1905,6 +1909,10 @@ pub const VM = struct {
     fn execNetWrite(self: *VM) Error!void {
         const data_val = self.pop();
         const target = self.pop();
+        if (target.tag == .tls_conn) {
+            self.execTlsWrite(target.asTlsConn(), data_val);
+            return;
+        }
         if (target.tag != .conn or data_val.tag != .string) {
             self.push(self.ioError("write requires conn and string"));
             return;
@@ -1955,13 +1963,15 @@ pub const VM = struct {
         const addr_str = addr_val.asString().chars;
         const port: u16 = @intCast(@as(i64, @max(0, @min(65535, port_val.asInt()))));
 
-        const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch {
-            self.push(self.ioError("socket failed"));
+        const addr = stdlib.net.resolveAddress(self.currentAlloc(), addr_str, port) orelse {
+            self.push(self.ioError("dns resolution failed"));
             return;
         };
 
-        const octets = stdlib.parseAddr(addr_str);
-        const addr = std.net.Address.initIp4(octets, port);
+        const fd = std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, 0) catch {
+            self.push(self.ioError("socket failed"));
+            return;
+        };
 
         if (self.sched.active) {
             stdlib.setNonBlocking(fd);
@@ -2269,6 +2279,70 @@ pub const VM = struct {
     fn ioTimeout(self: *VM) Value {
         const alloc = self.currentAlloc();
         return ObjEnum.create(alloc, "IoError", "Timeout", 3, &.{}).toValue();
+    }
+
+    fn execTlsRead(self: *VM, obj: *@import("value.zig").ObjTlsConn) void {
+        const alloc = self.currentAlloc();
+        const reader = &obj.client.reader;
+        if (reader.end > reader.seek) {
+            const buffered = reader.buffer[reader.seek..reader.end];
+            const owned = alloc.dupe(u8, buffered) catch {
+                self.push(self.ioError("out of memory"));
+                return;
+            };
+            reader.tossBuffered();
+            self.push(ObjString.create(alloc, owned).toValue());
+            return;
+        }
+        const tmo: i32 = if (obj.timeout_ms >= 0) obj.timeout_ms else 5000;
+        var pollfds = [1]std.posix.pollfd{.{ .fd = obj.fd, .events = std.posix.POLL.IN, .revents = 0 }};
+        const poll_n = std.posix.poll(&pollfds, tmo) catch {
+            self.push(self.ioError("poll failed"));
+            return;
+        };
+        if (poll_n == 0) {
+            if (obj.timeout_ms >= 0) {
+                self.push(self.ioTimeout());
+            } else {
+                self.push(self.ioEof());
+            }
+            return;
+        }
+        const data = reader.peekGreedy(1) catch {
+            self.push(self.ioEof());
+            return;
+        };
+        if (data.len == 0) {
+            self.push(self.ioEof());
+            return;
+        }
+        const owned = alloc.dupe(u8, data) catch {
+            self.push(self.ioError("out of memory"));
+            return;
+        };
+        reader.tossBuffered();
+        self.push(ObjString.create(alloc, owned).toValue());
+    }
+
+    fn execTlsWrite(self: *VM, obj: *@import("value.zig").ObjTlsConn, data_val: Value) void {
+        if (data_val.tag != .string) {
+            self.push(self.ioError("write requires string"));
+            return;
+        }
+        const data = data_val.asString().chars;
+        obj.client.writer.writeAll(data) catch {
+            self.push(self.ioError("tls write failed"));
+            return;
+        };
+        obj.client.writer.flush() catch {
+            self.push(self.ioError("tls flush failed"));
+            return;
+        };
+        obj.client.output.flush() catch {
+            self.push(self.ioError("tls flush failed"));
+            return;
+        };
+        self.push(Value.initBool(true));
     }
 };
 

@@ -9,6 +9,7 @@ const os = @import("stdlib/os.zig");
 const json = @import("stdlib/json.zig");
 pub const net = @import("stdlib/net.zig");
 const http = @import("stdlib/http.zig");
+const tls = @import("stdlib/tls.zig");
 
 pub fn makeIoEof(alloc: std.mem.Allocator) Value {
     return ObjEnum.create(alloc, "IoError", "Eof", 0, &.{}).toValue();
@@ -53,6 +54,7 @@ const modules = [_]StdModule{
     .{ .name = "json", .functions = &json.fns },
     .{ .name = "net", .functions = &net.fns },
     .{ .name = "http", .functions = &http.fns },
+    .{ .name = "tls", .functions = &tls.fns },
 };
 
 pub fn writeBytes(fd: std.posix.fd_t, bytes: []const u8) void {
@@ -114,6 +116,7 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
         .listener => writeBytes(fd, "<listener>"),
         .conn => writeBytes(fd, "<conn>"),
         .dgram => writeBytes(fd, "<dgram>"),
+        .tls_conn => writeBytes(fd, "<tls_conn>"),
         .ptr => {
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "<ptr 0x{x}>", .{v.data}) catch return;

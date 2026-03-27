@@ -67,7 +67,7 @@ pub fn writeValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v:
                 buf.appendSlice(alloc, "]}") catch return;
             }
         },
-        .function, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .ptr => buf.appendSlice(alloc, "null") catch return,
+        .function, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ptr => buf.appendSlice(alloc, "null") catch return,
     }
 }
 

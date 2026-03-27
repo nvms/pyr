@@ -1,0 +1,28 @@
+imp std/net as net
+imp std/tls as tls
+imp std/io { println }
+
+fn main() {
+  conn = net.connect("example.com", 443)
+  secure = tls.upgrade(conn, "example.com")
+
+  secure.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+
+  mut total = 0
+  mut i = 0
+  while i < 50 {
+    chunk = secure.read()
+    if chunk == Eof {
+      i = 50
+    } else {
+      total = total + len(chunk)
+    }
+    i = i + 1
+  }
+
+  assert(total > 0)
+  println("received {total} bytes over tls")
+  println("ok")
+
+  net.close(secure)
+}

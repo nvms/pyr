@@ -6,6 +6,7 @@ const ObjEnum = @import("../value.zig").ObjEnum;
 const ObjListener = @import("../value.zig").ObjListener;
 const ObjConn = @import("../value.zig").ObjConn;
 const ObjDgram = @import("../value.zig").ObjDgram;
+const ObjTlsConn = @import("../value.zig").ObjTlsConn;
 const root = @import("../stdlib.zig");
 
 pub const fns = [_]root.NativeDef{
@@ -103,14 +104,26 @@ fn netAccept(alloc: std.mem.Allocator, args: []const Value) Value {
     return ObjConn.create(alloc, client_fd).toValue();
 }
 
+pub fn resolveAddress(alloc: std.mem.Allocator, addr_str: []const u8, port: u16) ?std.net.Address {
+    const octets = parseAddr(addr_str);
+    const is_default = octets[0] == 0 and octets[1] == 0 and octets[2] == 0 and octets[3] == 0;
+    if (!is_default or addr_str.len == 0 or std.mem.eql(u8, addr_str, "0.0.0.0")) {
+        return std.net.Address.initIp4(octets, port);
+    }
+    const list = std.net.getAddressList(alloc, addr_str, port) catch return null;
+    defer list.deinit();
+    if (list.addrs.len == 0) return null;
+    return list.addrs[0];
+}
+
 fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
     if (args[0].tag != .string or args[1].tag != .int) return root.makeIoError(alloc, "connect requires string and int");
     const addr_str = args[0].asString().chars;
     const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
 
-    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return root.makeIoError(alloc, "socket failed");
-    const octets = parseAddr(addr_str);
-    const addr = std.net.Address.initIp4(octets, port);
+    const addr = resolveAddress(alloc, addr_str, port) orelse return root.makeIoError(alloc, "dns resolution failed");
+
+    const fd = std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, 0) catch return root.makeIoError(alloc, "socket failed");
     std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch {
         std.posix.close(fd);
         return root.makeIoError(alloc, "connect failed");
@@ -120,6 +133,7 @@ fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn netRead(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag == .tls_conn) return tlsRead(alloc, args[0].asTlsConn());
     if (args[0].tag != .conn) return root.makeIoError(alloc, "read requires conn");
     const conn = args[0].asConn();
     var buf: [8192]u8 = undefined;
@@ -129,7 +143,42 @@ fn netRead(alloc: std.mem.Allocator, args: []const Value) Value {
     return ObjString.create(alloc, owned).toValue();
 }
 
+pub fn setRecvTimeout(fd: std.posix.fd_t, ms: i32) void {
+    if (ms < 0) return;
+    const ms_long: i64 = ms;
+    const tv = std.posix.timeval{ .sec = @intCast(@divTrunc(ms_long, 1000)), .usec = @intCast(@rem(ms_long, 1000) * 1000) };
+    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, &std.mem.toBytes(tv)) catch {};
+}
+
+pub fn clearRecvTimeout(fd: std.posix.fd_t) void {
+    const tv = std.posix.timeval{ .sec = 0, .usec = 0 };
+    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, &std.mem.toBytes(tv)) catch {};
+}
+
+fn tlsRead(alloc: std.mem.Allocator, obj: *ObjTlsConn) Value {
+    const reader = &obj.client.reader;
+    if (reader.end > reader.seek) {
+        const buffered = reader.buffer[reader.seek..reader.end];
+        const owned = alloc.dupe(u8, buffered) catch return root.makeIoError(alloc, "out of memory");
+        reader.tossBuffered();
+        return ObjString.create(alloc, owned).toValue();
+    }
+    const tmo: i32 = if (obj.timeout_ms >= 0) obj.timeout_ms else 5000;
+    var pollfds = [1]std.posix.pollfd{.{ .fd = obj.fd, .events = std.posix.POLL.IN, .revents = 0 }};
+    const poll_n = std.posix.poll(&pollfds, tmo) catch return root.makeIoError(alloc, "poll failed");
+    if (poll_n == 0) {
+        if (obj.timeout_ms >= 0) return ObjEnum.create(alloc, "IoError", "Timeout", 3, &.{}).toValue();
+        return root.makeIoEof(alloc);
+    }
+    const data = reader.peekGreedy(1) catch return root.makeIoEof(alloc);
+    if (data.len == 0) return root.makeIoEof(alloc);
+    const owned = alloc.dupe(u8, data) catch return root.makeIoError(alloc, "out of memory");
+    reader.tossBuffered();
+    return ObjString.create(alloc, owned).toValue();
+}
+
 fn netWrite(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag == .tls_conn) return tlsWrite(alloc, args[0].asTlsConn(), args);
     if (args[0].tag != .conn or args[1].tag != .string) return root.makeIoError(alloc, "write requires conn and string");
     const conn = args[0].asConn();
     const data = args[1].asString().chars;
@@ -140,6 +189,15 @@ fn netWrite(alloc: std.mem.Allocator, args: []const Value) Value {
     return Value.initBool(true);
 }
 
+fn tlsWrite(alloc: std.mem.Allocator, obj: *ObjTlsConn, args: []const Value) Value {
+    if (args.len < 2 or args[1].tag != .string) return root.makeIoError(alloc, "write requires string");
+    const data = args[1].asString().chars;
+    obj.client.writer.writeAll(data) catch return root.makeIoError(alloc, "tls write failed");
+    obj.client.writer.flush() catch return root.makeIoError(alloc, "tls flush failed");
+    obj.client.output.flush() catch return root.makeIoError(alloc, "tls flush failed");
+    return Value.initBool(true);
+}
+
 fn netClose(_: std.mem.Allocator, args: []const Value) Value {
     if (args[0].tag == .listener) {
         std.posix.close(args[0].asListener().fd);
@@ -147,6 +205,11 @@ fn netClose(_: std.mem.Allocator, args: []const Value) Value {
         std.posix.close(args[0].asConn().fd);
     } else if (args[0].tag == .dgram) {
         std.posix.close(args[0].asDgram().fd);
+    } else if (args[0].tag == .tls_conn) {
+        const obj = args[0].asTlsConn();
+        obj.client.end() catch {};
+        obj.client.writer.flush() catch {};
+        std.posix.close(obj.fd);
     }
     return Value.initNil();
 }
@@ -159,6 +222,8 @@ fn netTimeout(_: std.mem.Allocator, args: []const Value) Value {
         args[0].asConn().timeout_ms = ms;
     } else if (args[0].tag == .dgram) {
         args[0].asDgram().timeout_ms = ms;
+    } else if (args[0].tag == .tls_conn) {
+        args[0].asTlsConn().timeout_ms = ms;
     }
     return Value.initNil();
 }

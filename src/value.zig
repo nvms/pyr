@@ -21,6 +21,7 @@ pub const Value = struct {
         listener,
         conn,
         dgram,
+        tls_conn,
         ptr,
     };
 
@@ -86,6 +87,10 @@ pub const Value = struct {
 
     pub fn initDgram(ptr: *ObjDgram) Value {
         return .{ .tag = .dgram, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initTlsConn(ptr: *ObjTlsConn) Value {
+        return .{ .tag = .tls_conn, .data = @intFromPtr(ptr) };
     }
 
     pub fn initPtr(p: usize) Value {
@@ -156,13 +161,17 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asTlsConn(self: Value) *ObjTlsConn {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram, .tls_conn => true,
             .ptr => self.data != 0,
         };
     }
@@ -186,7 +195,7 @@ pub const Value = struct {
                 }
                 return true;
             },
-            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .ptr => a.data == b.data,
+            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ptr => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -237,6 +246,7 @@ pub const Value = struct {
             .listener => std.debug.print("<listener>", .{}),
             .conn => std.debug.print("<conn>", .{}),
             .dgram => std.debug.print("<dgram>", .{}),
+            .tls_conn => std.debug.print("<tls_conn>", .{}),
             .ptr => std.debug.print("<ptr 0x{x}>", .{self.data}),
             .array => {
                 const arr = self.asArray();
@@ -600,6 +610,22 @@ pub const ObjDgram = struct {
 
     pub fn toValue(self: *ObjDgram) Value {
         return Value.initDgram(self);
+    }
+};
+
+pub const ObjTlsConn = struct {
+    fd: std.posix.fd_t,
+    client: std.crypto.tls.Client,
+    stream_reader: std.net.Stream.Reader,
+    stream_writer: std.net.Stream.Writer,
+    timeout_ms: i32,
+    read_buf: []u8,
+    write_buf: []u8,
+    stream_read_buf: []u8,
+    stream_write_buf: []u8,
+
+    pub fn toValue(self: *ObjTlsConn) Value {
+        return Value.initTlsConn(self);
     }
 };
 
