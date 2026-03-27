@@ -147,6 +147,10 @@ pub const Compiler = struct {
         self.defineNativeFn("to_upper", 1, &nativeToUpper);
         self.defineNativeFn("to_lower", 1, &nativeToLower);
 
+        self.defineHelperFn("map", 2, buildMapFunc);
+        self.defineHelperFn("filter", 2, buildFilterFunc);
+        self.defineHelperFn("reduce", 3, buildReduceFunc);
+
         self.registerBuiltinEnum("IoError", &.{
             .{ .name = "Eof", .payloads = 0 },
             .{ .name = "Closed", .payloads = 0 },
@@ -165,6 +169,17 @@ pub const Compiler = struct {
                 .variant_index = @intCast(i),
             }) catch @panic("oom");
         }
+    }
+
+    fn defineHelperFn(self: *Compiler, name: []const u8, arity: u8, builder: *const fn (std.mem.Allocator) *ObjFunction) void {
+        const func = builder(self.alloc);
+        func.name = name;
+        func.arity = arity;
+        self.fn_table.put(self.alloc, name, func) catch @panic("oom");
+        self.emitConstant(func.toValue());
+        const name_idx = self.addStringConstant(name);
+        self.emitOp(.define_global);
+        self.emitU16(name_idx);
     }
 
     fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn (std.mem.Allocator, []const Value) Value) void {
@@ -902,6 +917,193 @@ pub const Compiler = struct {
         self.endScope();
     }
 
+    fn emitToChunk(alloc: std.mem.Allocator, ch: *@import("chunk.zig").Chunk, op: OpCode) void {
+        ch.write(alloc, @intFromEnum(op), 0);
+    }
+
+    fn emitByteToChunk(alloc: std.mem.Allocator, ch: *@import("chunk.zig").Chunk, byte: u8) void {
+        ch.write(alloc, byte, 0);
+    }
+
+    fn emitConstToChunk(alloc: std.mem.Allocator, ch: *@import("chunk.zig").Chunk, val: Value) void {
+        const idx = ch.addConstant(alloc, val);
+        ch.write(alloc, @intFromEnum(OpCode.constant), 0);
+        ch.write(alloc, @intCast(idx >> 8), 0);
+        ch.write(alloc, @intCast(idx & 0xFF), 0);
+    }
+
+    fn patchJumpInChunk(ch: *@import("chunk.zig").Chunk, hi_pos: usize) void {
+        const target = ch.count();
+        const offset = target - hi_pos - 2;
+        ch.code.items[hi_pos] = @intCast(offset >> 8);
+        ch.code.items[hi_pos + 1] = @intCast(offset & 0xFF);
+    }
+
+    fn emitLoopToChunk(alloc: std.mem.Allocator, ch: *@import("chunk.zig").Chunk, loop_start: usize) void {
+        emitToChunk(alloc, ch, .loop_);
+        const offset = ch.count() - loop_start + 2;
+        emitByteToChunk(alloc, ch, @intCast(offset >> 8));
+        emitByteToChunk(alloc, ch, @intCast(offset & 0xFF));
+    }
+
+    fn buildMapFunc(alloc: std.mem.Allocator) *ObjFunction {
+        const func = ObjFunction.create(alloc, "map", 2);
+        func.locals_only = true;
+        const ch = &func.chunk;
+        const len_const = ch.addConstant(alloc, ObjString.create(alloc, "len").toValue());
+
+        emitToChunk(alloc, ch, .array_create);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitToChunk(alloc, ch, .get_field);
+        emitByteToChunk(alloc, ch, @intCast(len_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(len_const & 0xFF));
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+
+        const loop_start = ch.count();
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 4);
+        emitToChunk(alloc, ch, .less_int);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const exit_hi = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 2);
+        emitToChunk(alloc, ch, .index_local_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .call);
+        emitByteToChunk(alloc, ch, 1);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .array_push);
+        emitToChunk(alloc, ch, .inc_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitLoopToChunk(alloc, ch, loop_start);
+        patchJumpInChunk(ch, exit_hi);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .return_);
+        return func;
+    }
+
+    fn buildFilterFunc(alloc: std.mem.Allocator) *ObjFunction {
+        const func = ObjFunction.create(alloc, "filter", 2);
+        func.locals_only = true;
+        const ch = &func.chunk;
+        const len_const = ch.addConstant(alloc, ObjString.create(alloc, "len").toValue());
+
+        emitToChunk(alloc, ch, .array_create);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitToChunk(alloc, ch, .get_field);
+        emitByteToChunk(alloc, ch, @intCast(len_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(len_const & 0xFF));
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+
+        const loop_start = ch.count();
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 4);
+        emitToChunk(alloc, ch, .less_int);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const exit_hi = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .index_local_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 2);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 6);
+        emitToChunk(alloc, ch, .call);
+        emitByteToChunk(alloc, ch, 1);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const skip_hi = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 6);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .array_push);
+        emitToChunk(alloc, ch, .jump);
+        const end_hi = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        patchJumpInChunk(ch, skip_hi);
+        emitToChunk(alloc, ch, .pop);
+        patchJumpInChunk(ch, end_hi);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .inc_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitLoopToChunk(alloc, ch, loop_start);
+        patchJumpInChunk(ch, exit_hi);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .return_);
+        return func;
+    }
+
+    fn buildReduceFunc(alloc: std.mem.Allocator) *ObjFunction {
+        const func = ObjFunction.create(alloc, "reduce", 3);
+        func.locals_only = true;
+        const ch = &func.chunk;
+        const len_const = ch.addConstant(alloc, ObjString.create(alloc, "len").toValue());
+
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitToChunk(alloc, ch, .get_field);
+        emitByteToChunk(alloc, ch, @intCast(len_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(len_const & 0xFF));
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+
+        const loop_start = ch.count();
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 4);
+        emitToChunk(alloc, ch, .less_int);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const exit_hi = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 2);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .index_local_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .call);
+        emitByteToChunk(alloc, ch, 2);
+        emitToChunk(alloc, ch, .set_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .inc_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitLoopToChunk(alloc, ch, loop_start);
+        patchJumpInChunk(ch, exit_hi);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .return_);
+        return func;
+    }
+
     fn compileForRange(self: *Compiler, binding: []const u8, args: RangeArgs, body: *const ast.Block) void {
         self.beginScope();
 
@@ -1375,6 +1577,7 @@ pub const Compiler = struct {
                 self.emitByte(@intCast(count));
                 return;
             }
+
 
             if (self.findFfiFunc(name)) |desc_idx| {
                 for (call.args) |arg| {

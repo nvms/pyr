@@ -1004,7 +1004,14 @@ pub const VM = struct {
                         return error.RuntimeError;
                     }
                 },
-                .array_push, .array_len => {},
+                .array_push => {
+                    const arr_val = self.pop();
+                    const val = self.pop();
+                    if (arr_val.tag() == .array) {
+                        arr_val.asArray().push(self.currentAlloc(), val);
+                    }
+                },
+                .array_len => {},
                 .push_arena => self.arena_stack.push(),
                 .pop_arena => self.arena_stack.pop(),
 
@@ -1295,6 +1302,14 @@ pub const VM = struct {
                     } else {
                         frame.ip -= 3;
                         return;
+                    }
+                },
+                @intFromEnum(OpCode.array_push) => {
+                    self.sp -= 2;
+                    const arr_val = self.stack[self.sp + 1];
+                    const val = self.stack[self.sp];
+                    if (arr_val.tag() == .array) {
+                        arr_val.asArray().push(self.alloc, val);
                     }
                 },
                 @intFromEnum(OpCode.match_jump) => {

@@ -173,6 +173,9 @@ pub const Sema = struct {
         self.define("replace", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("to_upper", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("to_lower", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("map", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("filter", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("reduce", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("channel", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("await_all", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
 
