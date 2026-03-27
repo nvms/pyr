@@ -9,15 +9,14 @@ fn main() {
   secure.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
 
   mut total = 0
-  mut i = 0
-  while i < 50 {
+  mut reading = true
+  while reading {
     chunk = secure.read()
     if chunk == Eof {
-      i = 50
+      reading = false
     } else {
       total = total + len(chunk)
     }
-    i = i + 1
   }
 
   assert(total > 0)

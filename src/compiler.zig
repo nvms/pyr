@@ -550,7 +550,13 @@ pub const Compiler = struct {
                 self.compileExpr(wl.condition);
                 const exit_jump = self.emitJump(.jump_if_false);
                 self.emitOp(.pop);
-                self.compileBlock(wl.body);
+                self.beginScope();
+                for (wl.body.stmts) |s| self.compileStmt(s);
+                if (wl.body.trailing) |te| {
+                    self.compileExpr(te);
+                    self.emitOp(.pop);
+                }
+                self.endScope();
                 self.emitLoop(loop_start);
                 self.patchJump(exit_jump);
                 self.emitOp(.pop);
