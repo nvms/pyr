@@ -283,6 +283,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`, `"a-b-c".split("-").join("/")`
 - index_local/index_local_local opcodes: fused array indexing. index_local reads array from local slot, pops index from stack. index_local_local reads both array and index from local slots (used in for-in loops). eliminates stack pushes/pops for the common arr[idx] pattern. compiler detects identifier targets in index expressions
 - builtins: sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower. all work with UFCS: `arr.contains(x)`, `str.split(",")`, `"hello".to_upper()`
+- higher-order array operations: map(arr, fn), filter(arr, fn), reduce(arr, fn, init). implemented as helper functions with hand-built bytecode (defineHelperFn in compiler.zig) - not native functions, because natives can't call back into pyr. each emits bytecode that uses the `call` opcode to invoke the callback through normal VM dispatch. marked locals_only for fastLoop execution. work with closures, named functions, and UFCS chaining: `arr.filter(fn(x) x > 0).map(fn(x) x * 2)`
 - benchmarks: fib(35) 0.67s (python 0.86s), loop 10M 0.20s (python 0.22s), closure 10M 0.24s (python 0.32s), struct 10M 0.31s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.64s (python 0.62s), match 30M 2.62s (python 2.07s), arena 1M 0.27s (python 0.22s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.17s)
 
 **not yet implemented (parser level):**
@@ -290,14 +291,14 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** performance (function inlining for small pure functions, match dispatch optimization), dogfooding, map/filter/reduce (need VM callback support)
+**next:** performance (function inlining for small pure functions, match dispatch optimization), dogfooding
 
 ## roadmap
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. map/filter/reduce: need VM callback support for higher-order array operations
-2. function inlining for small pure functions
+1. function inlining for small pure functions
+2. escape analysis: compiler warning when heap allocations (structs, arrays, strings) don't escape their scope and aren't inside an arena block. sema already tracks scopes and names - detect locals that are created, used locally, and never returned/passed/assigned to an outer field. conservative on function args (assume escape). primary target: loop bodies that allocate without an arena
 3. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes

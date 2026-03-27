@@ -1,0 +1,43 @@
+---
+title: Map, Filter, Reduce
+order: 9.5
+description: Higher-order array operations that take a function and apply it across elements. Map transforms, filter selects, and reduce accumulates. All three work with closures, named functions, and UFCS chaining.
+---
+// `map` applies a function to every element
+// and returns a new array of the results.
+fn double(x) { x * 2 }
+
+fn main() {
+  nums = [1, 2, 3, 4, 5]
+  println(map(nums, double))
+  println(nums.map(fn(x) x * 10))
+
+// `filter` keeps elements where the function
+// returns true.
+  println(filter(nums, fn(x) x > 2))
+
+// `reduce` combines all elements into a single
+// value using an accumulator. The third argument
+// is the initial value.
+  total = reduce(nums, fn(acc, x) acc + x, 0)
+  println(total)
+
+// All three work with UFCS, so you can chain
+// them naturally. This reads top to bottom:
+// keep evens, triple them, sum the results.
+  result = [1, 2, 3, 4, 5, 6]
+    .filter(fn(x) x % 2 == 0)
+    .map(fn(x) x * 3)
+    .reduce(fn(a, b) a + b, 0)
+  println(result)
+
+// Closures capture variables from the
+// surrounding scope.
+  threshold = 3
+  big = nums.filter(fn(x) x > threshold)
+  println(big)
+
+// Works on strings too.
+  words = ["hello", "world"]
+  println(words.map(to_upper))
+}
