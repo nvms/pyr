@@ -1,6 +1,6 @@
 ---
 title: Defer
-order: 11
+order: 12
 ---
 // `defer` runs cleanup code when the scope exits.
 // It fires on normal return, early return, `fail`,

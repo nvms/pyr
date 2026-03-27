@@ -1,6 +1,6 @@
 ---
 title: Concurrency
-order: 14
+order: 15
 ---
 // `spawn` creates a green thread (task).
 // Tasks are cooperatively scheduled.

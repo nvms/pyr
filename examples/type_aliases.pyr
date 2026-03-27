@@ -1,0 +1,40 @@
+imp std/io { println }
+
+type Transform = fn(int) -> int
+type ID = int
+
+struct User {
+  id: ID
+  name: str
+}
+
+fn apply(x: int, f: Transform) -> int {
+  f(x)
+}
+
+fn double(x: int) -> int = x * 2
+fn negate(x: int) -> int = 0 - x
+
+fn pipeline(x: int, a: Transform, b: Transform, c: Transform) -> int {
+  c(b(a(x)))
+}
+
+fn add1(x: int) -> int = x + 1
+fn square(x: int) -> int = x * x
+
+fn greet(u: User) {
+  println("hello {u.name} (#{u.id})")
+}
+
+fn main() {
+  println(apply(5, double))
+  println(apply(5, negate))
+
+  result = pipeline(3, add1, double, square)
+  println(result)
+
+  u = User { id: 42, name: "alice" }
+  greet(u)
+
+  println(apply(7, fn(x) x * 3))
+}

@@ -1,6 +1,6 @@
 ---
 title: Error Handling
-order: 10
+order: 11
 ---
 // `T?` is an optional type. Functions can return `nil`.
 fn find(items, target: int) -> int? {

@@ -1,6 +1,6 @@
 ---
 title: Networking
-order: 15
+order: 16
 run: false
 ---
 // Pyr has built-in TCP networking via `std/net`.

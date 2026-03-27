@@ -1,6 +1,6 @@
 ---
 title: Mutable References
-order: 12
+order: 13
 ---
 // Function parameters are immutable by default.
 // Field assignment on a non-`*mut` param is a compile error.

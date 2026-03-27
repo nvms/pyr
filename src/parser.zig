@@ -62,6 +62,13 @@ pub const Parser = struct {
                 }
                 break :blk self.parseImportItem(start);
             },
+            .kw_type => blk: {
+                if (is_pub) {
+                    self.emitError("type aliases cannot be pub");
+                    break :blk null;
+                }
+                break :blk self.parseTypeAlias(start);
+            },
             .kw_extern => blk: {
                 if (is_pub) {
                     self.emitError("extern blocks cannot be pub");
@@ -301,6 +308,21 @@ pub const Parser = struct {
                 .is_pub = is_pub,
                 .name = name,
                 .methods = methods.toOwnedSlice(self.arena) catch @panic("oom"),
+            } },
+        };
+    }
+
+    fn parseTypeAlias(self: *Parser, start: usize) ?ast.Item {
+        _ = self.expect(.kw_type) orelse return null;
+        const name_tok = self.expect(.identifier) orelse return null;
+        _ = self.expect(.eq) orelse return null;
+        self.skipNewlines();
+        const type_expr = self.parseTypeExpr() orelse return null;
+        return .{
+            .span = self.spanFrom(start),
+            .kind = .{ .type_alias = .{
+                .name = name_tok.slice(self.source),
+                .type_expr = type_expr,
             } },
         };
     }
@@ -1226,6 +1248,36 @@ pub const Parser = struct {
             });
         }
 
+        if (self.eat(.kw_fn) != null) {
+            _ = self.expect(.lparen) orelse return null;
+            self.nesting += 1;
+            var params = std.ArrayListUnmanaged(*const ast.TypeExpr){};
+            self.skipNewlines();
+            while (self.peek() != .rparen and !self.atEnd()) {
+                const param = self.parseTypeExpr() orelse return null;
+                params.append(self.arena, param) catch @panic("oom");
+                self.skipNewlines();
+                if (self.peek() != .rparen) {
+                    _ = self.expect(.comma) orelse return null;
+                    self.skipNewlines();
+                }
+            }
+            self.nesting -= 1;
+            _ = self.expect(.rparen) orelse return null;
+            var return_type: ?*const ast.TypeExpr = null;
+            if (self.eat(.arrow) != null) {
+                self.skipNewlines();
+                return_type = self.parseTypeExpr() orelse return null;
+            }
+            return self.create(ast.TypeExpr, .{
+                .span = self.spanFrom(start),
+                .kind = .{ .fn_type = .{
+                    .param_types = params.toOwnedSlice(self.arena) catch @panic("oom"),
+                    .return_type = return_type,
+                } },
+            });
+        }
+
         if (self.eat(.lbracket) != null) {
             _ = self.expect(.rbracket) orelse return null;
             const inner = self.parseTypeExpr() orelse return null;
@@ -1968,4 +2020,27 @@ test "parse try_unwrap still works" {
     try expectNoErrors(result);
     const expr = result.items[0].kind.fn_decl.body.expr;
     try std.testing.expectEqual(ast.Expr.Kind.try_unwrap, std.meta.activeTag(expr.kind));
+}
+
+test "parse type alias" {
+    const result = testParse("type ID = int");
+    try expectNoErrors(result);
+    try std.testing.expectEqual(ast.Item.Kind.type_alias, std.meta.activeTag(result.items[0].kind));
+    try std.testing.expectEqualStrings("ID", result.items[0].kind.type_alias.name);
+}
+
+test "parse fn type expression" {
+    const result = testParse("type F = fn(int, str) -> bool");
+    try expectNoErrors(result);
+    const ta = result.items[0].kind.type_alias;
+    try std.testing.expectEqual(ast.TypeExpr.Kind.fn_type, std.meta.activeTag(ta.type_expr.kind));
+    try std.testing.expectEqual(@as(usize, 2), ta.type_expr.kind.fn_type.param_types.len);
+}
+
+test "parse fn type in param" {
+    const result = testParse("fn apply(x: int, f: fn(int) -> int) -> int = f(x)");
+    try expectNoErrors(result);
+    const params = result.items[0].kind.fn_decl.params;
+    try std.testing.expectEqual(@as(usize, 2), params.len);
+    try std.testing.expectEqual(ast.TypeExpr.Kind.fn_type, std.meta.activeTag(params[1].type_expr.?.kind));
 }

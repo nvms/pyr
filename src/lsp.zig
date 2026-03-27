@@ -12,7 +12,7 @@ const Document = struct {
     version: i64,
 };
 
-const SymbolKind = enum { function, struct_, enum_, trait, variable, parameter, import_ };
+const SymbolKind = enum { function, struct_, enum_, trait, variable, parameter, import_, type_name };
 
 const SymbolInfo = struct {
     name: []const u8,
@@ -561,6 +561,16 @@ fn findDefinition(items: []const ast.Item, name: []const u8, cursor_offset: usiz
                 }
             },
             .import => {},
+            .type_alias => |ta| {
+                if (std.mem.eql(u8, ta.name, name)) {
+                    return .{
+                        .name = ta.name,
+                        .kind = .type_name,
+                        .span = item.span,
+                        .detail = firstLine(source, item.span),
+                    };
+                }
+            },
             .extern_block => |eb| {
                 for (eb.funcs) |f| {
                     if (std.mem.eql(u8, f.name, name)) {

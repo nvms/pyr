@@ -1,6 +1,6 @@
 ---
 title: Strings
-order: 9
+order: 10
 ---
 // Strings support interpolation, indexing, and builtins.
 fn main() {

@@ -597,7 +597,7 @@ pub const Compiler = struct {
         switch (item.kind) {
             .fn_decl => |decl| self.compileFnDecl(decl),
             .binding => |b| self.compileTopBinding(b),
-            .struct_decl, .enum_decl, .trait_decl => {},
+            .struct_decl, .enum_decl, .trait_decl, .type_alias => {},
             .import => |imp| self.compileImport(imp),
             .extern_block => {},
         }

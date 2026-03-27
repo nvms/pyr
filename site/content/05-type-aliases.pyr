@@ -1,0 +1,45 @@
+---
+title: Type Aliases
+order: 5
+---
+// `type` creates a named alias for any type expression.
+// Useful for documenting intent and reducing repetition.
+type ID = int
+type Name = str
+
+struct User {
+  id: ID
+  name: Name
+}
+
+// Function types use `fn(params) -> return` syntax.
+// Aliases make function-typed parameters readable.
+type Transform = fn(int) -> int
+
+fn apply(x: int, f: Transform) -> int {
+  f(x)
+}
+
+fn double(x: int) -> int = x * 2
+fn negate(x: int) -> int = 0 - x
+
+// Inline function types work too, without an alias.
+fn apply_inline(x: int, f: fn(int) -> int) -> int {
+  f(x)
+}
+
+// Aliases shine when passing multiple functions.
+fn pipeline(x: int, a: Transform, b: Transform) -> int {
+  b(a(x))
+}
+
+fn add1(x: int) -> int = x + 1
+
+fn main() {
+  println(apply(5, double))
+  println(apply(5, negate))
+
+  println(apply_inline(7, fn(x) x * 3))
+
+  println(pipeline(3, add1, double))
+}

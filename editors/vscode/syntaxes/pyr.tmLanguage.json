@@ -97,7 +97,7 @@
         },
         {
           "name": "keyword.other.pyr",
-          "match": "\\b(fn|struct|enum|trait|pub|imp|as|mut|extern)\\b"
+          "match": "\\b(fn|struct|enum|trait|pub|imp|as|mut|extern|type)\\b"
         }
       ]
     },

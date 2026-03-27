@@ -4462,3 +4462,15 @@ test "vm: ufcs with native" {
 test "vm: ufcs with struct" {
     try testRun("struct Point { x: float\n  y: float }\nfn mag(p: Point) -> float { sqrt(p.x * p.x + p.y * p.y) }\nfn main() {\n  p = Point { x: 3.0, y: 4.0 }\n  assert_eq(p.mag(), 5.0)\n}");
 }
+
+test "vm: type alias for fn" {
+    try testRun("type Op = fn(int) -> int\nfn apply(x: int, f: Op) -> int { f(x) }\nfn dbl(x: int) -> int = x * 2\nfn main() {\n  assert_eq(apply(5, dbl), 10)\n  println(\"ok\")\n}");
+}
+
+test "vm: inline fn type" {
+    try testRun("fn apply(x: int, f: fn(int) -> int) -> int { f(x) }\nfn inc(x: int) -> int = x + 1\nfn main() {\n  assert_eq(apply(9, inc), 10)\n  println(\"ok\")\n}");
+}
+
+test "vm: type alias for primitive" {
+    try testRun("type ID = int\nfn show(id: ID) { println(id) }\nfn main() { show(42) }");
+}

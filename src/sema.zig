@@ -271,6 +271,14 @@ pub const Sema = struct {
                     });
                 }
             },
+            .type_alias => |ta| {
+                const ty = self.resolveType(ta.type_expr);
+                self.define(ta.name, .{
+                    .ty = ty,
+                    .is_mut = false,
+                    .kind = .type_name,
+                });
+            },
         }
     }
 
@@ -363,6 +371,7 @@ pub const Sema = struct {
             .import => {},
             .binding => |b| self.analyzeBinding(b, item.span),
             .extern_block => {},
+            .type_alias => {},
         }
     }
 
@@ -616,7 +625,14 @@ pub const Sema = struct {
 
     fn resolveType(self: *Sema, type_expr: *const ast.TypeExpr) *const Type {
         return switch (type_expr.kind) {
-            .named => |name| resolveNamedType(name),
+            .named => |name| blk: {
+                const builtin = resolveNamedType(name);
+                if (builtin.* != .err) break :blk builtin;
+                if (self.resolve(name)) |sym| {
+                    if (sym.kind == .type_name) break :blk sym.ty;
+                }
+                break :blk self.create(Type, .{ .named = name });
+            },
             .generic => |g| self.create(Type, .{ .named = g.name }),
             .optional => |inner| self.create(Type, .{ .optional = self.resolveType(inner) }),
             .result => |r| self.create(Type, .{ .optional = self.resolveType(r.ok_type) }),
@@ -625,6 +641,10 @@ pub const Sema = struct {
                 .is_mut = p.is_mut,
             } }),
             .slice => |inner| self.create(Type, .{ .slice = self.resolveType(inner) }),
+            .fn_type => |ft| self.create(Type, .{ .fn_ = .{
+                .param_count = ft.param_types.len,
+                .return_type = if (ft.return_type) |rt| self.resolveType(rt) else &t_void,
+            } }),
         };
     }
 

@@ -1,6 +1,6 @@
 ---
 title: Pattern Matching
-order: 7
+order: 8
 ---
 // `match` works on enums, literals, and wildcards.
 enum Color { Red, Green, Blue }

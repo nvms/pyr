@@ -1,6 +1,6 @@
 ---
 title: Structs
-order: 5
+order: 6
 ---
 // Structs are plain data types with named fields.
 struct Point {

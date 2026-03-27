@@ -1,6 +1,6 @@
 ---
 title: Arrays
-order: 8
+order: 9
 ---
 // Arrays are created with `[]` syntax.
 fn main() {

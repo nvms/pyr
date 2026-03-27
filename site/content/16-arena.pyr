@@ -1,6 +1,6 @@
 ---
 title: Arena Memory
-order: 16
+order: 17
 ---
 // `arena` blocks create a scoped memory region.
 // All allocations inside use the arena allocator.

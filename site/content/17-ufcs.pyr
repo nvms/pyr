@@ -1,6 +1,6 @@
 ---
 title: UFCS
-order: 17
+order: 18
 ---
 // Any function can be called with dot syntax
 // on its first argument. No methods, no impl blocks.

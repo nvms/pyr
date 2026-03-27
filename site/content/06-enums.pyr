@@ -1,6 +1,6 @@
 ---
 title: Enums
-order: 6
+order: 7
 ---
 // Enums are algebraic types. Variants can carry payloads.
 enum Shape {

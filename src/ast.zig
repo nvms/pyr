@@ -29,6 +29,7 @@ pub const Item = struct {
         import: Import,
         binding: Binding,
         extern_block: ExternBlock,
+        type_alias: TypeAlias,
     };
 };
 
@@ -319,12 +320,23 @@ pub const TypeExpr = struct {
         result: Result,
         pointer: Pointer,
         slice: *const TypeExpr,
+        fn_type: FnTypeExpr,
     };
 };
 
 pub const Result = struct {
     ok_type: *const TypeExpr,
     err_type: ?*const TypeExpr,
+};
+
+pub const FnTypeExpr = struct {
+    param_types: []const *const TypeExpr,
+    return_type: ?*const TypeExpr,
+};
+
+pub const TypeAlias = struct {
+    name: []const u8,
+    type_expr: *const TypeExpr,
 };
 
 pub const Generic = struct {

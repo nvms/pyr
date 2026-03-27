@@ -1,6 +1,6 @@
 ---
 title: JSON
-order: 18
+order: 19
 ---
 // `std/json` encodes and decodes pyr values.
 imp std/json { encode, decode }
