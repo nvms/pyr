@@ -1,0 +1,26 @@
+imp std/net as net
+
+fn main() {
+  server = net.udp_bind("127.0.0.1", 19970)
+
+  client = net.udp_open()
+  net.sendto(client, "hello udp", "127.0.0.1", 19970)
+
+  msg = net.recvfrom(server)
+  println(msg.data)
+  println(msg.addr)
+  assert(msg.port > 0)
+
+  net.sendto(server, "reply", msg.addr, msg.port)
+
+  reply = net.recvfrom(client)
+  println(reply.data)
+
+  client.sendto("method syntax", "127.0.0.1", 19970)
+  msg2 = server.recvfrom()
+  println(msg2.data)
+
+  net.close(server)
+  net.close(client)
+  println("done")
+}

@@ -13,6 +13,7 @@ const ObjTask = @import("value.zig").ObjTask;
 const ObjChannel = @import("value.zig").ObjChannel;
 const ObjListener = @import("value.zig").ObjListener;
 const ObjConn = @import("value.zig").ObjConn;
+const ObjDgram = @import("value.zig").ObjDgram;
 const TaskState = @import("value.zig").TaskState;
 const stdlib = @import("stdlib.zig");
 const ffi_mod = @import("ffi.zig");
@@ -85,7 +86,7 @@ pub const Scheduler = struct {
     io_write_off: []usize,
     io_deadlines: []i64,
 
-    const IoOp = enum(u8) { accept, read, write, connect };
+    const IoOp = enum(u8) { accept, read, write, connect, recvfrom };
     const INIT_QUEUE_CAP = 64;
     const INIT_IO_CAP = 64;
     const INIT_AWAIT_CAP = 16;
@@ -318,6 +319,25 @@ pub const Scheduler = struct {
                             const connect_conn = ObjConn.create(alloc, self.io_fds[j]);
                             connect_conn.nonblock = true;
                             task.stack[task.sp] = connect_conn.toValue();
+                        }
+                        task.sp += 1;
+                    },
+                    .recvfrom => {
+                        var buf: [65535]u8 = undefined;
+                        var src_addr: std.posix.sockaddr.in = undefined;
+                        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+                        const n = std.posix.recvfrom(self.io_fds[j], &buf, 0, @ptrCast(&src_addr), &addr_len) catch {
+                            task.stack[task.sp] = stdlib.makeIoError(alloc, "recvfrom failed");
+                            task.sp += 1;
+                            task.state = .ready;
+                            self.enqueue(task);
+                            self.removeIoWaiter(j);
+                            continue;
+                        };
+                        if (n == 0) {
+                            task.stack[task.sp] = stdlib.makeIoEof(alloc);
+                        } else {
+                            task.stack[task.sp] = stdlib.buildRecvfromResult(alloc, buf[0..n], &src_addr);
                         }
                         task.sp += 1;
                     },
@@ -906,6 +926,8 @@ pub const VM = struct {
                 .net_read => try self.execNetRead(),
                 .net_write => try self.execNetWrite(),
                 .net_connect => try self.execNetConnect(),
+                .net_sendto => try self.execNetSendto(),
+                .net_recvfrom => try self.execNetRecvfrom(),
                 .ffi_call => try self.execFfiCall(),
                 .slide => {
                     const n = self.readByte();
@@ -1974,6 +1996,93 @@ pub const VM = struct {
         const nc = ObjConn.create(self.currentAlloc(), fd);
         if (self.sched.active) nc.nonblock = true;
         self.push(nc.toValue());
+    }
+
+    fn execNetSendto(self: *VM) Error!void {
+        const port_val = self.pop();
+        const addr_val = self.pop();
+        const data_val = self.pop();
+        const target = self.pop();
+        if (target.tag != .dgram or data_val.tag != .string or addr_val.tag != .string or port_val.tag != .int) {
+            self.push(self.ioError("sendto requires dgram, string, string, int"));
+            return;
+        }
+        const dgram = target.asDgram();
+        const data = data_val.asString().chars;
+        const addr_str = addr_val.asString().chars;
+        const port: u16 = @intCast(@as(i64, @max(0, @min(65535, port_val.asInt()))));
+
+        const octets = stdlib.parseAddr(addr_str);
+        const dest = std.net.Address.initIp4(octets, port);
+        _ = std.posix.sendto(dgram.fd, data, 0, &dest.any, dest.getOsSockLen()) catch {
+            self.push(self.ioError("sendto failed"));
+            return;
+        };
+        self.push(Value.initBool(true));
+    }
+
+    fn execNetRecvfrom(self: *VM) Error!void {
+        const target = self.pop();
+        if (target.tag != .dgram) {
+            self.runtimeError("recvfrom on non-dgram value", .{});
+            return error.RuntimeError;
+        }
+        const dgram = target.asDgram();
+        const tmo = dgram.timeout_ms;
+
+        if (self.sched.active) dgram.ensureNonBlock();
+
+        var buf: [65535]u8 = undefined;
+        var src_addr: std.posix.sockaddr.in = undefined;
+        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+        const n = std.posix.recvfrom(dgram.fd, &buf, 0, @ptrCast(&src_addr), &addr_len) catch |err| {
+            if (err == error.WouldBlock) {
+                if (self.sched.active) {
+                    if (self.sched.current_task) |ct| {
+                        self.saveToTask(ct);
+                        ct.state = .blocked_io;
+                        self.sched.parkIo(ct, dgram.fd, .recvfrom, tmo);
+
+                        if (self.scheduleNextOrPoll()) |next| {
+                            self.switchTo(next);
+                        } else {
+                            self.runtimeError("deadlock: all tasks blocked", .{});
+                            return error.RuntimeError;
+                        }
+                        return;
+                    }
+                }
+                if (tmo >= 0) {
+                    var pollfds = [1]std.posix.pollfd{.{ .fd = dgram.fd, .events = std.posix.POLL.IN, .revents = 0 }};
+                    const poll_n = std.posix.poll(&pollfds, tmo) catch {
+                        self.push(self.ioError("poll failed"));
+                        return;
+                    };
+                    if (poll_n == 0) {
+                        self.push(self.ioTimeout());
+                        return;
+                    }
+                    const retry_n = std.posix.recvfrom(dgram.fd, &buf, 0, @ptrCast(&src_addr), &addr_len) catch {
+                        self.push(self.ioError("recvfrom failed"));
+                        return;
+                    };
+                    if (retry_n == 0) {
+                        self.push(self.ioEof());
+                        return;
+                    }
+                    self.push(stdlib.buildRecvfromResult(self.currentAlloc(), buf[0..retry_n], &src_addr));
+                    return;
+                }
+            }
+            self.push(self.ioError("recvfrom failed"));
+            return;
+        };
+        if (n == 0) {
+            self.push(self.ioEof());
+            return;
+        }
+
+        self.push(stdlib.buildRecvfromResult(self.currentAlloc(), buf[0..n], &src_addr));
     }
 
     fn execFfiCall(self: *VM) Error!void {
@@ -3680,6 +3789,56 @@ test "vm: concurrent write with spawn" {
         \\  assert_eq(reply, "echo:test")
         \\  net.close(client)
         \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: udp send and receive" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.udp_bind("127.0.0.1", 19970)
+        \\  client = net.udp_open()
+        \\  net.sendto(client, "hello udp", "127.0.0.1", 19970)
+        \\  msg = net.recvfrom(server)
+        \\  assert_eq(msg.data, "hello udp")
+        \\  assert_eq(msg.addr, "127.0.0.1")
+        \\  net.sendto(server, "reply", msg.addr, msg.port)
+        \\  reply = net.recvfrom(client)
+        \\  assert_eq(reply.data, "reply")
+        \\  net.close(server)
+        \\  net.close(client)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: udp recvfrom timeout" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  sock = net.udp_bind("127.0.0.1", 19971)
+        \\  net.timeout(sock, 50)
+        \\  result = net.recvfrom(sock)
+        \\  assert_eq(result, Timeout)
+        \\  net.close(sock)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: udp method call syntax" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.udp_bind("127.0.0.1", 19972)
+        \\  client = net.udp_open()
+        \\  client.sendto("method call", "127.0.0.1", 19972)
+        \\  msg = server.recvfrom()
+        \\  assert_eq(msg.data, "method call")
+        \\  net.close(server)
+        \\  net.close(client)
         \\  println("ok")
         \\}
     );

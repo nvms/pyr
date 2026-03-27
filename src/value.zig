@@ -20,6 +20,7 @@ pub const Value = struct {
         channel,
         listener,
         conn,
+        dgram,
         ptr,
     };
 
@@ -81,6 +82,10 @@ pub const Value = struct {
 
     pub fn initConn(p: *ObjConn) Value {
         return .{ .tag = .conn, .data = @intFromPtr(p) };
+    }
+
+    pub fn initDgram(ptr: *ObjDgram) Value {
+        return .{ .tag = .dgram, .data = @intFromPtr(ptr) };
     }
 
     pub fn initPtr(p: usize) Value {
@@ -147,13 +152,17 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asDgram(self: Value) *ObjDgram {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram => true,
             .ptr => self.data != 0,
         };
     }
@@ -177,7 +186,7 @@ pub const Value = struct {
                 }
                 return true;
             },
-            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .ptr => a.data == b.data,
+            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .ptr => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -227,6 +236,7 @@ pub const Value = struct {
             .channel => std.debug.print("<channel>", .{}),
             .listener => std.debug.print("<listener>", .{}),
             .conn => std.debug.print("<conn>", .{}),
+            .dgram => std.debug.print("<dgram>", .{}),
             .ptr => std.debug.print("<ptr 0x{x}>", .{self.data}),
             .array => {
                 const arr = self.asArray();
@@ -566,6 +576,30 @@ pub const ObjConn = struct {
 
     pub fn toValue(self: *ObjConn) Value {
         return Value.initConn(self);
+    }
+};
+
+pub const ObjDgram = struct {
+    fd: std.posix.fd_t,
+    timeout_ms: i32,
+    bound: bool,
+
+    pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t, bound: bool) *ObjDgram {
+        const d = alloc.create(ObjDgram) catch @panic("oom");
+        d.* = .{ .fd = fd, .timeout_ms = -1, .bound = bound };
+        return d;
+    }
+
+    pub fn ensureNonBlock(self: *ObjDgram) void {
+        const flags = std.posix.fcntl(self.fd, std.posix.F.GETFL, 0) catch return;
+        const o_flags: std.posix.O = @bitCast(@as(u32, @truncate(flags)));
+        var new_flags = o_flags;
+        new_flags.NONBLOCK = true;
+        _ = std.posix.fcntl(self.fd, std.posix.F.SETFL, @as(usize, @as(u32, @bitCast(new_flags)))) catch return;
+    }
+
+    pub fn toValue(self: *ObjDgram) Value {
+        return Value.initDgram(self);
     }
 };
 

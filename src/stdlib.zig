@@ -6,6 +6,7 @@ const ObjStruct = @import("value.zig").ObjStruct;
 const ObjEnum = @import("value.zig").ObjEnum;
 const ObjListener = @import("value.zig").ObjListener;
 const ObjConn = @import("value.zig").ObjConn;
+const ObjDgram = @import("value.zig").ObjDgram;
 
 pub fn makeIoEof(alloc: std.mem.Allocator) Value {
     return ObjEnum.create(alloc, "IoError", "Eof", 0, &.{}).toValue();
@@ -112,6 +113,7 @@ fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void {
         .channel => writeBytes(fd, "<channel>"),
         .listener => writeBytes(fd, "<listener>"),
         .conn => writeBytes(fd, "<conn>"),
+        .dgram => writeBytes(fd, "<dgram>"),
         .ptr => {
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "<ptr 0x{x}>", .{v.data}) catch return;
@@ -328,7 +330,7 @@ fn jsonWriteValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v:
                 buf.appendSlice(alloc, "]}") catch return;
             }
         },
-        .function, .native_fn, .closure, .task, .channel, .listener, .conn, .ptr => buf.appendSlice(alloc, "null") catch return,
+        .function, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .ptr => buf.appendSlice(alloc, "null") catch return,
     }
 }
 
@@ -523,6 +525,10 @@ const net_fns = [_]NativeDef{
     .{ .name = "write", .arity = 2, .func = &netWrite },
     .{ .name = "close", .arity = 1, .func = &netClose },
     .{ .name = "timeout", .arity = 2, .func = &netTimeout },
+    .{ .name = "udp_bind", .arity = 2, .func = &netUdpBind },
+    .{ .name = "udp_open", .arity = 0, .func = &netUdpOpen },
+    .{ .name = "sendto", .arity = 4, .func = &netSendto },
+    .{ .name = "recvfrom", .arity = 1, .func = &netRecvfrom },
 };
 
 pub fn parseAddr(s: []const u8) [4]u8 {
@@ -624,6 +630,8 @@ fn netClose(_: std.mem.Allocator, args: []const Value) Value {
         std.posix.close(args[0].asListener().fd);
     } else if (args[0].tag == .conn) {
         std.posix.close(args[0].asConn().fd);
+    } else if (args[0].tag == .dgram) {
+        std.posix.close(args[0].asDgram().fd);
     }
     return Value.initNil();
 }
@@ -634,8 +642,97 @@ fn netTimeout(_: std.mem.Allocator, args: []const Value) Value {
         args[0].asListener().timeout_ms = ms;
     } else if (args[0].tag == .conn) {
         args[0].asConn().timeout_ms = ms;
+    } else if (args[0].tag == .dgram) {
+        args[0].asDgram().timeout_ms = ms;
     }
     return Value.initNil();
+}
+
+fn netUdpBind(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .int) return makeIoError(alloc, "udp_bind requires string and int");
+    const addr_str = args[0].asString().chars;
+    const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
+
+    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0) catch return makeIoError(alloc, "socket failed");
+
+    const yes: c_int = 1;
+    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(yes)) catch {
+        std.posix.close(fd);
+        return makeIoError(alloc, "setsockopt failed");
+    };
+
+    const octets = parseAddr(addr_str);
+    const addr = std.net.Address.initIp4(octets, port);
+    std.posix.bind(fd, &addr.any, addr.getOsSockLen()) catch {
+        std.posix.close(fd);
+        return makeIoError(alloc, "bind failed");
+    };
+
+    return ObjDgram.create(alloc, fd, true).toValue();
+}
+
+fn netUdpOpen(alloc: std.mem.Allocator, _: []const Value) Value {
+    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0) catch return makeIoError(alloc, "socket failed");
+    return ObjDgram.create(alloc, fd, false).toValue();
+}
+
+fn netSendto(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .dgram or args[1].tag != .string or args[2].tag != .string or args[3].tag != .int)
+        return makeIoError(alloc, "sendto requires dgram, string, string, int");
+    const dgram = args[0].asDgram();
+    const data = args[1].asString().chars;
+    const addr_str = args[2].asString().chars;
+    const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[3].asInt()))));
+
+    const octets = parseAddr(addr_str);
+    const dest = std.net.Address.initIp4(octets, port);
+    _ = std.posix.sendto(dgram.fd, data, 0, &dest.any, dest.getOsSockLen()) catch return makeIoError(alloc, "sendto failed");
+    return Value.initBool(true);
+}
+
+pub fn buildRecvfromResult(alloc: std.mem.Allocator, data: []const u8, src_addr: *const std.posix.sockaddr.in) Value {
+    const data_owned = alloc.dupe(u8, data) catch return makeIoError(alloc, "out of memory");
+    const data_str = ObjString.create(alloc, data_owned);
+
+    const ip_bytes = @as(*const [4]u8, @ptrCast(&src_addr.addr));
+    var ip_buf: [15]u8 = undefined;
+    const ip_len = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3] }) catch return makeIoError(alloc, "format failed");
+    const ip_owned = alloc.dupe(u8, ip_len) catch return makeIoError(alloc, "out of memory");
+    const addr_val = ObjString.create(alloc, ip_owned);
+
+    const src_port: i64 = std.mem.bigToNative(u16, src_addr.port);
+
+    const field_names = alloc.alloc([]const u8, 3) catch return makeIoError(alloc, "out of memory");
+    field_names[0] = "data";
+    field_names[1] = "addr";
+    field_names[2] = "port";
+    var values: [3]Value = .{
+        data_str.toValue(),
+        addr_val.toValue(),
+        Value.initInt(src_port),
+    };
+    return ObjStruct.create(alloc, "UdpMessage", field_names, &values).toValue();
+}
+
+fn netRecvfrom(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .dgram) return makeIoError(alloc, "recvfrom requires dgram");
+    const dgram = args[0].asDgram();
+
+    if (dgram.timeout_ms >= 0) {
+        var pollfds = [1]std.posix.pollfd{.{ .fd = dgram.fd, .events = std.posix.POLL.IN, .revents = 0 }};
+        const poll_n = std.posix.poll(&pollfds, dgram.timeout_ms) catch return makeIoError(alloc, "poll failed");
+        if (poll_n == 0) {
+            return ObjEnum.create(alloc, "IoError", "Timeout", 3, &.{}).toValue();
+        }
+    }
+
+    var buf: [65535]u8 = undefined;
+    var src_addr: std.posix.sockaddr.in = undefined;
+    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+    const n = std.posix.recvfrom(dgram.fd, &buf, 0, @ptrCast(&src_addr), &addr_len) catch return makeIoError(alloc, "recvfrom failed");
+    if (n == 0) return makeIoEof(alloc);
+
+    return buildRecvfromResult(alloc, buf[0..n], &src_addr);
 }
 
 // --------------- std/http ---------------
