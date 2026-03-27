@@ -337,8 +337,8 @@ pub const Compiler = struct {
     }
 
     fn registerStdImport(self: *Compiler, imp: ast.Import, std_mod: *const stdlib.StdModule) void {
-        for (std_mod.functions) |def| {
-            if (imp.items.len > 0) {
+        if (imp.items.len > 0) {
+            for (std_mod.functions) |def| {
                 var wanted = false;
                 for (imp.items) |name| {
                     if (std.mem.eql(u8, def.name, name)) {
@@ -347,12 +347,10 @@ pub const Compiler = struct {
                     }
                 }
                 if (!wanted) continue;
+                const nf = ObjNativeFn.create(self.alloc, def.name, def.arity, def.func);
+                self.native_fns.put(self.alloc, def.name, nf) catch @panic("oom");
             }
-            const nf = ObjNativeFn.create(self.alloc, def.name, def.arity, def.func);
-            self.native_fns.put(self.alloc, def.name, nf) catch @panic("oom");
-        }
-
-        if (imp.items.len == 0) {
+        } else {
             const ns_name = imp.alias orelse imp.path[imp.path.len - 1];
             self.std_modules.put(self.alloc, ns_name, std_mod) catch @panic("oom");
         }
@@ -403,21 +401,13 @@ pub const Compiler = struct {
     }
 
     fn compileStdImport(self: *Compiler, imp: ast.Import) void {
+        if (imp.items.len == 0) return;
         const std_mod = stdlib.findModule(imp.path) orelse return;
-        for (std_mod.functions) |def| {
-            if (imp.items.len > 0) {
-                var wanted = false;
-                for (imp.items) |name| {
-                    if (std.mem.eql(u8, def.name, name)) {
-                        wanted = true;
-                        break;
-                    }
-                }
-                if (!wanted) continue;
-            }
-            const nf = self.native_fns.get(def.name) orelse continue;
+        _ = std_mod;
+        for (imp.items) |name| {
+            const nf = self.native_fns.get(name) orelse continue;
             self.emitConstant(nf.toValue());
-            const name_idx = self.addStringConstant(def.name);
+            const name_idx = self.addStringConstant(name);
             self.emitOp(.define_global);
             self.emitU16(name_idx);
         }
@@ -884,8 +874,13 @@ pub const Compiler = struct {
                 if (cur.fn_table.get(name)) |func| return func.toValue();
                 return null;
             }
-            if (cur.std_modules.get(ns)) |_| {
-                if (cur.native_fns.get(name)) |nf| return nf.toValue();
+            if (cur.std_modules.get(ns)) |std_mod| {
+                for (std_mod.functions) |def| {
+                    if (std.mem.eql(u8, def.name, name)) {
+                        const nf = ObjNativeFn.create(self.alloc, def.name, def.arity, def.func);
+                        return nf.toValue();
+                    }
+                }
                 return null;
             }
             c = cur.enclosing;
