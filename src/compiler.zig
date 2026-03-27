@@ -955,10 +955,32 @@ pub const Compiler = struct {
     fn compileBinary(self: *Compiler, bin: ast.Binary) void {
         if (bin.op == .double_question) {
             self.compileExpr(bin.lhs);
+            const nil_jump = self.emitJump(.jump_if_nil);
+            const skip_jump = self.emitJump(.jump);
+            self.patchJump(nil_jump);
+            self.emitOp(.pop);
+            self.compileExpr(bin.rhs);
+            self.patchJump(skip_jump);
+            return;
+        }
+
+        if (bin.op == .and_and) {
+            self.compileExpr(bin.lhs);
             const jump = self.emitJump(.jump_if_false);
             self.emitOp(.pop);
             self.compileExpr(bin.rhs);
             self.patchJump(jump);
+            return;
+        }
+
+        if (bin.op == .or_or) {
+            self.compileExpr(bin.lhs);
+            const false_jump = self.emitJump(.jump_if_false);
+            const true_jump = self.emitJump(.jump);
+            self.patchJump(false_jump);
+            self.emitOp(.pop);
+            self.compileExpr(bin.rhs);
+            self.patchJump(true_jump);
             return;
         }
 
@@ -2098,7 +2120,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .get_local, .set_local => i += 1,
             .add, .subtract, .multiply, .divide, .modulo, .negate, .add_int, .sub_int, .mul_int, .div_int, .mod_int, .less_int, .greater_int, .add_float, .sub_float, .mul_float, .div_float, .less_float, .greater_float => {},
             .not, .equal, .not_equal, .less, .greater, .less_equal, .greater_equal => {},
-            .jump, .jump_if_false, .loop_ => i += 2,
+            .jump, .jump_if_false, .jump_if_nil, .loop_ => i += 2,
             .call => i += 1,
             .return_ => {},
             .get_global => i += 2,

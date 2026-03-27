@@ -511,6 +511,12 @@ pub const VM = struct {
                         self.currentFrame().ip += offset;
                     }
                 },
+                .jump_if_nil => {
+                    const offset = self.readU16();
+                    if (self.peek(0).tag == .nil) {
+                        self.currentFrame().ip += offset;
+                    }
+                },
                 .loop_ => {
                     const offset = self.readU16();
                     self.currentFrame().ip -= offset;

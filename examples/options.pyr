@@ -1,0 +1,34 @@
+fn find_user(id: int) {
+  if id == 1 {
+    "alice"
+  } else {
+    nil
+  }
+}
+
+fn main() {
+  user = find_user(1) ?? "unknown"
+  assert_eq(user, "alice")
+  println(user)
+
+  user2 = find_user(99) ?? "unknown"
+  assert_eq(user2, "unknown")
+  println(user2)
+
+  assert_eq(false ?? "fallback", false)
+  assert_eq(0 ?? "fallback", 0)
+  assert_eq(nil ?? "fallback", "fallback")
+  assert_eq(nil ?? nil ?? "deep", "deep")
+
+  assert_eq(true && true, true)
+  assert_eq(true && false, false)
+  assert_eq(false && true, false)
+  assert_eq(nil && true, nil)
+
+  assert_eq(false || true, true)
+  assert_eq(true || false, true)
+  assert_eq(nil || false, false)
+  assert_eq(nil || "yes", "yes")
+
+  println("all option tests passed")
+}

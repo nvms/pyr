@@ -96,6 +96,7 @@ pub const OpCode = enum(u8) {
     net_sendto,
     net_recvfrom,
     ffi_call,
+    jump_if_nil,
 };
 
 pub const Chunk = struct {
