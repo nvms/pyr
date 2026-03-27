@@ -254,19 +254,20 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - `await_all(spawn { a() }, spawn { b() })` collects results from parallel tasks into an array
 - FFI: `extern "lib" { fn name(type, ...) -> type }` syntax. dlopen/dlsym resolution at VM init. trampoline dispatch for up to 6 int/ptr args. cstr auto null-termination. "c" library resolves to libc. FfiState is a heap-allocated side struct (avoids LLVM perturbation). ffi_call opcode with u16 descriptor index + u8 arg count. src/ffi.zig contains FfiState, trampolines, marshaling. build.zig links libc
 - `nil` keyword (not `none`) for null values. Value tag is `.nil`
-- 80 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, net_sendto, net_recvfrom, ffi_call
+- option types and error handling: `?T` syntax parsed in type expressions. `??` null coalescing operator (jump_if_nil opcode - checks nil tag specifically, not truthiness, so `false ?? x` correctly returns false). `expr?` suffix operator for early return on nil (try_unwrap AST node, compiles to jump_if_nil + return_ pattern). `&&` and `||` short-circuit logical operators
+- 81 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, jump_if_nil, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, net_sendto, net_recvfrom, ffi_call
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
 - IoError: built-in enum type (Eof, Closed, Error(str), Timeout) registered in both compiler and sema. I/O operations return IoError variants instead of nil/false on failure. net_read returns Eof on clean close, Closed on reset, Error(msg) on other failures. net_write returns true on success, IoError on failure. fs.read returns IoError on failure. enum equality compares by type_name + variant_index + payloads (structural, not pointer identity). zero-payload variants (Eof, Closed, Timeout) usable as expressions for direct comparison: `if data == Eof`
 - read/accept timeouts: `net.timeout(target, ms)` sets per-connection or per-listener timeout in milliseconds. -1 to disable. stored as timeout_ms on ObjListener/ObjConn. blocking path: poll() with timeout, returns IoError.Timeout on expiry. scheduler path: io_deadlines parallel array stores epoch-ms deadlines, pollAndWake computes min deadline as poll timeout, expires waiters past deadline. connections with timeout set are forced nonblocking so poll path is always reachable
 - while loop body compilation: uses inline beginScope/endScope instead of compileBlock to avoid emitting return_ for trailing expressions. compileBlock emits return_ for trailing expressions (correct for function bodies) but wrong for loop bodies where trailing expressions should be discarded
-- 204 tests, 27 validated examples, 10 benchmarks
+- 204 tests, 28 validated examples, 10 benchmarks
 - benchmarks: fib(35) 0.84s (python 0.84s), loop 10M 0.20s (python 0.20s), closure 10M 0.26s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.53s (python 0.59s), match 30M 4.32s (python 2.16s), arena 1M 0.50s (python 0.22s), channel 100K 0.03s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** std/tls server-side, package manager / module resolution, error handling (?T option types, ?? operator)
+**next:** std/tls server-side, package manager / module resolution
 
 ## roadmap
 
@@ -286,8 +287,9 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 14. ~~read/accept timeouts~~ - net.timeout(target, ms) with per-waiter deadlines in scheduler. prevents hung clients from stalling scheduler
 15. ~~UDP support~~ - ObjDgram value type, udp_bind/udp_open/sendto/recvfrom native functions, net_sendto/net_recvfrom opcodes with method-call syntax, scheduler integration for async recvfrom, timeout support
 16. ~~std/tls client~~ - TLS 1.2/1.3 client via zig's std.crypto.tls.Client. tls.upgrade(conn, hostname) for client-side. system CA bundle cached. transparent read/write. poll-based reads with timeout. DNS resolution in net.connect
-17. std/tls server - server-side TLS via system TLS lib (Security.framework on macOS, OpenSSL on linux). API: tls.context(cert, key), tls.upgrade(conn, ctx). must integrate with scheduler for non-blocking handshake
-18. package manager / module resolution
+17. ~~error handling~~ - ?T option types (parser + sema), ?? null coalescing (jump_if_nil opcode, nil-specific not falsy), ? suffix early return (try_unwrap AST node), && || short-circuit logical operators. IoError coexists for rich I/O errors
+18. std/tls server - server-side TLS via system TLS lib (Security.framework on macOS, OpenSSL on linux). API: tls.context(cert, key), tls.upgrade(conn, ctx). must integrate with scheduler for non-blocking handshake
+19. package manager / module resolution
 
 ## implementation notes
 
