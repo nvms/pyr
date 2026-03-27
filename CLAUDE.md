@@ -108,6 +108,17 @@ every new language feature or stdlib module must have an example in `examples/`.
 - examples should cover all import styles: selective (`imp std/io { println }`), namespace (`imp std/io`), aliased (`imp std/io as out`), user modules
 - when a feature changes behavior, update the corresponding .expected files
 
+## pyr by example site
+
+`site/` contains a static documentation site (pyr by example). annotated `.pyr` files in `site/content/` are the source. `cd site && node build.js` runs each example through pyr, captures real output, highlights code with shiki + the TextMate grammar, and outputs static HTML to `site/dist/`.
+
+whenever a language change adds a new feature, changes syntax, or alters behavior:
+- add or update the relevant `site/content/` file
+- rebuild the site (`cd site && node build.js`) so output blocks reflect current behavior
+- new features that are user-facing should get their own example page
+
+this is not optional. the site is how people learn the language, and stale examples are worse than no examples.
+
 ## benchmarks
 
 when implementing a new language feature (structs, closures, pattern matching, etc), write a benchmark that stress-tests it before moving on. compare against python, lua, and any other relevant language. put benchmarks in `bench/` with a `.pyr`, `.py`, and `.lua` version, and add them to `bench/run.sh`.
@@ -283,26 +294,12 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 ## roadmap
 
-1. ~~lexer~~
-2. ~~parser~~
-3. ~~semantic analysis~~
-4. ~~bytecode compiler + VM~~
-5. ~~VM completeness - structs, enums, closures, for loops, mutable vars~~
-6. ~~arena-per-request memory model~~ (phase 1: scoped arena blocks)
-7. ~~stdlib foundation - std/io, std/fs, std/os, std/net~~
-8. ~~concurrency runtime - green threads, channels, cooperative scheduler~~
-9. ~~std/http - server module with arena-per-request~~ (v1: utility module with parse_request, respond, route, match_route. server loop in pyr using std/net)
-10. ~~std/json - parsing and serialization~~
-11. ~~FFI - zero-cost zig/C interop~~ (extern blocks, dlopen/dlsym, trampoline dispatch for up to 6 args)
-12. ~~dynamic scheduler limits~~ - growable run queue, io poller, and await waiters (starts at 64, doubles on demand). tested to 100 concurrent connections
-13. ~~error values for I/O~~ - IoError built-in enum (Eof, Closed, Error(str), Timeout). I/O returns error enums instead of nil/false, distinguishes closed vs error vs eof
-14. ~~read/accept timeouts~~ - net.timeout(target, ms) with per-waiter deadlines in scheduler. prevents hung clients from stalling scheduler
-15. ~~UDP support~~ - ObjDgram value type, udp_bind/udp_open/sendto/recvfrom native functions, net_sendto/net_recvfrom opcodes with method-call syntax, scheduler integration for async recvfrom, timeout support
-16. ~~std/tls client~~ - TLS 1.2/1.3 client via zig's std.crypto.tls.Client. tls.upgrade(conn, hostname) for client-side. system CA bundle cached. transparent read/write. poll-based reads with timeout. DNS resolution in net.connect
-17. ~~error handling~~ - postfix T? optional types, T!/T!(E) result types, `or` replaces `??` (catches nil + error), `or |err|` error binding, `fail` keyword, `?` propagates both nil and error, `!` crash unwrap. error_val Value tag with ObjError. jump_if_error/make_error/unwrap_error/extract_error opcodes. IoError coexists for rich I/O errors
-18. ~~std/tls server~~ - server-side TLS via runtime dlopen of OpenSSL/LibreSSL (no build-time dependency). tls.context(cert, key) + tls.upgrade(conn, ctx) for server mode. ObjSslCtx/ObjSslConn value types. SSL_read/SSL_write dispatch in VM. blocking handshake (SSL_accept) - scheduler stalls during handshake in spawned tasks
-19. ~~package manager / module resolution~~ - git-based packages (go-style). pyr.pkg manifest, pyr.lock lockfile, ~/.pyr/cache/ with bare repo + versioned checkouts. pyr init/install/add CLI commands. module resolution falls back to package cache when local file not found
-20. ~~NaN boxing~~ - Value packed from 16 bytes to 8 bytes. QNAN base + 5-bit tag + 45-bit payload. 36% faster array_sum, 33% faster match, 41% faster arena, 18% faster fib. all 251 tests and 32 examples pass
+numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
+
+1. type aliases + function type hints: `type Predicate = fn(int) -> bool`, inline `fn(...) -> T` syntax. enables compile-time arity/type checking for function params
+2. map/filter/reduce: need VM callback support for higher-order array operations
+3. function inlining for small pure functions
+4. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes
 
