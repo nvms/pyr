@@ -1,6 +1,7 @@
 ---
 title: Error Handling
 order: 11
+description: Pyr uses option and result types instead of exceptions. Functions return nil for absence or fail with an error value. The or keyword provides fallbacks, and the ? operator propagates errors to the caller.
 ---
 // `T?` is an optional type. Functions can return `nil`.
 fn find(items, target: int) -> int? {

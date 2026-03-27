@@ -1,6 +1,7 @@
 ---
 title: Arena Memory
 order: 17
+description: Arena blocks create a scoped memory region where all allocations are freed in bulk when the block exits. No garbage collector, no reference counting - just fast, deterministic cleanup.
 ---
 // `arena` blocks create a scoped memory region.
 // All allocations inside use the arena allocator.

@@ -1,6 +1,7 @@
 ---
 title: Enums
 order: 7
+description: Enums are algebraic sum types. Each variant can optionally carry a payload, making them useful for modeling states, results, and tagged unions.
 ---
 // Enums are algebraic types. Variants can carry payloads.
 enum Shape {

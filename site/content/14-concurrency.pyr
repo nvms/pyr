@@ -1,6 +1,7 @@
 ---
 title: Concurrency
 order: 15
+description: Pyr has built-in green threads and channels. Spawn creates lightweight tasks scheduled cooperatively by the runtime, and bounded channels provide safe communication between them.
 ---
 // `spawn` creates a green thread (task).
 // Tasks are cooperatively scheduled.

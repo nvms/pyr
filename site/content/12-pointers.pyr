@@ -1,6 +1,7 @@
 ---
 title: Mutable References
 order: 13
+description: Values in pyr are immutable by default. To let a function modify a struct's fields, the parameter must be declared as *mut and the caller must pass &mut explicitly. This makes mutation visible at every call site.
 ---
 // Function parameters are immutable by default.
 // Field assignment on a non-`*mut` param is a compile error.

@@ -164,6 +164,13 @@ pre code {
   border-bottom: 1px solid #222;
 }
 
+.content .description {
+  color: #777;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: -12px 0 24px 0;
+}
+
 .content table {
   width: 100%;
   border-collapse: collapse;

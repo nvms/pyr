@@ -22,7 +22,7 @@ fn main() {
   println(encode("hello"))
 
 // Decode JSON strings back to pyr values.
-  data = decode("{\"name\":\"alice\",\"age\":30}")
+  data = decode("\{\"name\":\"alice\",\"age\":30\}")
   println(data.name)
   println(data.age)
 

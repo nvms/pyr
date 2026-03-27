@@ -1,6 +1,7 @@
 ---
 title: Defer
 order: 12
+description: Defer schedules cleanup code to run when the current scope exits, regardless of how it exits - normal completion, early return, fail, or error propagation. Multiple defers execute in reverse (LIFO) order.
 ---
 // `defer` runs cleanup code when the scope exits.
 // It fires on normal return, early return, `fail`,

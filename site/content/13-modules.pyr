@@ -2,6 +2,7 @@
 title: Modules
 order: 14
 run: false
+description: Pyr's module system uses the imp keyword for imports. You can pull in specific names, import an entire namespace, or alias modules. Only declarations marked pub are visible to importers.
 ---
 // `imp` imports from stdlib or local files.
 // Selective import pulls specific names into scope.

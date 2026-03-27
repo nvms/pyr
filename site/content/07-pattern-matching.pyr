@@ -1,6 +1,7 @@
 ---
 title: Pattern Matching
 order: 8
+description: Pattern matching destructures values and dispatches on their shape. It works on enum variants, literals, and wildcards, and can be used as both a statement and an inline expression.
 ---
 // `match` works on enums, literals, and wildcards.
 enum Color { Red, Green, Blue }
