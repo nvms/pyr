@@ -3,7 +3,7 @@ struct Point {
   y: int
 }
 
-fn translate(p: Point, dx: int, dy: int) {
+fn translate(p: *mut Point, dx: int, dy: int) {
   p.x += dx
   p.y += dy
 }
@@ -18,7 +18,7 @@ fn main() {
   println(p.x)
   println(p.y)
 
-  translate(p, 5, -3)
+  translate(&mut p, 5, -3)
   println(p.x)
   println(p.y)
 
