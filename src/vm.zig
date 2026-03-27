@@ -1011,392 +1011,444 @@ pub const VM = struct {
             const byte = code[frame.ip];
             frame.ip += 1;
 
-            if (byte == @intFromEnum(OpCode.get_local)) {
-                const slot = code[frame.ip];
-                frame.ip += 1;
-                self.stack[self.sp] = self.stack[frame.slot_offset + slot];
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.set_local)) {
-                const slot = code[frame.ip];
-                frame.ip += 1;
-                self.stack[frame.slot_offset + slot] = self.stack[self.sp - 1];
-            } else if (byte == @intFromEnum(OpCode.inc_local)) {
-                const slot = code[frame.ip];
-                frame.ip += 1;
-                const abs = frame.slot_offset + slot;
-                self.stack[abs] = Value.initInt(self.stack[abs].asInt() + 1);
-            } else if (byte == @intFromEnum(OpCode.constant)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                self.stack[self.sp] = frame.function.chunk.constants.items[(hi << 8) | lo];
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.add)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initInt(a.asInt() + b.asInt());
-                } else {
-                    try self.binaryOpSlow(a, b, .add);
-                }
-            } else if (byte == @intFromEnum(OpCode.subtract)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initInt(a.asInt() - b.asInt());
-                } else {
-                    try self.binaryOpSlow(a, b, .subtract);
-                }
-            } else if (byte == @intFromEnum(OpCode.multiply)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initInt(a.asInt() * b.asInt());
-                } else {
-                    try self.binaryOpSlow(a, b, .multiply);
-                }
-            } else if (byte == @intFromEnum(OpCode.less)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initBool(a.asInt() < b.asInt());
-                } else {
-                    try self.comparisonOpSlow(a, b, .less);
-                }
-            } else if (byte == @intFromEnum(OpCode.greater)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initBool(a.asInt() > b.asInt());
-                } else {
-                    try self.comparisonOpSlow(a, b, .greater);
-                }
-            } else if (byte == @intFromEnum(OpCode.jump_if_false)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                if (!self.stack[self.sp - 1].isTruthy()) {
+            switch (byte) {
+                @intFromEnum(OpCode.get_local) => {
+                    const slot = code[frame.ip];
+                    frame.ip += 1;
+                    self.stack[self.sp] = self.stack[frame.slot_offset + slot];
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.set_local) => {
+                    const slot = code[frame.ip];
+                    frame.ip += 1;
+                    self.stack[frame.slot_offset + slot] = self.stack[self.sp - 1];
+                },
+                @intFromEnum(OpCode.inc_local) => {
+                    const slot = code[frame.ip];
+                    frame.ip += 1;
+                    const abs = frame.slot_offset + slot;
+                    self.stack[abs] = Value.initInt(self.stack[abs].asInt() + 1);
+                },
+                @intFromEnum(OpCode.constant) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    self.stack[self.sp] = frame.function.chunk.constants.items[(hi << 8) | lo];
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.pop) => {
+                    self.sp -= 1;
+                },
+                @intFromEnum(OpCode.add) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initInt(av.asInt() + bv.asInt());
+                    } else {
+                        try self.binaryOpSlow(av, bv, .add);
+                    }
+                },
+                @intFromEnum(OpCode.subtract) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initInt(av.asInt() - bv.asInt());
+                    } else {
+                        try self.binaryOpSlow(av, bv, .subtract);
+                    }
+                },
+                @intFromEnum(OpCode.multiply) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initInt(av.asInt() * bv.asInt());
+                    } else {
+                        try self.binaryOpSlow(av, bv, .multiply);
+                    }
+                },
+                @intFromEnum(OpCode.less) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initBool(av.asInt() < bv.asInt());
+                    } else {
+                        try self.comparisonOpSlow(av, bv, .less);
+                    }
+                },
+                @intFromEnum(OpCode.greater) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initBool(av.asInt() > bv.asInt());
+                    } else {
+                        try self.comparisonOpSlow(av, bv, .greater);
+                    }
+                },
+                @intFromEnum(OpCode.jump_if_false) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    if (!self.stack[self.sp - 1].isTruthy()) {
+                        frame.ip += (hi << 8) | lo;
+                    }
+                },
+                @intFromEnum(OpCode.jump) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
                     frame.ip += (hi << 8) | lo;
-                }
-            } else if (byte == @intFromEnum(OpCode.jump)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                frame.ip += (hi << 8) | lo;
-            } else if (byte == @intFromEnum(OpCode.loop_)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                frame.ip -= (hi << 8) | lo;
-            } else if (byte == @intFromEnum(OpCode.call)) {
-                const arg_count = code[frame.ip];
-                frame.ip += 1;
-                const callee = self.stack[self.sp - 1 - arg_count];
-                if (callee.tag == .native_fn) {
-                    const nf = callee.asNativeFn();
-                    const args = self.stack[self.sp - arg_count .. self.sp];
-                    const result = nf.func(self.currentAlloc(), args);
-                    self.sp -= arg_count + 1;
+                },
+                @intFromEnum(OpCode.loop_) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    frame.ip -= (hi << 8) | lo;
+                },
+                @intFromEnum(OpCode.call) => {
+                    const arg_count = code[frame.ip];
+                    frame.ip += 1;
+                    const callee = self.stack[self.sp - 1 - arg_count];
+                    if (callee.tag == .native_fn) {
+                        const nf = callee.asNativeFn();
+                        const args = self.stack[self.sp - arg_count .. self.sp];
+                        const result = nf.func(self.currentAlloc(), args);
+                        self.sp -= arg_count + 1;
+                        self.stack[self.sp] = result;
+                        self.sp += 1;
+                    } else {
+                        const func = if (callee.tag == .function)
+                            callee.asFunction()
+                        else if (callee.tag == .closure)
+                            callee.asClosure().function
+                        else {
+                            self.runtimeError("can only call functions", .{});
+                            return error.RuntimeError;
+                        };
+                        if (self.frame_count == 64) {
+                            self.runtimeError("stack overflow", .{});
+                            return error.RuntimeError;
+                        }
+                        self.frames[self.frame_count] = .{
+                            .function = func,
+                            .ip = 0,
+                            .slot_offset = self.sp - arg_count - 1,
+                            .closure = if (callee.tag == .closure) callee.asClosure() else null,
+                        };
+                        self.frame_count += 1;
+                        if (!func.locals_only) return;
+                    }
+                },
+                @intFromEnum(OpCode.return_) => {
+                    const result = self.stack[self.sp - 1];
+                    self.sp -= 1;
+                    const slot = frame.slot_offset;
+                    self.frame_count -= 1;
+                    self.sp = slot;
                     self.stack[self.sp] = result;
                     self.sp += 1;
-                } else {
-                    const func = if (callee.tag == .function)
-                        callee.asFunction()
-                    else if (callee.tag == .closure)
-                        callee.asClosure().function
-                    else {
-                        self.runtimeError("can only call functions", .{});
-                        return error.RuntimeError;
-                    };
-                    if (self.frame_count == 64) {
-                        self.runtimeError("stack overflow", .{});
-                        return error.RuntimeError;
-                    }
-                    self.frames[self.frame_count] = .{
-                        .function = func,
-                        .ip = 0,
-                        .slot_offset = self.sp - arg_count - 1,
-                        .closure = if (callee.tag == .closure) callee.asClosure() else null,
-                    };
-                    self.frame_count += 1;
-                    if (!func.locals_only) return;
-                }
-            } else if (byte == @intFromEnum(OpCode.return_)) {
-                const result = self.stack[self.sp - 1];
-                self.sp -= 1;
-                const slot = frame.slot_offset;
-                self.frame_count -= 1;
-                self.sp = slot;
-                self.stack[self.sp] = result;
-                self.sp += 1;
-                if (self.frame_count < entry_fc) return;
-            } else if (byte == @intFromEnum(OpCode.get_upvalue)) {
-                const uv_index = code[frame.ip];
-                frame.ip += 1;
-                const cl = self.frames[self.frame_count - 1].closure orelse {
-                    self.stack[self.sp] = Value.initNil();
-                    self.sp += 1;
-                    continue;
-                };
-                self.stack[self.sp] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.set_upvalue)) {
-                const uv_index = code[frame.ip];
-                frame.ip += 1;
-                const cl = self.frames[self.frame_count - 1].closure orelse continue;
-                if (uv_index < cl.upvalues.len) {
-                    cl.upvalues[uv_index] = self.stack[self.sp - 1];
-                }
-            } else if (byte == @intFromEnum(OpCode.add_int)) {
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() + self.stack[self.sp].asInt());
-            } else if (byte == @intFromEnum(OpCode.sub_int)) {
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() - self.stack[self.sp].asInt());
-            } else if (byte == @intFromEnum(OpCode.less_int)) {
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() < self.stack[self.sp].asInt());
-            } else if (byte == @intFromEnum(OpCode.greater_int)) {
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() > self.stack[self.sp].asInt());
-            } else if (byte == @intFromEnum(OpCode.mul_int)) {
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() *% self.stack[self.sp].asInt());
-            } else if (byte == @intFromEnum(OpCode.mod_int)) {
-                self.sp -= 1;
-                const bi = self.stack[self.sp].asInt();
-                self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @mod(self.stack[self.sp - 1].asInt(), bi) else 0);
-            } else if (byte == @intFromEnum(OpCode.add_float)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
-                self.stack[self.sp - 1] = Value.initFloat(af + bf);
-            } else if (byte == @intFromEnum(OpCode.concat_local)) {
-                const slot = code[frame.ip];
-                frame.ip += 1;
-                const rhs = self.stack[self.sp - 1];
-                self.sp -= 1;
-                self.concatAppend(slot, rhs);
-            } else if (byte == @intFromEnum(OpCode.get_local_field)) {
-                const slot = code[frame.ip];
-                const field_idx = code[frame.ip + 1];
-                frame.ip += 2;
-                self.stack[self.sp] = self.stack[frame.slot_offset + slot].asStruct().fieldValues()[field_idx];
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.get_field_idx)) {
-                const idx = code[frame.ip];
-                frame.ip += 1;
-                const val = self.stack[self.sp - 1];
-                if (val.tag == .struct_) {
-                    self.stack[self.sp - 1] = val.asStruct().fieldValues()[idx];
-                } else {
-                    frame.ip -= 2;
-                    return;
-                }
-            } else if (byte == @intFromEnum(OpCode.get_field)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                const field_name = frame.function.chunk.constants.items[(hi << 8) | lo].asString().chars;
-                const val = self.stack[self.sp - 1];
-                if (val.tag == .struct_) {
-                    const s = val.asStruct();
-                    if (s.getField(field_name)) |fv| {
-                        self.stack[self.sp - 1] = fv;
-                    } else {
-                        self.runtimeError("struct has no field '{s}'", .{field_name});
-                        return error.RuntimeError;
-                    }
-                } else {
-                    frame.ip -= 3;
-                    return;
-                }
-            } else if (byte == @intFromEnum(OpCode.jump_if_nil)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                if (self.stack[self.sp - 1].tag == .nil) {
-                    frame.ip += (hi << 8) | lo;
-                }
-            } else if (byte == @intFromEnum(OpCode.jump_if_error)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                if (self.stack[self.sp - 1].tag == .error_val) {
-                    frame.ip += (hi << 8) | lo;
-                }
-            } else if (byte == @intFromEnum(OpCode.make_error)) {
-                const val = self.stack[self.sp - 1];
-                const err = ObjError.create(self.currentAlloc(), val);
-                self.stack[self.sp - 1] = err.toValue();
-            } else if (byte == @intFromEnum(OpCode.unwrap_error)) {
-                const val = self.stack[self.sp - 1];
-                if (val.tag == .error_val) {
-                    const payload = val.asError().value;
-                    const sv = self.valueToString(payload);
-                    const msg = sv.asString().chars;
-                    std.debug.print("unwrap failed: {s}\n", .{msg});
-                    std.process.exit(1);
-                } else if (val.tag == .nil) {
-                    std.debug.print("unwrap failed: nil\n", .{});
-                    std.process.exit(1);
-                }
-            } else if (byte == @intFromEnum(OpCode.extract_error)) {
-                const val = self.stack[self.sp - 1];
-                if (val.tag == .error_val) {
-                    self.stack[self.sp - 1] = val.asError().value;
-                }
-            } else if (byte == @intFromEnum(OpCode.pop)) {
-                self.sp -= 1;
-            } else if (byte == @intFromEnum(OpCode.slide)) {
-                const n = code[frame.ip];
-                frame.ip += 1;
-                const result = self.stack[self.sp - 1];
-                self.sp -= n;
-                self.stack[self.sp - 1] = result;
-            } else if (byte == @intFromEnum(OpCode.nil)) {
-                self.stack[self.sp] = Value.initNil();
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.true_)) {
-                self.stack[self.sp] = Value.initBool(true);
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.false_)) {
-                self.stack[self.sp] = Value.initBool(false);
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.equal)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initBool(Value.eql(a, b));
-            } else if (byte == @intFromEnum(OpCode.not_equal)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                self.stack[self.sp - 1] = Value.initBool(!Value.eql(a, b));
-            } else if (byte == @intFromEnum(OpCode.not)) {
-                self.stack[self.sp - 1] = Value.initBool(!self.stack[self.sp - 1].isTruthy());
-            } else if (byte == @intFromEnum(OpCode.negate)) {
-                const val = self.stack[self.sp - 1];
-                if (val.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initInt(-val.asInt());
-                } else if (val.tag == .float) {
-                    self.stack[self.sp - 1] = Value.initFloat(-val.asFloat());
-                } else {
-                    self.runtimeError("operand must be a number", .{});
-                    return error.RuntimeError;
-                }
-            } else if (byte == @intFromEnum(OpCode.divide)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    const bi = b.asInt();
-                    self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @divTrunc(a.asInt(), bi) else 0);
-                } else {
-                    try self.binaryOpSlow(a, b, .divide);
-                }
-            } else if (byte == @intFromEnum(OpCode.modulo)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    const bi = b.asInt();
-                    self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @mod(a.asInt(), bi) else 0);
-                } else {
-                    try self.binaryOpSlow(a, b, .modulo);
-                }
-            } else if (byte == @intFromEnum(OpCode.less_equal)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initBool(a.asInt() <= b.asInt());
-                } else {
-                    try self.comparisonOpSlow(a, b, .less_equal);
-                }
-            } else if (byte == @intFromEnum(OpCode.get_global)) {
-                const hi: u16 = code[frame.ip];
-                const lo: u16 = code[frame.ip + 1];
-                frame.ip += 2;
-                const name = frame.function.chunk.constants.items[(hi << 8) | lo].asString().chars;
-                if (self.globals.get(name)) |val| {
-                    self.stack[self.sp] = val;
-                    self.sp += 1;
-                } else {
-                    self.runtimeError("undefined variable '{s}'", .{name});
-                    return error.RuntimeError;
-                }
-            } else if (byte == @intFromEnum(OpCode.greater_equal)) {
-                const b = self.stack[self.sp - 1];
-                const a = self.stack[self.sp - 2];
-                self.sp -= 1;
-                if (a.tag == .int and b.tag == .int) {
-                    self.stack[self.sp - 1] = Value.initBool(a.asInt() >= b.asInt());
-                } else {
-                    try self.comparisonOpSlow(a, b, .greater_equal);
-                }
-            } else if (byte == @intFromEnum(OpCode.match_variant)) {
-                const expected_vi = code[frame.ip];
-                frame.ip += 1;
-                const val = self.stack[self.sp - 1];
-                if (val.tag == .enum_) {
-                    self.stack[self.sp] = Value.initBool(val.asEnum().variant_index == expected_vi);
-                } else {
-                    self.stack[self.sp] = Value.initBool(false);
-                }
-                self.sp += 1;
-            } else if (byte == @intFromEnum(OpCode.get_payload)) {
-                const payload_idx = code[frame.ip];
-                frame.ip += 1;
-                const val = self.stack[self.sp - 1];
-                self.sp -= 1;
-                if (val.tag == .enum_) {
-                    self.stack[self.sp] = val.asEnum().payloads[payload_idx];
-                    self.sp += 1;
-                }
-            } else if (byte == @intFromEnum(OpCode.index_get)) {
-                const idx_val = self.stack[self.sp - 1];
-                const target = self.stack[self.sp - 2];
-                if (target.tag == .array and idx_val.tag == .int) {
-                    const arr = target.asArray();
-                    const idx = idx_val.asInt();
-                    if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
-                        self.sp -= 1;
-                        self.stack[self.sp - 1] = arr.items[@intCast(idx)];
+                    if (self.frame_count < entry_fc) return;
+                },
+                @intFromEnum(OpCode.add_int) => {
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() + self.stack[self.sp].asInt());
+                },
+                @intFromEnum(OpCode.sub_int) => {
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() - self.stack[self.sp].asInt());
+                },
+                @intFromEnum(OpCode.less_int) => {
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() < self.stack[self.sp].asInt());
+                },
+                @intFromEnum(OpCode.greater_int) => {
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initBool(self.stack[self.sp - 1].asInt() > self.stack[self.sp].asInt());
+                },
+                @intFromEnum(OpCode.mul_int) => {
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initInt(self.stack[self.sp - 1].asInt() *% self.stack[self.sp].asInt());
+                },
+                @intFromEnum(OpCode.mod_int) => {
+                    self.sp -= 1;
+                    const bi = self.stack[self.sp].asInt();
+                    self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @mod(self.stack[self.sp - 1].asInt(), bi) else 0);
+                },
+                @intFromEnum(OpCode.index_get) => {
+                    const idx_val = self.stack[self.sp - 1];
+                    const target = self.stack[self.sp - 2];
+                    if (target.tag == .array and idx_val.tag == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            self.sp -= 1;
+                            self.stack[self.sp - 1] = arr.items[@intCast(idx)];
+                        } else {
+                            frame.ip -= 1;
+                            return;
+                        }
                     } else {
                         frame.ip -= 1;
                         return;
                     }
-                } else {
+                },
+                @intFromEnum(OpCode.match_jump) => {
+                    const slot = code[frame.ip];
+                    frame.ip += 1;
+                    const n = code[frame.ip];
+                    frame.ip += 1;
+                    const table_start = frame.ip;
+                    frame.ip += @as(usize, n) * 2 + 2;
+                    const base = frame.ip;
+                    const val = self.stack[frame.slot_offset + slot];
+                    var off_idx: usize = @as(usize, n) * 2;
+                    if (val.tag == .enum_) {
+                        const vi = val.asEnum().variant_index;
+                        if (vi < n) off_idx = @as(usize, vi) * 2;
+                    }
+                    const offset = @as(u16, code[table_start + off_idx]) << 8 | code[table_start + off_idx + 1];
+                    frame.ip = base + offset;
+                },
+                @intFromEnum(OpCode.get_payload) => {
+                    const payload_idx = code[frame.ip];
+                    frame.ip += 1;
+                    const val = self.stack[self.sp - 1];
+                    self.sp -= 1;
+                    if (val.tag == .enum_) {
+                        self.stack[self.sp] = val.asEnum().payloads[payload_idx];
+                        self.sp += 1;
+                    }
+                },
+                @intFromEnum(OpCode.get_local_field) => {
+                    const slot = code[frame.ip];
+                    const field_idx = code[frame.ip + 1];
+                    frame.ip += 2;
+                    self.stack[self.sp] = self.stack[frame.slot_offset + slot].asStruct().fieldValues()[field_idx];
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.get_field_idx) => {
+                    const idx = code[frame.ip];
+                    frame.ip += 1;
+                    const val = self.stack[self.sp - 1];
+                    if (val.tag == .struct_) {
+                        self.stack[self.sp - 1] = val.asStruct().fieldValues()[idx];
+                    } else {
+                        frame.ip -= 2;
+                        return;
+                    }
+                },
+                @intFromEnum(OpCode.add_float) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    const af: f64 = if (av.tag == .float) av.asFloat() else @floatFromInt(av.asInt());
+                    const bf: f64 = if (bv.tag == .float) bv.asFloat() else @floatFromInt(bv.asInt());
+                    self.stack[self.sp - 1] = Value.initFloat(af + bf);
+                },
+                @intFromEnum(OpCode.get_upvalue) => {
+                    const uv_index = code[frame.ip];
+                    frame.ip += 1;
+                    const cl = self.frames[self.frame_count - 1].closure orelse {
+                        self.stack[self.sp] = Value.initNil();
+                        self.sp += 1;
+                        continue;
+                    };
+                    self.stack[self.sp] = if (uv_index < cl.upvalues.len) cl.upvalues[uv_index] else Value.initNil();
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.set_upvalue) => {
+                    const uv_index = code[frame.ip];
+                    frame.ip += 1;
+                    const cl = self.frames[self.frame_count - 1].closure orelse continue;
+                    if (uv_index < cl.upvalues.len) {
+                        cl.upvalues[uv_index] = self.stack[self.sp - 1];
+                    }
+                },
+                @intFromEnum(OpCode.get_field) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    const field_name = frame.function.chunk.constants.items[(hi << 8) | lo].asString().chars;
+                    const val = self.stack[self.sp - 1];
+                    if (val.tag == .struct_) {
+                        const s = val.asStruct();
+                        if (s.getField(field_name)) |fv| {
+                            self.stack[self.sp - 1] = fv;
+                        } else {
+                            self.runtimeError("struct has no field '{s}'", .{field_name});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        frame.ip -= 3;
+                        return;
+                    }
+                },
+                @intFromEnum(OpCode.equal) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initBool(Value.eql(av, bv));
+                },
+                @intFromEnum(OpCode.not_equal) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    self.stack[self.sp - 1] = Value.initBool(!Value.eql(av, bv));
+                },
+                @intFromEnum(OpCode.jump_if_nil) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    if (self.stack[self.sp - 1].tag == .nil) {
+                        frame.ip += (hi << 8) | lo;
+                    }
+                },
+                @intFromEnum(OpCode.jump_if_error) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    if (self.stack[self.sp - 1].tag == .error_val) {
+                        frame.ip += (hi << 8) | lo;
+                    }
+                },
+                @intFromEnum(OpCode.concat_local) => {
+                    const slot = code[frame.ip];
+                    frame.ip += 1;
+                    const rhs = self.stack[self.sp - 1];
+                    self.sp -= 1;
+                    self.concatAppend(slot, rhs);
+                },
+                @intFromEnum(OpCode.nil) => {
+                    self.stack[self.sp] = Value.initNil();
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.true_) => {
+                    self.stack[self.sp] = Value.initBool(true);
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.false_) => {
+                    self.stack[self.sp] = Value.initBool(false);
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.not) => {
+                    self.stack[self.sp - 1] = Value.initBool(!self.stack[self.sp - 1].isTruthy());
+                },
+                @intFromEnum(OpCode.negate) => {
+                    const val = self.stack[self.sp - 1];
+                    if (val.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initInt(-val.asInt());
+                    } else if (val.tag == .float) {
+                        self.stack[self.sp - 1] = Value.initFloat(-val.asFloat());
+                    } else {
+                        self.runtimeError("operand must be a number", .{});
+                        return error.RuntimeError;
+                    }
+                },
+                @intFromEnum(OpCode.divide) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        const bi = bv.asInt();
+                        self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @divTrunc(av.asInt(), bi) else 0);
+                    } else {
+                        try self.binaryOpSlow(av, bv, .divide);
+                    }
+                },
+                @intFromEnum(OpCode.modulo) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        const bi = bv.asInt();
+                        self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @mod(av.asInt(), bi) else 0);
+                    } else {
+                        try self.binaryOpSlow(av, bv, .modulo);
+                    }
+                },
+                @intFromEnum(OpCode.less_equal) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initBool(av.asInt() <= bv.asInt());
+                    } else {
+                        try self.comparisonOpSlow(av, bv, .less_equal);
+                    }
+                },
+                @intFromEnum(OpCode.greater_equal) => {
+                    const bv = self.stack[self.sp - 1];
+                    const av = self.stack[self.sp - 2];
+                    self.sp -= 1;
+                    if (av.tag == .int and bv.tag == .int) {
+                        self.stack[self.sp - 1] = Value.initBool(av.asInt() >= bv.asInt());
+                    } else {
+                        try self.comparisonOpSlow(av, bv, .greater_equal);
+                    }
+                },
+                @intFromEnum(OpCode.get_global) => {
+                    const hi: u16 = code[frame.ip];
+                    const lo: u16 = code[frame.ip + 1];
+                    frame.ip += 2;
+                    const name = frame.function.chunk.constants.items[(hi << 8) | lo].asString().chars;
+                    if (self.globals.get(name)) |val| {
+                        self.stack[self.sp] = val;
+                        self.sp += 1;
+                    } else {
+                        self.runtimeError("undefined variable '{s}'", .{name});
+                        return error.RuntimeError;
+                    }
+                },
+                @intFromEnum(OpCode.slide) => {
+                    const n = code[frame.ip];
+                    frame.ip += 1;
+                    const result = self.stack[self.sp - 1];
+                    self.sp -= n;
+                    self.stack[self.sp - 1] = result;
+                },
+                @intFromEnum(OpCode.match_variant) => {
+                    const expected_vi = code[frame.ip];
+                    frame.ip += 1;
+                    const val = self.stack[self.sp - 1];
+                    if (val.tag == .enum_) {
+                        self.stack[self.sp] = Value.initBool(val.asEnum().variant_index == expected_vi);
+                    } else {
+                        self.stack[self.sp] = Value.initBool(false);
+                    }
+                    self.sp += 1;
+                },
+                @intFromEnum(OpCode.make_error) => {
+                    const val = self.stack[self.sp - 1];
+                    const err = ObjError.create(self.currentAlloc(), val);
+                    self.stack[self.sp - 1] = err.toValue();
+                },
+                @intFromEnum(OpCode.unwrap_error) => {
+                    const val = self.stack[self.sp - 1];
+                    if (val.tag == .error_val) {
+                        const payload = val.asError().value;
+                        const sv = self.valueToString(payload);
+                        const msg = sv.asString().chars;
+                        std.debug.print("unwrap failed: {s}\n", .{msg});
+                        std.process.exit(1);
+                    } else if (val.tag == .nil) {
+                        std.debug.print("unwrap failed: nil\n", .{});
+                        std.process.exit(1);
+                    }
+                },
+                @intFromEnum(OpCode.extract_error) => {
+                    const val = self.stack[self.sp - 1];
+                    if (val.tag == .error_val) {
+                        self.stack[self.sp - 1] = val.asError().value;
+                    }
+                },
+                else => {
                     frame.ip -= 1;
                     return;
-                }
-            } else if (byte == @intFromEnum(OpCode.match_jump)) {
-                const slot = code[frame.ip];
-                frame.ip += 1;
-                const n = code[frame.ip];
-                frame.ip += 1;
-                const table_start = frame.ip;
-                frame.ip += @as(usize, n) * 2 + 2;
-                const base = frame.ip;
-                const val = self.stack[frame.slot_offset + slot];
-                var off_idx: usize = @as(usize, n) * 2;
-                if (val.tag == .enum_) {
-                    const vi = val.asEnum().variant_index;
-                    if (vi < n) off_idx = @as(usize, vi) * 2;
-                }
-                const offset = @as(u16, code[table_start + off_idx]) << 8 | code[table_start + off_idx + 1];
-                frame.ip = base + offset;
-            } else {
-                frame.ip -= 1;
-                return;
+                },
             }
         }
     }
