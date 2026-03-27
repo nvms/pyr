@@ -1,0 +1,63 @@
+struct Point {
+  x: float
+  y: float
+}
+
+enum Shape {
+  Circle(float)
+  Rect(float, float)
+  Point
+}
+
+fn distance(a: Point, b: Point) -> float {
+  dx = a.x - b.x
+  dy = a.y - b.y
+  sqrt(dx * dx + dy * dy)
+}
+
+fn area(s: Shape) -> float = match s {
+  Circle(r) -> 3.14159 * r * r
+  Rect(w, h) -> w * h
+  Point -> 0.0
+}
+
+fn double(n: int) -> int {
+  n * 2
+}
+
+fn add(a: int, b: int) -> int {
+  a + b
+}
+
+fn greet(name: str) -> str {
+  "hello {name}"
+}
+
+fn negate(n: int) -> int {
+  0 - n
+}
+
+pub fn main() {
+  p1 = Point { x: 0.0, y: 0.0 }
+  p2 = Point { x: 3.0, y: 4.0 }
+
+  println(p1.distance(p2))
+
+  c = Circle(5.0)
+  println(c.area())
+
+  println(5.double())
+
+  println(3.add(7))
+
+  println("world".greet())
+
+  println(5.double().negate())
+
+  println(5.double().add(3))
+
+  println(4.0.sqrt())
+
+  arr = [1, 2, 3]
+  println(arr.len())
+}

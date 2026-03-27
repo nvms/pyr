@@ -2672,6 +2672,18 @@ test "vm: compound assignment on array element" {
     try testRun("fn main() {\n  mut arr = [10, 20]\n  arr[0] += 5\n  arr[1] *= 2\n  println(arr[0])\n  println(arr[1])\n}");
 }
 
+test "vm: *mut param with &mut" {
+    try testRun("struct P { x: int }\nfn set(p: *mut P, v: int) {\n  p.x = v\n}\nfn main() {\n  mut p = P { x: 1 }\n  set(&mut p, 42)\n  assert_eq(p.x, 42)\n  println(\"ok\")\n}");
+}
+
+test "vm: *mut compound assignment" {
+    try testRun("struct C { val: int }\nfn inc(c: *mut C, n: int) {\n  c.val += n\n}\nfn main() {\n  mut c = C { val: 10 }\n  inc(&mut c, 5)\n  assert_eq(c.val, 15)\n  println(\"ok\")\n}");
+}
+
+test "vm: read-only param field access" {
+    try testRun("struct P { x: int }\nfn read(p: P) -> int {\n  p.x\n}\nfn main() {\n  p = P { x: 99 }\n  assert_eq(read(p), 99)\n  println(\"ok\")\n}");
+}
+
 test "vm: array mutation in loop" {
     try testRun("fn main() {\n  mut arr = [0, 0, 0]\n  for i in range(3) {\n    arr[i] = i * i\n  }\n  println(arr[0])\n  println(arr[1])\n  println(arr[2])\n}");
 }
@@ -4269,4 +4281,24 @@ test "vm: defer with ? propagation" {
 
 test "vm: defer with trailing expression" {
     try testRun("fn f() -> int {\n  defer println(\"cleanup\")\n  42\n}\nfn main() {\n  assert_eq(f(), 42)\n  println(\"ok\")\n}");
+}
+
+test "vm: ufcs basic" {
+    try testRun("fn double(n: int) -> int { n * 2 }\nfn main() { assert_eq(5.double(), 10) }");
+}
+
+test "vm: ufcs with args" {
+    try testRun("fn add(a: int, b: int) -> int { a + b }\nfn main() { assert_eq(3.add(7), 10) }");
+}
+
+test "vm: ufcs chaining" {
+    try testRun("fn double(n: int) -> int { n * 2 }\nfn negate(n: int) -> int { 0 - n }\nfn main() { assert_eq(5.double().negate(), -10) }");
+}
+
+test "vm: ufcs with native" {
+    try testRun("fn main() { assert_eq(4.0.sqrt(), 2.0) }");
+}
+
+test "vm: ufcs with struct" {
+    try testRun("struct Point { x: float\n  y: float }\nfn mag(p: Point) -> float { sqrt(p.x * p.x + p.y * p.y) }\nfn main() {\n  p = Point { x: 3.0, y: 4.0 }\n  assert_eq(p.mag(), 5.0)\n}");
 }

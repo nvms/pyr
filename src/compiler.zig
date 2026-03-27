@@ -155,6 +155,7 @@ pub const Compiler = struct {
 
     fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn (std.mem.Allocator, []const Value) Value) void {
         const nf = ObjNativeFn.create(self.alloc, name, arity, func);
+        self.native_fns.put(self.alloc, name, nf) catch @panic("oom");
         self.emitConstant(nf.toValue());
         const name_idx = self.addStringConstant(name);
         self.emitOp(.define_global);
@@ -1245,6 +1246,21 @@ pub const Compiler = struct {
             }
         }
 
+        if (call.callee.kind == .field_access) {
+            const fa = call.callee.kind.field_access;
+            const is_ns = if (fa.target.kind == .identifier) self.isModuleNamespace(fa.target.kind.identifier) else false;
+            if (!is_ns and self.canResolveCallable(fa.field)) {
+                self.compileGetVar(fa.field);
+                self.compileExpr(fa.target);
+                for (call.args) |arg| {
+                    self.compileExpr(arg);
+                }
+                self.emitOp(.call);
+                self.emitByte(@intCast(call.args.len + 1));
+                return;
+            }
+        }
+
         self.compileGetExpr(call.callee);
         for (call.args) |arg| {
             self.compileExpr(arg);
@@ -2072,6 +2088,14 @@ pub const Compiler = struct {
             c = cur.enclosing;
         }
         return null;
+    }
+
+    fn canResolveCallable(self: *Compiler, name: []const u8) bool {
+        if (self.resolveLocal(name) != null) return true;
+        if (self.resolveUpvalue(name) != null) return true;
+        if (self.findFunction(name) != null) return true;
+        if (self.findNative(name) != null) return true;
+        return false;
     }
 
     // ---------------------------------------------------------------
