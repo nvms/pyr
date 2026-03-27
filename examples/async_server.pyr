@@ -17,7 +17,7 @@ fn handle_json(req) {
 fn serve_request(server, routes, done) {
   conn = server.accept()
   raw = conn.read()
-  if raw == nil {
+  if raw == Eof {
     net.close(conn)
     done.send(1)
   } else {

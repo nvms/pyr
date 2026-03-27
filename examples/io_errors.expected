@@ -1,0 +1,5 @@
+read: hello
+eof detected
+match: eof
+connect error: connect failed
+done

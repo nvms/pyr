@@ -166,7 +166,18 @@ pub const Value = struct {
             .int => a.asInt() == b.asInt(),
             .float => a.asFloat() == b.asFloat(),
             .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
-            .function, .struct_, .enum_, .native_fn, .closure, .task, .channel, .listener, .conn, .ptr => a.data == b.data,
+            .enum_ => {
+                const ae = a.asEnum();
+                const be = b.asEnum();
+                if (ae.variant_index != be.variant_index) return false;
+                if (!std.mem.eql(u8, ae.type_name, be.type_name)) return false;
+                if (ae.payloads.len != be.payloads.len) return false;
+                for (ae.payloads, be.payloads) |ap, bp| {
+                    if (!eql(ap, bp)) return false;
+                }
+                return true;
+            },
+            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .ptr => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();

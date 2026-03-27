@@ -1,0 +1,34 @@
+imp std/net as net
+
+fn main() {
+  server = net.listen("127.0.0.1", 19920)
+  client = net.connect("127.0.0.1", 19920)
+  conn = net.accept(server)
+
+  net.write(client, "hello")
+  mut data = net.read(conn)
+  assert_eq(data, "hello")
+  println("read: " + data)
+
+  net.close(client)
+  data = net.read(conn)
+  assert_eq(data, Eof)
+  println("eof detected")
+
+  match data {
+    Eof -> println("match: eof")
+    Closed -> println("match: closed")
+    Error(msg) -> println("match: error " + msg)
+    _ -> println("match: data")
+  }
+
+  bad = net.connect("127.0.0.1", 19999)
+  match bad {
+    Error(msg) -> println("connect error: " + msg)
+    _ -> println("unexpected success")
+  }
+
+  net.close(conn)
+  net.close(server)
+  println("done")
+}

@@ -1730,11 +1730,11 @@ pub const VM = struct {
                 }
                 var pollfds = [1]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
                 _ = std.posix.poll(&pollfds, -1) catch {
-                    self.push(Value.initNil());
+                    self.push(self.ioError("poll failed"));
                     return;
                 };
                 const retry_fd = std.posix.accept(fd, null, null, 0) catch {
-                    self.push(Value.initNil());
+                    self.push(self.ioError("accept failed"));
                     return;
                 };
                 stdlib.setNonBlocking(retry_fd);
@@ -1743,7 +1743,7 @@ pub const VM = struct {
                 self.push(retry_conn.toValue());
                 return;
             }
-            self.push(Value.initNil());
+            self.push(self.ioError("accept failed"));
             return;
         };
 
@@ -1783,34 +1783,38 @@ pub const VM = struct {
                 }
                 var pollfds = [1]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
                 _ = std.posix.poll(&pollfds, -1) catch {
-                    self.push(Value.initNil());
+                    self.push(self.ioError("poll failed"));
                     return;
                 };
                 const retry_n = std.posix.read(fd, &buf) catch {
-                    self.push(Value.initNil());
+                    self.push(self.ioError("read failed"));
                     return;
                 };
                 if (retry_n == 0) {
-                    self.push(Value.initNil());
+                    self.push(self.ioEof());
                     return;
                 }
                 const owned = self.currentAlloc().dupe(u8, buf[0..retry_n]) catch {
-                    self.push(Value.initNil());
+                    self.push(self.ioError("out of memory"));
                     return;
                 };
                 self.push(ObjString.create(self.currentAlloc(), owned).toValue());
                 return;
             }
-            self.push(Value.initNil());
+            if (err == error.ConnectionResetByPeer or err == error.BrokenPipe) {
+                self.push(self.ioClosed());
+                return;
+            }
+            self.push(self.ioError("read failed"));
             return;
         };
 
         if (n == 0) {
-            self.push(Value.initNil());
+            self.push(self.ioEof());
             return;
         }
         const owned = self.currentAlloc().dupe(u8, buf[0..n]) catch {
-            self.push(Value.initNil());
+            self.push(self.ioError("out of memory"));
             return;
         };
         self.push(ObjString.create(self.currentAlloc(), owned).toValue());
@@ -1820,7 +1824,7 @@ pub const VM = struct {
         const data_val = self.pop();
         const target = self.pop();
         if (target.tag != .conn or data_val.tag != .string) {
-            self.push(Value.initBool(false));
+            self.push(self.ioError("write requires conn and string"));
             return;
         }
         const conn_obj = target.asConn();
@@ -1846,7 +1850,11 @@ pub const VM = struct {
                         return;
                     }
                 }
-                self.push(Value.initBool(false));
+                if (err == error.BrokenPipe or err == error.ConnectionResetByPeer) {
+                    self.push(self.ioClosed());
+                    return;
+                }
+                self.push(self.ioError("write failed"));
                 return;
             };
             written += n;
@@ -1859,14 +1867,14 @@ pub const VM = struct {
         const port_val = self.pop();
         const addr_val = self.pop();
         if (addr_val.tag != .string or port_val.tag != .int) {
-            self.push(Value.initNil());
+            self.push(self.ioError("connect requires string and int"));
             return;
         }
         const addr_str = addr_val.asString().chars;
         const port: u16 = @intCast(@as(i64, @max(0, @min(65535, port_val.asInt()))));
 
         const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch {
-            self.push(Value.initNil());
+            self.push(self.ioError("socket failed"));
             return;
         };
 
@@ -1892,13 +1900,13 @@ pub const VM = struct {
                     }
                 }
                 std.posix.close(fd);
-                self.push(Value.initNil());
+                self.push(self.ioError("connect failed"));
                 return;
             };
         } else {
             std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch {
                 std.posix.close(fd);
-                self.push(Value.initNil());
+                self.push(self.ioError("connect failed"));
                 return;
             };
         }
@@ -2068,6 +2076,30 @@ pub const VM = struct {
         }
         if (line == target_line) return source[start..];
         return "";
+    }
+
+    fn ioEof(self: *VM) Value {
+        const alloc = self.currentAlloc();
+        return ObjEnum.create(alloc, "IoError", "Eof", 0, &.{}).toValue();
+    }
+
+    fn ioClosed(self: *VM) Value {
+        const alloc = self.currentAlloc();
+        return ObjEnum.create(alloc, "IoError", "Closed", 1, &.{}).toValue();
+    }
+
+    fn ioError(self: *VM, msg: []const u8) Value {
+        const alloc = self.currentAlloc();
+        const owned = alloc.dupe(u8, msg) catch msg;
+        const str = ObjString.create(alloc, owned);
+        const payloads = alloc.alloc(Value, 1) catch @panic("oom");
+        payloads[0] = str.toValue();
+        return ObjEnum.create(alloc, "IoError", "Error", 2, payloads).toValue();
+    }
+
+    fn ioTimeout(self: *VM) Value {
+        const alloc = self.currentAlloc();
+        return ObjEnum.create(alloc, "IoError", "Timeout", 3, &.{}).toValue();
     }
 };
 
@@ -2978,7 +3010,7 @@ test "vm: net multiple messages same connection" {
     );
 }
 
-test "vm: net read returns nil on closed connection" {
+test "vm: net read returns Eof on closed connection" {
     try testRun(
         \\imp std/net as net
         \\fn main() {
@@ -2987,7 +3019,7 @@ test "vm: net read returns nil on closed connection" {
         \\  conn = net.accept(server)
         \\  net.close(client)
         \\  data = net.read(conn)
-        \\  assert_eq(data, nil)
+        \\  assert_eq(data, Eof)
         \\  net.close(conn)
         \\  net.close(server)
         \\  println("ok")
@@ -2995,12 +3027,16 @@ test "vm: net read returns nil on closed connection" {
     );
 }
 
-test "vm: net connect to non-listening port returns nil" {
+test "vm: net connect to non-listening port returns IoError" {
     try testRun(
         \\imp std/net { connect }
         \\fn main() {
         \\  conn = connect("127.0.0.1", 19899)
-        \\  assert_eq(conn, nil)
+        \\  assert(conn != nil)
+        \\  match conn {
+        \\    Error(msg) -> println("got error: " + msg)
+        \\    _ -> println("unexpected")
+        \\  }
         \\  println("ok")
         \\}
     );
@@ -3151,7 +3187,7 @@ test "vm: method-call accept and read" {
     );
 }
 
-test "vm: method-call read returns nil on close" {
+test "vm: method-call read returns Eof on close" {
     try testRun(
         \\imp std/net as net
         \\fn main() {
@@ -3160,7 +3196,7 @@ test "vm: method-call read returns nil on close" {
         \\  conn = server.accept()
         \\  net.close(client)
         \\  data = conn.read()
-        \\  assert_eq(data, nil)
+        \\  assert_eq(data, Eof)
         \\  net.close(conn)
         \\  net.close(server)
         \\  println("ok")

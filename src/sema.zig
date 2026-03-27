@@ -161,6 +161,12 @@ pub const Sema = struct {
         self.define("assert_eq", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("channel", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("await_all", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+
+        const io_err_ty = self.create(Type, .{ .named = "IoError" });
+        self.define("Eof", .{ .ty = io_err_ty, .is_mut = false, .kind = .variable });
+        self.define("Closed", .{ .ty = io_err_ty, .is_mut = false, .kind = .variable });
+        self.define("Error", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .function });
+        self.define("Timeout", .{ .ty = io_err_ty, .is_mut = false, .kind = .variable });
     }
 
     // ---------------------------------------------------------------

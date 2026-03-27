@@ -255,14 +255,15 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - `nil` keyword (not `none`) for null values. Value tag is `.nil`
 - 78 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, ffi_call
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
-- 199 tests, 23 validated examples, 10 benchmarks
+- IoError: built-in enum type (Eof, Closed, Error(str), Timeout) registered in both compiler and sema. I/O operations return IoError variants instead of nil/false on failure. net_read returns Eof on clean close, Closed on reset, Error(msg) on other failures. net_write returns true on success, IoError on failure. fs.read returns IoError on failure. enum equality compares by type_name + variant_index + payloads (structural, not pointer identity). zero-payload variants (Eof, Closed, Timeout) usable as expressions for direct comparison: `if data == Eof`
+- 199 tests, 24 validated examples, 10 benchmarks
 - benchmarks: fib(35) 0.84s (python 0.84s), loop 10M 0.20s (python 0.20s), closure 10M 0.26s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.53s (python 0.59s), match 30M 4.32s (python 2.16s), arena 1M 0.50s (python 0.22s), channel 100K 0.03s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** package manager / module resolution, error handling (?T option types, ?? operator)
+**next:** read/accept timeouts, UDP support, package manager / module resolution, error handling (?T option types, ?? operator)
 
 ## roadmap
 
@@ -278,7 +279,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 10. ~~std/json - parsing and serialization~~
 11. ~~FFI - zero-cost zig/C interop~~ (extern blocks, dlopen/dlsym, trampoline dispatch for up to 6 args)
 12. ~~dynamic scheduler limits~~ - growable run queue, io poller, and await waiters (starts at 64, doubles on demand). tested to 100 concurrent connections
-13. error values for I/O - read/write return error enums instead of nil/false, distinguish closed vs error
+13. ~~error values for I/O~~ - IoError built-in enum (Eof, Closed, Error(str), Timeout). I/O returns error enums instead of nil/false, distinguishes closed vs error vs eof
 14. read/accept timeouts - poll with configurable timeout, prevent hung clients from stalling scheduler
 15. UDP support - datagram sockets round out the networking story
 16. package manager / module resolution

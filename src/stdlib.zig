@@ -7,6 +7,22 @@ const ObjEnum = @import("value.zig").ObjEnum;
 const ObjListener = @import("value.zig").ObjListener;
 const ObjConn = @import("value.zig").ObjConn;
 
+pub fn makeIoEof(alloc: std.mem.Allocator) Value {
+    return ObjEnum.create(alloc, "IoError", "Eof", 0, &.{}).toValue();
+}
+
+pub fn makeIoClosed(alloc: std.mem.Allocator) Value {
+    return ObjEnum.create(alloc, "IoError", "Closed", 1, &.{}).toValue();
+}
+
+pub fn makeIoError(alloc: std.mem.Allocator, msg: []const u8) Value {
+    const owned = alloc.dupe(u8, msg) catch msg;
+    const str = ObjString.create(alloc, owned);
+    const payloads = alloc.alloc(Value, 1) catch @panic("oom");
+    payloads[0] = str.toValue();
+    return ObjEnum.create(alloc, "IoError", "Error", 2, payloads).toValue();
+}
+
 pub const NativeDef = struct {
     name: []const u8,
     arity: u8,
@@ -172,31 +188,31 @@ const fs_fns = [_]NativeDef{
 };
 
 fn fsRead(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string) return Value.initNil();
+    if (args[0].tag != .string) return makeIoError(alloc, "read requires string path");
     const path = args[0].asString().chars;
-    const content = std.fs.cwd().readFileAlloc(alloc, path, 10 * 1024 * 1024) catch return Value.initNil();
+    const content = std.fs.cwd().readFileAlloc(alloc, path, 10 * 1024 * 1024) catch return makeIoError(alloc, "read failed");
     return ObjString.create(alloc, content).toValue();
 }
 
-fn fsWrite(_: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .string) return Value.initBool(false);
+fn fsWrite(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .string) return makeIoError(alloc, "write requires string path and content");
     const path = args[0].asString().chars;
     const content = args[1].asString().chars;
-    const file = std.fs.cwd().createFile(path, .{}) catch return Value.initBool(false);
+    const file = std.fs.cwd().createFile(path, .{}) catch return makeIoError(alloc, "write failed");
     defer file.close();
-    file.writeAll(content) catch return Value.initBool(false);
+    file.writeAll(content) catch return makeIoError(alloc, "write failed");
     return Value.initBool(true);
 }
 
-fn fsAppend(_: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .string) return Value.initBool(false);
+fn fsAppend(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .string) return makeIoError(alloc, "append requires string path and content");
     const path = args[0].asString().chars;
     const content = args[1].asString().chars;
     const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch
-        std.fs.cwd().createFile(path, .{}) catch return Value.initBool(false);
+        std.fs.cwd().createFile(path, .{}) catch return makeIoError(alloc, "append failed");
     defer file.close();
-    file.seekFromEnd(0) catch return Value.initBool(false);
-    file.writeAll(content) catch return Value.initBool(false);
+    file.seekFromEnd(0) catch return makeIoError(alloc, "append failed");
+    file.writeAll(content) catch return makeIoError(alloc, "append failed");
     return Value.initBool(true);
 }
 
@@ -207,10 +223,10 @@ fn fsExists(_: std.mem.Allocator, args: []const Value) Value {
     return Value.initBool(true);
 }
 
-fn fsRemove(_: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string) return Value.initBool(false);
+fn fsRemove(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string) return makeIoError(alloc, "remove requires string path");
     const path = args[0].asString().chars;
-    std.fs.cwd().deleteFile(path) catch return Value.initBool(false);
+    std.fs.cwd().deleteFile(path) catch return makeIoError(alloc, "remove failed");
     return Value.initBool(true);
 }
 
@@ -523,73 +539,73 @@ pub fn parseAddr(s: []const u8) [4]u8 {
 }
 
 fn netListen(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .int) return Value.initNil();
+    if (args[0].tag != .string or args[1].tag != .int) return makeIoError(alloc, "listen requires string and int");
     const addr_str = args[0].asString().chars;
     const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
 
-    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return Value.initNil();
+    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return makeIoError(alloc, "socket failed");
 
     const yes: c_int = 1;
     std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(yes)) catch {
         std.posix.close(fd);
-        return Value.initNil();
+        return makeIoError(alloc, "setsockopt failed");
     };
 
     const octets = parseAddr(addr_str);
     const addr = std.net.Address.initIp4(octets, port);
     std.posix.bind(fd, &addr.any, addr.getOsSockLen()) catch {
         std.posix.close(fd);
-        return Value.initNil();
+        return makeIoError(alloc, "bind failed");
     };
 
     std.posix.listen(fd, 128) catch {
         std.posix.close(fd);
-        return Value.initNil();
+        return makeIoError(alloc, "listen failed");
     };
 
     return ObjListener.create(alloc, fd, port).toValue();
 }
 
 fn netAccept(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .listener) return Value.initNil();
+    if (args[0].tag != .listener) return makeIoError(alloc, "accept requires listener");
     const listener = args[0].asListener();
-    const client_fd = std.posix.accept(listener.fd, null, null, 0) catch return Value.initNil();
+    const client_fd = std.posix.accept(listener.fd, null, null, 0) catch return makeIoError(alloc, "accept failed");
     return ObjConn.create(alloc, client_fd).toValue();
 }
 
 fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .int) return Value.initNil();
+    if (args[0].tag != .string or args[1].tag != .int) return makeIoError(alloc, "connect requires string and int");
     const addr_str = args[0].asString().chars;
     const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
 
-    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return Value.initNil();
+    const fd = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return makeIoError(alloc, "socket failed");
     const octets = parseAddr(addr_str);
     const addr = std.net.Address.initIp4(octets, port);
     std.posix.connect(fd, &addr.any, addr.getOsSockLen()) catch {
         std.posix.close(fd);
-        return Value.initNil();
+        return makeIoError(alloc, "connect failed");
     };
 
     return ObjConn.create(alloc, fd).toValue();
 }
 
 fn netRead(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .conn) return Value.initNil();
+    if (args[0].tag != .conn) return makeIoError(alloc, "read requires conn");
     const conn = args[0].asConn();
     var buf: [8192]u8 = undefined;
-    const n = std.posix.read(conn.fd, &buf) catch return Value.initNil();
-    if (n == 0) return Value.initNil();
-    const owned = alloc.dupe(u8, buf[0..n]) catch return Value.initNil();
+    const n = std.posix.read(conn.fd, &buf) catch return makeIoError(alloc, "read failed");
+    if (n == 0) return makeIoEof(alloc);
+    const owned = alloc.dupe(u8, buf[0..n]) catch return makeIoError(alloc, "out of memory");
     return ObjString.create(alloc, owned).toValue();
 }
 
-fn netWrite(_: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .conn or args[1].tag != .string) return Value.initBool(false);
+fn netWrite(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .conn or args[1].tag != .string) return makeIoError(alloc, "write requires conn and string");
     const conn = args[0].asConn();
     const data = args[1].asString().chars;
     var written: usize = 0;
     while (written < data.len) {
-        written += std.posix.write(conn.fd, data[written..]) catch return Value.initBool(false);
+        written += std.posix.write(conn.fd, data[written..]) catch return makeIoError(alloc, "write failed");
     }
     return Value.initBool(true);
 }

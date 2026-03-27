@@ -125,6 +125,25 @@ pub const Compiler = struct {
         self.defineNativeFn("push", 2, &nativePush);
         self.defineNativeFn("assert", 1, &nativeAssert);
         self.defineNativeFn("assert_eq", 2, &nativeAssertEq);
+
+        self.registerBuiltinEnum("IoError", &.{
+            .{ .name = "Eof", .payloads = 0 },
+            .{ .name = "Closed", .payloads = 0 },
+            .{ .name = "Error", .payloads = 1 },
+            .{ .name = "Timeout", .payloads = 0 },
+        });
+    }
+
+    const BuiltinVariant = struct { name: []const u8, payloads: u8 };
+
+    fn registerBuiltinEnum(self: *Compiler, type_name: []const u8, variants: []const BuiltinVariant) void {
+        for (variants, 0..) |v, i| {
+            self.enum_variants.put(self.alloc, v.name, .{
+                .type_name = type_name,
+                .payload_count = v.payloads,
+                .variant_index = @intCast(i),
+            }) catch @panic("oom");
+        }
     }
 
     fn defineNativeFn(self: *Compiler, name: []const u8, arity: u8, func: *const fn (std.mem.Allocator, []const Value) Value) void {
