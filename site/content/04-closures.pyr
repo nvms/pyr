@@ -1,9 +1,9 @@
 ---
-title: closures
+title: Closures
 order: 4
 ---
-// closures are anonymous functions created with `fn`.
-// they capture variables from their enclosing scope.
+// Closures are anonymous functions created with `fn`.
+// They capture variables from their enclosing scope.
 fn main() {
   multiplier = 3
   triple = fn(x) x * multiplier
@@ -11,11 +11,11 @@ fn main() {
   println(triple(5))
   println(triple(10))
 
-// closures can be passed to other functions.
+// Closures can be passed to other functions.
   apply(7, fn(x) x + 1)
 }
 
-// a function that takes a closure as an argument.
+// A function that takes a closure as an argument.
 fn apply(val: int, f) {
   println(f(val))
 }

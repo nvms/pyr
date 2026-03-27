@@ -1,17 +1,17 @@
 ---
-title: functions
+title: Functions
 order: 3
 ---
-// functions are declared with `fn`. the last
+// Functions are declared with `fn`. The last
 // expression in a function body is the return value.
 fn add(a: int, b: int) -> int {
   a + b
 }
 
-// one-liner functions use `=` syntax.
+// One-liner functions use `=` syntax.
 fn double(x: int) -> int = x * 2
 
-// functions without a return type return `nil`.
+// Functions without a return type return `nil`.
 fn greet(name: str) {
   println("hello {name}")
 }

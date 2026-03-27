@@ -1,12 +1,12 @@
 ---
-title: arrays
+title: Arrays
 order: 8
 ---
-// arrays are created with `[]` syntax.
+// Arrays are created with `[]` syntax.
 fn main() {
   nums = [10, 20, 30, 40, 50]
 
-// access elements by index.
+// Access elements by index.
   println(nums[0])
   println(nums[4])
 
@@ -15,7 +15,7 @@ fn main() {
   push(items, 4)
   println(len(items))
 
-// iterate with `for..in`.
+// Iterate with `for..in`.
   for n in nums {
     println(n)
   }

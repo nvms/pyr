@@ -1,15 +1,15 @@
 ---
-title: concurrency
+title: Concurrency
 order: 14
 ---
 // `spawn` creates a green thread (task).
-// tasks are cooperatively scheduled.
+// Tasks are cooperatively scheduled.
 fn worker(id: int) {
   println("worker {id} done")
 }
 
 // `channel(n)` creates a bounded channel.
-// `.send()` and `.recv()` block when full/empty.
+// `.send()` and `.recv()` block when full or empty.
 fn producer(ch, n: int) {
   for i in range(n) {
     ch.send(i)

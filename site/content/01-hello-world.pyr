@@ -1,8 +1,8 @@
 ---
-title: hello world
+title: Hello World
 order: 1
 ---
-// every pyr program starts with a `main` function.
+// Every pyr program starts with a `main` function.
 fn main() {
   println("hello world")
 }

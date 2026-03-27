@@ -1,15 +1,15 @@
 ---
-title: enums
+title: Enums
 order: 6
 ---
-// enums are algebraic types. variants can carry payloads.
+// Enums are algebraic types. Variants can carry payloads.
 enum Shape {
   Circle(float)
   Rect(float, float)
   Point
 }
 
-// pattern matching destructures enum variants.
+// Pattern matching destructures enum variants.
 fn area(s: Shape) -> float {
   match s {
     Circle(r) -> 3.14159 * r * r

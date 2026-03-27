@@ -2,12 +2,14 @@ import { createHighlighter } from 'shiki'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, cpSync } from 'fs'
 import { join, dirname, basename } from 'path'
 import { fileURLToPath } from 'url'
+import { execSync } from 'child_process'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const CONTENT_DIR = join(__dirname, 'content')
 const OUT_DIR = join(__dirname, 'dist')
 const GRAMMAR_PATH = join(__dirname, '..', 'editors', 'vscode', 'syntaxes', 'pyr.tmLanguage.json')
 const TEMPLATE_PATH = join(__dirname, 'template.html')
+const PYR_BIN = join(__dirname, '..', 'zig-out', 'bin', 'pyr')
 
 function parseExample(raw) {
   const lines = raw.split('\n')
@@ -61,7 +63,7 @@ function renderDocs(text) {
 async function main() {
   const grammar = JSON.parse(readFileSync(GRAMMAR_PATH, 'utf8'))
   const highlighter = await createHighlighter({
-    themes: ['github-dark'],
+    themes: ['vitesse-black'],
     langs: [grammar],
   })
 
@@ -76,11 +78,31 @@ async function main() {
     const raw = readFileSync(join(CONTENT_DIR, file), 'utf8')
     const { meta, body } = parseFrontmatter(raw)
     const slug = basename(file, '.pyr').replace(/^\d+-/, '')
+    const runnable = meta.run !== 'false'
+    let output = null
+    if (runnable) {
+      try {
+        const stripped = body.replace(/^\/\/.*$/gm, '').trim()
+        const tmpFile = join(OUT_DIR, '_tmp.pyr')
+        mkdirSync(OUT_DIR, { recursive: true })
+        writeFileSync(tmpFile, stripped)
+        const result = execSync(`sh -c '"${PYR_BIN}" run "${tmpFile}" 2>&1'`, {
+          timeout: 5000,
+          encoding: 'utf8',
+        })
+        output = result.trimEnd()
+      } catch {
+        output = null
+      }
+      try { writeFileSync(tmpFile, ''); } catch {}
+    }
+
     examples.push({
       slug,
       title: meta.title || slug.replace(/-/g, ' '),
       order: meta.order || '99',
       file,
+      output,
       segments: parseExample(body.trim()),
     })
   }
@@ -100,7 +122,7 @@ async function main() {
       const highlighted = seg.code.trim()
         ? highlighter.codeToHtml(seg.code.replace(/^\n+|\n+$/g, ''), {
             lang: 'pyr',
-            theme: 'github-dark',
+            theme: 'vitesse-black',
           })
         : ''
 
@@ -110,10 +132,29 @@ async function main() {
           </tr>`
     }).join('\n')
 
+    let outputBlock = ''
+    if (example.output) {
+      const escaped = example.output
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+      outputBlock = `      <div class="output">
+        <table>
+          <tr>
+            <td class="docs"></td>
+            <td class="code">
+              <pre><span class="shell-prompt">$ </span><span class="shell-cmd">pyr run ${example.file.replace(/^\d+-/, '')}</span>\n${escaped}</pre>
+            </td>
+          </tr>
+        </table>
+      </div>`
+    }
+
     const html = template
       .replaceAll('{{title}}', example.title)
       .replace('{{nav}}', nav)
       .replace('{{rows}}', rows)
+      .replace('{{output}}', outputBlock)
       .replace('{{prev}}', getPrev(examples, example))
       .replace('{{next}}', getNext(examples, example))
 
@@ -134,11 +175,11 @@ async function main() {
 </head>
 <body>
   <div id="intro">
-    <h1>pyr by example</h1>
+    <h1>Pyr by Example</h1>
     <p>
-      pyr is a systems programming language with scripting ergonomics, built in zig.
-      no GC, no runtime overhead, arena-scoped memory.
-      high-level code reads like python, low-level code reads like zig - same language, different depths.
+      Pyr is a systems programming language with scripting ergonomics, built in Zig.
+      No GC, no runtime overhead, arena-scoped memory.
+      High-level code reads like Python, low-level code reads like Zig - same language, different depths.
     </p>
     <ul>
       ${indexNav}

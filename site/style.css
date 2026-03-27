@@ -5,27 +5,37 @@
 }
 
 body {
-  background: #0d1117;
-  color: #c9d1d9;
-  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace;
-  font-size: 14px;
+  background: #111;
+  color: #aaa;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 16px;
   line-height: 1.6;
 }
 
+pre, pre code, :not(pre) > code {
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
 a {
-  color: #58a6ff;
+  color: #aaa;
   text-decoration: none;
 }
 
 a:hover {
-  text-decoration: underline;
+  color: #fff;
 }
 
-code {
-  background: #161b22;
+:not(pre) > code {
+  background: #1a1a1a;
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 13px;
+  color: #ccc;
+}
+
+pre code {
+  padding: 0;
+  background: none;
 }
 
 /* index page */
@@ -39,12 +49,12 @@ code {
 #intro h1 {
   font-size: 22px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: #eee;
   margin-bottom: 16px;
 }
 
 #intro p {
-  color: #8b949e;
+  color: #777;
   margin-bottom: 24px;
   line-height: 1.7;
 }
@@ -59,107 +69,197 @@ code {
 }
 
 #intro ul li a {
-  color: #c9d1d9;
+  color: #999;
 }
 
 #intro ul li a:hover {
-  color: #58a6ff;
+  color: #fff;
 }
 
 #intro .footer {
-  color: #484f58;
+  color: #555;
   font-size: 12px;
 }
 
-/* example page */
+#intro .footer a {
+  color: #555;
+}
+
+#intro .footer a:hover {
+  color: #999;
+}
+
+/* example page layout: sidebar left, content right */
 
 .example {
-  max-width: 1060px;
-  margin: 0 auto;
-  padding: 20px 0;
-  position: relative;
+  display: flex;
+  min-height: 100vh;
 }
 
-.example .nav-header {
+.sidebar {
+  width: 200px;
+  min-width: 200px;
+  padding: 20px 16px;
+  background: #0e0e0e;
+  border-right: 1px solid #222;
+  overflow-y: auto;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+}
+
+.sidebar h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.sidebar h3 a {
+  color: #eee;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar nav a {
+  color: #666;
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.sidebar nav a:hover {
+  color: #ccc;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 40px;
+  max-width: 900px;
+}
+
+.content .nav-header {
   padding: 0 0 12px 0;
   font-size: 12px;
-  color: #484f58;
+  color: #555;
 }
 
-.example .nav-header a {
-  color: #484f58;
+.content .nav-header a {
+  color: #555;
 }
 
-.example .nav-header a:hover {
-  color: #58a6ff;
+.content .nav-header a:hover {
+  color: #999;
 }
 
-.example h2 {
+.content h2 {
   font-size: 20px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: #eee;
   margin-bottom: 24px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid #222;
 }
 
-.example table {
+.content table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.example table td {
+.content table td {
   vertical-align: top;
   padding: 4px 0;
 }
 
-.example table td.docs {
-  width: 340px;
+.content table td.docs {
+  width: 280px;
   padding-right: 32px;
   padding-top: 8px;
 }
 
-.example table td.docs p {
-  color: #8b949e;
+.content table td.docs p {
+  color: #777;
   font-size: 13px;
   line-height: 1.6;
   margin-bottom: 4px;
 }
 
-.example table td.docs code {
-  color: #c9d1d9;
+.content table td.docs code {
+  color: #ccc;
   font-size: 12px;
 }
 
-.example table td.code {
+.content table td.code {
   padding-bottom: 8px;
 }
 
-.example table td.code.leading {
+.content table td.code.leading {
   padding-bottom: 16px;
-  border-bottom: 1px solid #161b22;
 }
 
-.example table td.code pre {
+.content table td.code pre {
   margin: 0;
   padding: 12px 16px;
-  background: #161b22;
-  border-radius: 6px;
+  background: #1a1a1a;
+  border-radius: 4px;
   overflow-x: auto;
   font-size: 13px;
   line-height: 1.5;
 }
 
-/* override shiki background */
-.example table td.code pre.shiki {
-  background: #161b22 !important;
+.content table td.code pre.shiki {
+  background: #1a1a1a !important;
+}
+
+.output {
+  margin-top: 8px;
+}
+
+.output table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.output table td {
+  vertical-align: top;
+  padding: 4px 0;
+}
+
+.output table td.docs {
+  width: 280px;
+  padding-right: 32px;
+}
+
+.output table td.code pre {
+  margin: 0;
+  padding: 12px 16px;
+  background: #1a1a1a;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #999;
+}
+
+.output .shell-prompt {
+  color: #666;
+  user-select: none;
+}
+
+.output .shell-cmd {
+  color: #ccc;
+  font-weight: bold;
 }
 
 .pagination {
   display: flex;
   justify-content: space-between;
   padding: 24px 0;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid #222;
   margin-top: 16px;
   font-size: 13px;
 }
@@ -173,71 +273,31 @@ code {
   text-align: right;
 }
 
-/* sidebar */
-
-.sidebar {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 200px;
-  height: 100vh;
-  overflow-y: auto;
-  padding: 20px 16px;
-  background: #0d1117;
-  border-left: 1px solid #161b22;
-}
-
-.sidebar h3 {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-
-.sidebar h3 a {
-  color: #f0f6fc;
-}
-
-.sidebar nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.sidebar nav a {
-  color: #8b949e;
-  font-size: 12px;
-  padding: 2px 0;
-}
-
-.sidebar nav a:hover {
-  color: #58a6ff;
-}
-
 @media (max-width: 900px) {
   .sidebar {
     display: none;
   }
 
-  .example {
+  .content {
     padding: 20px;
   }
 
-  .example table td.docs {
-    width: 200px;
+  .content table td.docs {
+    width: 180px;
     padding-right: 16px;
   }
 }
 
 @media (max-width: 640px) {
-  .example table,
-  .example table tbody,
-  .example table tr,
-  .example table td {
+  .content table,
+  .content table tbody,
+  .content table tr,
+  .content table td {
     display: block;
     width: 100%;
   }
 
-  .example table td.docs {
+  .content table td.docs {
     padding-right: 0;
     padding-bottom: 4px;
   }

@@ -1,9 +1,9 @@
 ---
-title: mutable references
+title: Mutable References
 order: 12
 ---
-// function parameters are immutable by default.
-// field assignment on a non-`*mut` param is a compile error.
+// Function parameters are immutable by default.
+// Field assignment on a non-`*mut` param is a compile error.
 struct Point {
   x: int
   y: int
@@ -15,13 +15,13 @@ fn translate(p: *mut Point, dx: int, dy: int) {
   p.y += dy
 }
 
-// read-only access needs no special syntax.
+// Read-only access needs no special syntax.
 fn magnitude(p: Point) -> int {
   p.x + p.y
 }
 
-// at the call site, `&mut` makes mutation visible.
-// the variable must be declared `mut`.
+// At the call site, `&mut` makes mutation visible.
+// The variable must be declared `mut`.
 fn main() {
   mut p = Point { x: 1, y: 2 }
   println(magnitude(p))

@@ -1,8 +1,8 @@
 ---
-title: error handling
+title: Error Handling
 order: 10
 ---
-// `T?` is an optional type. functions can return `nil`.
+// `T?` is an optional type. Functions can return `nil`.
 fn find(items, target: int) -> int? {
   for i in range(len(items)) {
     if items[i] == target {

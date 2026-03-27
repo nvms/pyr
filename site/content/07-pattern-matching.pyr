@@ -1,5 +1,5 @@
 ---
-title: pattern matching
+title: Pattern Matching
 order: 7
 ---
 // `match` works on enums, literals, and wildcards.
@@ -13,7 +13,7 @@ fn describe(c: Color) -> str {
   }
 }
 
-// match can be used inline as an expression.
+// Match can be used inline as an expression.
 fn classify(n: int) -> str {
   match n {
     0 -> "zero"

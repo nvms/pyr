@@ -12,21 +12,21 @@ struct Config {
 }
 
 fn main() {
-// encode any value to a JSON string.
+// Encode any value to a JSON string.
   config = Config { host: "localhost", port: 8080, debug: true }
   json_str = encode(config)
   println(json_str)
 
-// encode arrays and primitives.
+// Encode arrays and primitives.
   println(encode([1, 2, 3]))
   println(encode("hello"))
 
-// decode JSON strings back to pyr values.
+// Decode JSON strings back to pyr values.
   data = decode("{\"name\":\"alice\",\"age\":30}")
   println(data.name)
   println(data.age)
 
-// round-trip: decode(encode(v)) preserves structure.
+// Round-trip: decode(encode(v)) preserves structure.
   original = [10, 20, 30]
   roundtrip = decode(encode(original))
   println(roundtrip)

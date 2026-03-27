@@ -1,20 +1,20 @@
 ---
-title: strings
+title: Strings
 order: 9
 ---
-// strings support interpolation, indexing, and builtins.
+// Strings support interpolation, indexing, and builtins.
 fn main() {
   name = "hello world"
 
-// length and indexing.
+// Length and indexing.
   println(name.len)
   println(name[0])
 
-// string interpolation with `{}`.
+// String interpolation with `{}`.
   greeting = "say: {name}"
   println(greeting)
 
-// builtin string operations via UFCS.
+// Built-in string operations via UFCS.
   println("hello".to_upper())
   println("  padded  ".trim())
   println("a-b-c".split("-").join(", "))

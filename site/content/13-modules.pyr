@@ -1,25 +1,26 @@
 ---
-title: modules
+title: Modules
 order: 13
+run: false
 ---
 // `imp` imports from stdlib or local files.
-// selective import pulls specific names into scope.
+// Selective import pulls specific names into scope.
 imp std/io { println, print }
 
-// namespace import keeps the module prefix.
+// Namespace import keeps the module prefix.
 imp std/fs
 
-// aliased import renames the module.
+// Aliased import renames the module.
 imp std/os as system
 
 fn main() {
   println("hello from std/io")
 
-// namespace access uses dot syntax.
+// Namespace access uses dot syntax.
   exists = fs.exists("README.md")
   println(exists)
 
-// aliased module access.
+// Aliased module access.
   name = system.env("USER") or "unknown"
   println(name)
 }
