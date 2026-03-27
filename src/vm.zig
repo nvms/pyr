@@ -222,7 +222,7 @@ pub const Scheduler = struct {
                 switch (self.io_ops[j]) {
                     .accept => {
                         const client_fd = std.posix.accept(self.io_fds[j], null, null, 0) catch {
-                            task.stack[task.sp] = Value.initNil();
+                            task.stack[task.sp] = stdlib.makeIoError(alloc, "accept failed");
                             task.sp += 1;
                             task.state = .ready;
                             self.enqueue(task);
@@ -238,7 +238,7 @@ pub const Scheduler = struct {
                     .read => {
                         var buf: [8192]u8 = undefined;
                         const n = std.posix.read(self.io_fds[j], &buf) catch {
-                            task.stack[task.sp] = Value.initNil();
+                            task.stack[task.sp] = stdlib.makeIoError(alloc, "read failed");
                             task.sp += 1;
                             task.state = .ready;
                             self.enqueue(task);
@@ -246,10 +246,10 @@ pub const Scheduler = struct {
                             continue;
                         };
                         if (n == 0) {
-                            task.stack[task.sp] = Value.initNil();
+                            task.stack[task.sp] = stdlib.makeIoEof(alloc);
                         } else {
                             const owned = alloc.dupe(u8, buf[0..n]) catch {
-                                task.stack[task.sp] = Value.initNil();
+                                task.stack[task.sp] = stdlib.makeIoError(alloc, "out of memory");
                                 task.sp += 1;
                                 task.state = .ready;
                                 self.enqueue(task);
@@ -263,19 +263,21 @@ pub const Scheduler = struct {
                     .write => {
                         const data = self.io_write_data[j];
                         var off = self.io_write_off[j];
+                        var write_err = false;
                         while (off < data.len) {
                             const n = std.posix.write(self.io_fds[j], data[off..]) catch {
+                                write_err = true;
                                 break;
                             };
                             off += n;
                         }
-                        task.stack[task.sp] = Value.initBool(off >= data.len);
+                        task.stack[task.sp] = if (write_err) stdlib.makeIoError(alloc, "write failed") else Value.initBool(true);
                         task.sp += 1;
                     },
                     .connect => {
                         if (pollfds[j].revents & std.posix.POLL.ERR != 0) {
                             std.posix.close(self.io_fds[j]);
-                            task.stack[task.sp] = Value.initNil();
+                            task.stack[task.sp] = stdlib.makeIoError(alloc, "connect failed");
                         } else {
                             const connect_conn = ObjConn.create(alloc, self.io_fds[j]);
                             connect_conn.nonblock = true;
@@ -1375,6 +1377,18 @@ pub const VM = struct {
     }
 
     fn valueToString(self: *VM, val: Value) Value {
+        const ca = self.currentAlloc();
+        if (val.tag == .string) return val;
+        if (val.tag == .enum_) {
+            const e = val.asEnum();
+            if (e.payloads.len > 0 and e.payloads[0].tag == .string) {
+                const inner = e.payloads[0].asString().chars;
+                const s = std.fmt.allocPrint(ca, "{s}({s})", .{ e.variant, inner }) catch return val;
+                return ObjString.create(ca, s).toValue();
+            }
+            const s = ca.dupe(u8, e.variant) catch return val;
+            return ObjString.create(ca, s).toValue();
+        }
         var buf: [64]u8 = undefined;
         const s = switch (val.tag) {
             .int => std.fmt.bufPrint(&buf, "{d}", .{val.asInt()}) catch "?",
@@ -1383,7 +1397,6 @@ pub const VM = struct {
             .nil => "nil",
             else => "?",
         };
-        const ca = self.currentAlloc();
         const copy = ca.alloc(u8, s.len) catch @panic("oom");
         @memcpy(copy, s);
         return ObjString.create(ca, copy).toValue();
