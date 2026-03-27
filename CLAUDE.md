@@ -274,11 +274,12 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - benchmarks: fib(35) 0.67s (python 0.86s), loop 10M 0.20s (python 0.22s), closure 10M 0.24s (python 0.32s), struct 10M 0.31s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.64s (python 0.62s), match 30M 2.62s (python 2.07s), arena 1M 0.27s (python 0.22s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.17s)
 
 **not yet implemented (parser level):**
+- type aliases and function type hints: `type Predicate = fn(int) -> bool`, then `fn filter(items, pred: Predicate)`. inline `fn(...) -> T` syntax in type expressions for one-off cases. `type` keyword for named aliases that resolve to the underlying type. enables compile-time arity/type checking for function parameters. high priority - currently function params are untyped and errors are runtime-only
+- anonymous struct literals: `.{ field: val }` inferred from context (zig-style). when the compiler knows the expected type from a function param, return type, or annotated binding, allow omitting the struct name. pure syntax sugar - desugars to `TypeName { field: val }` during compilation
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
-- anonymous struct literals: `.{ field: val }` inferred from context (zig-style). when the compiler knows the expected type from a function param, return type, or annotated binding, allow omitting the struct name. pure syntax sugar - desugars to `TypeName { field: val }` during compilation
 
-**next:** performance (function inlining for small pure functions, match dispatch optimization), dogfooding, map/filter/reduce (need VM callback support)
+**next:** type aliases + function type hints, performance (function inlining for small pure functions, match dispatch optimization), dogfooding, map/filter/reduce (need VM callback support)
 
 ## roadmap
 
