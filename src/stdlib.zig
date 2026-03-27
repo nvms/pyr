@@ -133,6 +133,11 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
             }
             writeBytes(fd, "]");
         },
+        .error_val => {
+            writeBytes(fd, "error(");
+            writeValueTo(alloc, fd, v.asError().value);
+            writeBytes(fd, ")");
+        },
     }
 }
 

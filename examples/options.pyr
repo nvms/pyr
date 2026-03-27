@@ -12,18 +12,18 @@ fn greet(id: int) {
 }
 
 fn main() {
-  user = find_user(1) ?? "unknown"
+  user = find_user(1) or "unknown"
   assert_eq(user, "alice")
   println(user)
 
-  user2 = find_user(99) ?? "unknown"
+  user2 = find_user(99) or "unknown"
   assert_eq(user2, "unknown")
   println(user2)
 
-  assert_eq(false ?? "fallback", false)
-  assert_eq(0 ?? "fallback", 0)
-  assert_eq(nil ?? "fallback", "fallback")
-  assert_eq(nil ?? nil ?? "deep", "deep")
+  assert_eq(false or "fallback", false)
+  assert_eq(0 or "fallback", 0)
+  assert_eq(nil or "fallback", "fallback")
+  assert_eq(nil or nil or "deep", "deep")
 
   assert_eq(true && true, true)
   assert_eq(true && false, false)

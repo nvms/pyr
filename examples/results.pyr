@@ -1,0 +1,54 @@
+fn parse_number(s: str) {
+  if s == "42" {
+    42
+  } else if s == "" {
+    fail "empty input"
+  } else {
+    fail "invalid number: " + s
+  }
+}
+
+fn double_parse(s: str) {
+  n = parse_number(s)?
+  n * 2
+}
+
+fn main() {
+  result = parse_number("42")
+  assert_eq(result, 42)
+  println(result)
+
+  result2 = parse_number("")
+  println(result2)
+
+  safe = parse_number("42") or 0
+  assert_eq(safe, 42)
+  println("safe ok")
+
+  fallback = parse_number("bad") or -1
+  assert_eq(fallback, -1)
+  println("fallback ok")
+
+  fallback2 = parse_number("") or -1
+  assert_eq(fallback2, -1)
+  println("fallback2 ok")
+
+  d = double_parse("42")
+  assert_eq(d, 84)
+  println("double ok")
+
+  d2 = double_parse("bad")
+  println(d2)
+
+  d3 = double_parse("bad") or 0
+  assert_eq(d3, 0)
+  println("d3 ok")
+
+  parse_number("nope") or |err| {
+    println("caught: " + err)
+  }
+
+  println("after or-binding")
+
+  println("all result tests passed")
+}

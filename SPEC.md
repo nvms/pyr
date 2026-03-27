@@ -188,22 +188,96 @@ data
 
 ## option and error handling
 
-no null. option types with `?` suffix:
-```
-fn find(id: int) -> ?User { ... }
+### option types (might be absent)
 
-// ?? operator - unwrap or fallback
-user = find(42) ?? default_user
-user = find(42) ?? return not_found()
+postfix `?` on types:
+```
+fn find(id: int) -> User? { ... }
 ```
 
-result types for errors:
+`or` operator for unwrap-or-fallback:
 ```
-fn parse(s: str) -> Result(Config, str) {
-  content = fs.read(s) ?? return err("file not found")
-  ok(json.decode(Config, content))
+user = find(42) or default_user()
+user = find(42) or { return }
+```
+
+`?` suffix for early return on nil:
+```
+fn greet(id: int) -> str? {
+  name = find(id)?
+  "hello " + name
 }
 ```
+
+### result types (might have failed)
+
+postfix `!` on types. bare `!` means string error, `!(E)` for typed errors:
+```
+fn parse(raw: str) -> Config! {
+  if raw.len == 0 { fail "empty input" }
+  do_parse(raw)
+}
+
+fn connect(addr: str) -> Conn!(IoError) {
+  ...
+}
+```
+
+`fail` produces an error value and returns from the function:
+```
+fail "something went wrong"
+fail IoError.Timeout
+```
+
+`or` catches both nil and error:
+```
+config = parse(data) or default_config()
+safe = parse(data) or 0
+```
+
+`or |err|` binds the error value:
+```
+config = parse(data) or |err| {
+  log("failed: " + err)
+  default_config()
+}
+```
+
+`?` propagates errors up the call chain:
+```
+fn load_settings(path: str) -> Settings! {
+  raw = fs.read(path)?
+  config = parse(raw)?
+  validate(config)?
+  config
+}
+```
+
+`!` crashes on nil or error (unwrap-or-die):
+```
+config = parse(data)!
+```
+
+### error type compatibility
+
+| from | into | result |
+|------|------|--------|
+| `T!` | `U!` | passes through (both string errors) |
+| `T!(IoError)` | `U!` | IoError stringified, propagates |
+| `T!(IoError)` | `U!(IoError)` | passes through directly |
+| `T!(IoError)` | `U!(HttpError)` | compiler error |
+
+### truthiness
+
+`nil` and `false` are falsy. `0`, empty strings, and error values are falsy. everything else is truthy.
+
+`&&` and `||` short-circuit and return actual values:
+```
+nil && true     // nil
+nil || "yes"    // "yes"
+```
+
+`or` checks for nil specifically (not falsiness), so `false or x` returns `false`.
 
 ## concurrency
 
@@ -233,7 +307,7 @@ pub struct User {
   name: str
 }
 
-pub fn validate(u: User) -> Result(User, []str) { ... }
+pub fn validate(u: User) -> User!([]str) { ... }
 
 fn internal_helper() { ... }  // not visible outside
 ```
@@ -403,7 +477,7 @@ fn main() {
 
   serve ":8080" {
     get "/users/:id" |req| {
-      user = db.find(User, req.params.id) ?? not_found()
+      user = db.find(User, req.params.id) or not_found()
       json(user)
     }
 

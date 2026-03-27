@@ -438,6 +438,10 @@ pub const Parser = struct {
             return self.parseReturn(start);
         }
 
+        if (self.peek() == .kw_fail) {
+            return self.parseFail(start);
+        }
+
         if (self.peek() == .kw_for) {
             return self.parseForStmt(start);
         }
@@ -527,6 +531,13 @@ pub const Parser = struct {
             value = self.parseExpr() orelse return null;
         }
         return .{ .span = self.spanFrom(start), .kind = .{ .ret = .{ .value = value } } };
+    }
+
+    fn parseFail(self: *Parser, start: usize) ?ast.Stmt {
+        _ = self.expect(.kw_fail) orelse return null;
+        self.skipNewlines();
+        const value = self.parseExpr() orelse return null;
+        return .{ .span = self.spanFrom(start), .kind = .{ .fail = .{ .value = value } } };
     }
 
     fn parseForStmt(self: *Parser, start: usize) ?ast.Stmt {
@@ -624,6 +635,11 @@ pub const Parser = struct {
 
             if (self.peek() == .pipe_right) {
                 lhs = self.parsePipelineExpr(lhs) orelse return null;
+                continue;
+            }
+
+            if (self.peek() == .kw_or) {
+                lhs = self.parseOrExpr(lhs) orelse return null;
                 continue;
             }
 
@@ -856,6 +872,13 @@ pub const Parser = struct {
                     .kind = .{ .try_unwrap = lhs },
                 });
             },
+            .bang => {
+                _ = self.advance();
+                return self.create(ast.Expr, .{
+                    .span = self.spanFrom(start),
+                    .kind = .{ .unwrap_crash = lhs },
+                });
+            },
             else => return lhs,
         }
     }
@@ -881,6 +904,35 @@ pub const Parser = struct {
             .span = .{ .start = start, .end = end },
             .kind = .{ .pipeline = .{
                 .stages = stages.toOwnedSlice(self.arena) catch @panic("oom"),
+            } },
+        });
+    }
+
+    fn parseOrExpr(self: *Parser, lhs: *const ast.Expr) ?*const ast.Expr {
+        _ = self.expect(.kw_or) orelse return null;
+        self.skipNewlines();
+
+        var err_binding: ?[]const u8 = null;
+        if (self.eat(.pipe) != null) {
+            err_binding = self.expectIdent() orelse return null;
+            _ = self.expect(.pipe) orelse return null;
+            self.skipNewlines();
+        }
+
+        const rhs = if (self.peek() == .lbrace)
+            self.create(ast.Expr, .{
+                .span = self.spanFrom(lhs.span.start),
+                .kind = .{ .block = self.parseBlock() orelse return null },
+            })
+        else
+            self.parsePrecedence(Precedence.coalesce.next()) orelse return null;
+
+        return self.create(ast.Expr, .{
+            .span = .{ .start = lhs.span.start, .end = rhs.span.end },
+            .kind = .{ .or_expr = .{
+                .lhs = lhs,
+                .err_binding = err_binding,
+                .rhs = rhs,
             } },
         });
     }
@@ -1144,14 +1196,6 @@ pub const Parser = struct {
     fn parseTypeExpr(self: *Parser) ?*const ast.TypeExpr {
         const start = self.currentSpanStart();
 
-        if (self.eat(.question) != null) {
-            const inner = self.parseTypeExpr() orelse return null;
-            return self.create(ast.TypeExpr, .{
-                .span = self.spanFrom(start),
-                .kind = .{ .optional = inner },
-            });
-        }
-
         if (self.eat(.star) != null) {
             var is_mut = false;
             if (self.eat(.kw_mut) != null) {
@@ -1176,6 +1220,7 @@ pub const Parser = struct {
 
         const name = self.expectTypeIdent() orelse return null;
 
+        var base: *const ast.TypeExpr = undefined;
         if (self.eat(.lparen) != null) {
             self.nesting += 1;
             var args = std.ArrayListUnmanaged(*const ast.TypeExpr){};
@@ -1191,19 +1236,44 @@ pub const Parser = struct {
             }
             self.nesting -= 1;
             _ = self.expect(.rparen) orelse return null;
-            return self.create(ast.TypeExpr, .{
+            base = self.create(ast.TypeExpr, .{
                 .span = self.spanFrom(start),
                 .kind = .{ .generic = .{
                     .name = name,
                     .args = args.toOwnedSlice(self.arena) catch @panic("oom"),
                 } },
             });
+        } else {
+            base = self.create(ast.TypeExpr, .{
+                .span = self.spanFrom(start),
+                .kind = .{ .named = name },
+            });
         }
 
-        return self.create(ast.TypeExpr, .{
-            .span = self.spanFrom(start),
-            .kind = .{ .named = name },
-        });
+        if (self.eat(.question) != null) {
+            return self.create(ast.TypeExpr, .{
+                .span = self.spanFrom(start),
+                .kind = .{ .optional = base },
+            });
+        }
+
+        if (self.eat(.bang) != null) {
+            var err_type: ?*const ast.TypeExpr = null;
+            if (self.eat(.lparen) != null) {
+                self.nesting += 1;
+                self.skipNewlines();
+                err_type = self.parseTypeExpr() orelse return null;
+                self.skipNewlines();
+                self.nesting -= 1;
+                _ = self.expect(.rparen) orelse return null;
+            }
+            return self.create(ast.TypeExpr, .{
+                .span = self.spanFrom(start),
+                .kind = .{ .result = .{ .ok_type = base, .err_type = err_type } },
+            });
+        }
+
+        return base;
     }
 
     // ---------------------------------------------------------------
@@ -1237,7 +1307,7 @@ pub const Parser = struct {
             .and_and => .and_,
             .eq_eq, .bang_eq => .equality,
             .lt, .gt, .lt_eq, .gt_eq => .comparison,
-            .double_question => .coalesce,
+            .kw_or => .coalesce,
             .dotdot => .range,
             .plus, .minus => .addition,
             .star, .slash, .percent => .multiply,
@@ -1246,7 +1316,7 @@ pub const Parser = struct {
     }
 
     fn isPostfixToken(tag: Token.Tag) bool {
-        return tag == .dot or tag == .lparen or tag == .lbracket or tag == .question;
+        return tag == .dot or tag == .lparen or tag == .lbracket or tag == .question or tag == .bang;
     }
 
     // ---------------------------------------------------------------
@@ -1726,8 +1796,8 @@ test "parse spawn" {
     try std.testing.expectEqual(ast.Expr.Kind.spawn, std.meta.activeTag(expr.kind));
 }
 
-test "parse optional type" {
-    const result = testParse("fn find(id: int) -> ?User {}");
+test "parse optional type postfix" {
+    const result = testParse("fn find(id: int) -> User? {}");
     try expectNoErrors(result);
     const rt = result.items[0].kind.fn_decl.return_type.?;
     try std.testing.expectEqual(ast.TypeExpr.Kind.optional, std.meta.activeTag(rt.kind));
@@ -1763,11 +1833,12 @@ test "parse generic type" {
     try std.testing.expectEqual(@as(usize, 2), rt.kind.generic.args.len);
 }
 
-test "parse coalesce operator" {
-    const result = testParse("fn f() = find(42) ?? default");
+test "parse or operator" {
+    const result = testParse("fn f() = find(42) or default");
     try expectNoErrors(result);
     const expr = result.items[0].kind.fn_decl.body.expr;
-    try std.testing.expectEqual(Token.Tag.double_question, expr.kind.binary.op);
+    try std.testing.expectEqual(ast.Expr.Kind.or_expr, std.meta.activeTag(expr.kind));
+    try std.testing.expect(expr.kind.or_expr.err_binding == null);
 }
 
 test "parse struct literal" {
@@ -1816,4 +1887,51 @@ test "parse hello.pyr" {
     const block = decl.body.block;
     try std.testing.expect(block.trailing != null);
     try std.testing.expectEqual(ast.Expr.Kind.call, std.meta.activeTag(block.trailing.?.kind));
+}
+
+test "parse result type" {
+    const result = testParse("fn parse(s: str) -> Config! {}");
+    try expectNoErrors(result);
+    const rt = result.items[0].kind.fn_decl.return_type.?;
+    try std.testing.expectEqual(ast.TypeExpr.Kind.result, std.meta.activeTag(rt.kind));
+    try std.testing.expect(rt.kind.result.err_type == null);
+}
+
+test "parse result type with error type" {
+    const result = testParse("fn connect(addr: str) -> Conn!(IoError) {}");
+    try expectNoErrors(result);
+    const rt = result.items[0].kind.fn_decl.return_type.?;
+    try std.testing.expectEqual(ast.TypeExpr.Kind.result, std.meta.activeTag(rt.kind));
+    try std.testing.expect(rt.kind.result.err_type != null);
+}
+
+test "parse or with error binding" {
+    const result = testParse("fn f() = x or |err| { err }");
+    try expectNoErrors(result);
+    const expr = result.items[0].kind.fn_decl.body.expr;
+    try std.testing.expectEqual(ast.Expr.Kind.or_expr, std.meta.activeTag(expr.kind));
+    try std.testing.expect(expr.kind.or_expr.err_binding != null);
+    try std.testing.expectEqualStrings("err", expr.kind.or_expr.err_binding.?);
+}
+
+test "parse fail statement" {
+    const result = testParse("fn f() {\n  fail \"error\"\n}");
+    try expectNoErrors(result);
+    const block = result.items[0].kind.fn_decl.body.block;
+    try std.testing.expectEqual(@as(usize, 1), block.stmts.len);
+    try std.testing.expectEqual(ast.Stmt.Kind.fail, std.meta.activeTag(block.stmts[0].kind));
+}
+
+test "parse unwrap crash postfix" {
+    const result = testParse("fn f() = x!");
+    try expectNoErrors(result);
+    const expr = result.items[0].kind.fn_decl.body.expr;
+    try std.testing.expectEqual(ast.Expr.Kind.unwrap_crash, std.meta.activeTag(expr.kind));
+}
+
+test "parse try_unwrap still works" {
+    const result = testParse("fn f() = x?");
+    try expectNoErrors(result);
+    const expr = result.items[0].kind.fn_decl.body.expr;
+    try std.testing.expectEqual(ast.Expr.Kind.try_unwrap, std.meta.activeTag(expr.kind));
 }

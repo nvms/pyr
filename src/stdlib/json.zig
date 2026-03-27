@@ -67,6 +67,11 @@ pub fn writeValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v:
                 buf.appendSlice(alloc, "]}") catch return;
             }
         },
+        .error_val => {
+            buf.appendSlice(alloc, "{\"error\":") catch return;
+            writeValue(alloc, buf, v.asError().value);
+            buf.append(alloc, '}') catch return;
+        },
         .function, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn, .ptr => buf.appendSlice(alloc, "null") catch return,
     }
 }

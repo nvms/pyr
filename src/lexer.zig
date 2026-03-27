@@ -37,7 +37,7 @@ pub const Lexer = struct {
             ']' => self.makeToken(.rbracket, start, self.pos),
             ',' => self.makeToken(.comma, start, self.pos),
             ':' => self.makeToken(.colon, start, self.pos),
-            '?' => if (self.match('?')) self.makeToken(.double_question, start, self.pos) else self.makeToken(.question, start, self.pos),
+            '?' => self.makeToken(.question, start, self.pos),
             '@' => self.makeToken(.at, start, self.pos),
             '&' => if (self.match('&')) self.makeToken(.and_and, start, self.pos) else self.makeToken(.ampersand, start, self.pos),
             '+' => if (self.match('=')) self.makeToken(.plus_eq, start, self.pos) else self.makeToken(.plus, start, self.pos),
@@ -230,9 +230,8 @@ test "lex keywords" {
 }
 
 test "lex operators" {
-    var lex = Lexer.init("|> ?? -> == != <= >=");
+    var lex = Lexer.init("|> -> == != <= >=");
     try std.testing.expectEqual(Token.Tag.pipe_right, lex.next().tag);
-    try std.testing.expectEqual(Token.Tag.double_question, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.arrow, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.eq_eq, lex.next().tag);
     try std.testing.expectEqual(Token.Tag.bang_eq, lex.next().tag);

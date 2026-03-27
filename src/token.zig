@@ -44,6 +44,8 @@ pub const Token = struct {
         kw_false,
         kw_nil,
         kw_extern,
+        kw_or,
+        kw_fail,
 
         // types
         kw_int,
@@ -67,7 +69,6 @@ pub const Token = struct {
         pipe,        // |
         pipe_right,  // |>
         question,    // ?
-        double_question, // ??
         ampersand,
         at,
 
@@ -134,7 +135,6 @@ pub const Token = struct {
                 .dotdot => "'..'",
                 .pipe_right => "'|>'",
                 .question => "'?'",
-                .double_question => "'??'",
                 .ampersand => "'&'",
                 .at => "'@'",
                 .kw_fn => "'fn'",
@@ -159,6 +159,8 @@ pub const Token = struct {
                 .kw_false => "'false'",
                 .kw_nil => "'nil'",
                 .kw_extern => "'extern'",
+                .kw_or => "'or'",
+                .kw_fail => "'fail'",
                 .kw_int => "'int'",
                 .kw_float => "'float'",
                 .kw_str => "'str'",
@@ -199,6 +201,8 @@ pub const keywords = std.StaticStringMap(Token.Tag).initComptime(.{
     .{ "false", .kw_false },
     .{ "nil", .kw_nil },
     .{ "extern", .kw_extern },
+    .{ "or", .kw_or },
+    .{ "fail", .kw_fail },
     .{ "int", .kw_int },
     .{ "float", .kw_float },
     .{ "str", .kw_str },

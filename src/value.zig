@@ -25,6 +25,7 @@ pub const Value = struct {
         ssl_ctx,
         ssl_conn,
         ptr,
+        error_val,
     };
 
     pub fn initNil() Value {
@@ -105,6 +106,14 @@ pub const Value = struct {
 
     pub fn initPtr(p: usize) Value {
         return .{ .tag = .ptr, .data = p };
+    }
+
+    pub fn initError(ptr: *ObjError) Value {
+        return .{ .tag = .error_val, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn asError(self: Value) *ObjError {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
     pub fn asPtr(self: Value) usize {
@@ -191,6 +200,7 @@ pub const Value = struct {
             .float => self.asFloat() != 0.0,
             .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn => true,
             .ptr => self.data != 0,
+            .error_val => false,
         };
     }
 
@@ -214,6 +224,7 @@ pub const Value = struct {
                 return true;
             },
             .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn, .ptr => a.data == b.data,
+            .error_val => eql(a.asError().value, b.asError().value),
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -268,6 +279,11 @@ pub const Value = struct {
             .ssl_ctx => std.debug.print("<ssl_ctx>", .{}),
             .ssl_conn => std.debug.print("<ssl_conn>", .{}),
             .ptr => std.debug.print("<ptr 0x{x}>", .{self.data}),
+            .error_val => {
+                std.debug.print("error(", .{});
+                self.asError().value.dump();
+                std.debug.print(")", .{});
+            },
             .array => {
                 const arr = self.asArray();
                 std.debug.print("[", .{});
@@ -278,6 +294,20 @@ pub const Value = struct {
                 std.debug.print("]", .{});
             },
         }
+    }
+};
+
+pub const ObjError = struct {
+    value: Value,
+
+    pub fn create(alloc: std.mem.Allocator, value: Value) *ObjError {
+        const e = alloc.create(ObjError) catch @panic("oom");
+        e.* = .{ .value = value };
+        return e;
+    }
+
+    pub fn toValue(self: *ObjError) Value {
+        return Value.initError(self);
     }
 };
 

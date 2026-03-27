@@ -109,6 +109,7 @@ pub const Stmt = struct {
         assign: Assign,
         compound_assign: CompoundAssign,
         ret: Return,
+        fail: Fail,
         for_loop: ForLoop,
         while_loop: WhileLoop,
         arena_block: *const Block,
@@ -129,6 +130,10 @@ pub const CompoundAssign = struct {
 
 pub const Return = struct {
     value: ?*const Expr,
+};
+
+pub const Fail = struct {
+    value: *const Expr,
 };
 
 pub const ForLoop = struct {
@@ -173,6 +178,8 @@ pub const Expr = struct {
         pipeline: Pipeline,
         array_literal: []const *const Expr,
         try_unwrap: *const Expr,
+        or_expr: OrExpr,
+        unwrap_crash: *const Expr,
     };
 };
 
@@ -276,6 +283,12 @@ pub const FieldInit = struct {
     value: *const Expr,
 };
 
+pub const OrExpr = struct {
+    lhs: *const Expr,
+    err_binding: ?[]const u8,
+    rhs: *const Expr,
+};
+
 pub const Pipeline = struct {
     stages: []const *const Expr,
 };
@@ -293,9 +306,15 @@ pub const TypeExpr = struct {
         named: []const u8,
         generic: Generic,
         optional: *const TypeExpr,
+        result: Result,
         pointer: Pointer,
         slice: *const TypeExpr,
     };
+};
+
+pub const Result = struct {
+    ok_type: *const TypeExpr,
+    err_type: ?*const TypeExpr,
 };
 
 pub const Generic = struct {

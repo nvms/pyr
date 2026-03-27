@@ -544,6 +544,11 @@ pub const Compiler = struct {
                 }
                 self.emitOp(.return_);
             },
+            .fail => |f| {
+                self.compileExpr(f.value);
+                self.emitOp(.make_error);
+                self.emitOp(.return_);
+            },
             .for_loop => |fl| self.compileForLoop(fl),
             .while_loop => |wl| {
                 const loop_start = self.chunk().count();
@@ -838,10 +843,24 @@ pub const Compiler = struct {
             },
             .try_unwrap => |inner| {
                 self.compileExpr(inner);
-                const not_nil = self.emitJump(.jump_if_nil);
+                const nil_jump = self.emitJump(.jump_if_nil);
+                const err_jump = self.emitJump(.jump_if_error);
                 const skip = self.emitJump(.jump);
-                self.patchJump(not_nil);
+                self.patchJump(nil_jump);
+                self.patchJump(err_jump);
                 self.emitOp(.return_);
+                self.patchJump(skip);
+            },
+            .or_expr => |oe| self.compileOrExpr(oe),
+            .unwrap_crash => |inner| {
+                self.compileExpr(inner);
+                const nil_jump = self.emitJump(.jump_if_nil);
+                const err_jump = self.emitJump(.jump_if_error);
+                const skip = self.emitJump(.jump);
+                self.patchJump(nil_jump);
+                self.patchJump(err_jump);
+                // unwrap_error: crash with error info (prints + exits)
+                self.emitOp(.unwrap_error);
                 self.patchJump(skip);
             },
         }
@@ -960,18 +979,45 @@ pub const Compiler = struct {
         }
     }
 
-    fn compileBinary(self: *Compiler, bin: ast.Binary) void {
-        if (bin.op == .double_question) {
-            self.compileExpr(bin.lhs);
-            const nil_jump = self.emitJump(.jump_if_nil);
-            const skip_jump = self.emitJump(.jump);
-            self.patchJump(nil_jump);
+    fn compileOrExpr(self: *Compiler, oe: ast.OrExpr) void {
+        self.compileExpr(oe.lhs);
+        const nil_jump = self.emitJump(.jump_if_nil);
+        const err_jump = self.emitJump(.jump_if_error);
+        const skip_jump = self.emitJump(.jump);
+
+        self.patchJump(nil_jump);
+        self.patchJump(err_jump);
+
+        if (oe.err_binding) |binding_name| {
+            // or |err| { body }
+            // stack has nil or error_val
+            // extract_error: if error_val, replace with payload; otherwise leave unchanged
+            self.emitOp(.extract_error);
+            self.beginScope();
+            self.addLocal(binding_name);
+            if (oe.rhs.kind == .block) {
+                // compile block without emitting return_ for trailing expr
+                const block = oe.rhs.kind.block;
+                for (block.stmts) |stmt| self.compileStmt(stmt);
+                if (block.trailing) |trail| {
+                    self.compileExpr(trail);
+                } else {
+                    self.emitOp(.nil);
+                }
+            } else {
+                self.compileExpr(oe.rhs);
+            }
+            self.endScopeKeepTop();
+        } else {
+            // simple or: pop failed value, evaluate rhs
             self.emitOp(.pop);
-            self.compileExpr(bin.rhs);
-            self.patchJump(skip_jump);
-            return;
+            self.compileExpr(oe.rhs);
         }
 
+        self.patchJump(skip_jump);
+    }
+
+    fn compileBinary(self: *Compiler, bin: ast.Binary) void {
         if (bin.op == .and_and) {
             self.compileExpr(bin.lhs);
             const jump = self.emitJump(.jump_if_false);
@@ -2128,7 +2174,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .get_local, .set_local => i += 1,
             .add, .subtract, .multiply, .divide, .modulo, .negate, .add_int, .sub_int, .mul_int, .div_int, .mod_int, .less_int, .greater_int, .add_float, .sub_float, .mul_float, .div_float, .less_float, .greater_float => {},
             .not, .equal, .not_equal, .less, .greater, .less_equal, .greater_equal => {},
-            .jump, .jump_if_false, .jump_if_nil, .loop_ => i += 2,
+            .jump, .jump_if_false, .jump_if_nil, .jump_if_error, .loop_ => i += 2,
             .call => i += 1,
             .return_ => {},
             .get_global => i += 2,
@@ -2162,6 +2208,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
                 i += @as(usize, uv_count) * 2;
             },
             .push_arena, .pop_arena => {},
+            .make_error, .unwrap_error, .extract_error => {},
             .set_global, .define_global, .print, .println => return false,
             .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .net_sendto, .net_recvfrom, .ffi_call => return false,
         }

@@ -399,6 +399,9 @@ pub const Sema = struct {
             .ret => |r| {
                 if (r.value) |val| self.analyzeExpr(val);
             },
+            .fail => |f| {
+                self.analyzeExpr(f.value);
+            },
             .for_loop => |fl| {
                 self.analyzeExpr(fl.iterator);
                 self.pushScope();
@@ -520,6 +523,22 @@ pub const Sema = struct {
                 for (elems) |elem| self.analyzeExpr(elem);
             },
             .try_unwrap => |inner| self.analyzeExpr(inner),
+            .or_expr => |oe| {
+                self.analyzeExpr(oe.lhs);
+                if (oe.err_binding) |binding_name| {
+                    self.pushScope();
+                    self.define(binding_name, .{
+                        .ty = &t_err,
+                        .is_mut = false,
+                        .kind = .variable,
+                    });
+                    self.analyzeExpr(oe.rhs);
+                    self.popScope();
+                } else {
+                    self.analyzeExpr(oe.rhs);
+                }
+            },
+            .unwrap_crash => |inner| self.analyzeExpr(inner),
         }
     }
 
@@ -554,6 +573,7 @@ pub const Sema = struct {
             .named => |name| resolveNamedType(name),
             .generic => |g| self.create(Type, .{ .named = g.name }),
             .optional => |inner| self.create(Type, .{ .optional = self.resolveType(inner) }),
+            .result => |r| self.create(Type, .{ .optional = self.resolveType(r.ok_type) }),
             .pointer => |p| self.create(Type, .{ .pointer = .{
                 .pointee = self.resolveType(p.pointee),
                 .is_mut = p.is_mut,

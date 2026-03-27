@@ -27,25 +27,26 @@ High-level code reads like Python. Low-level code reads like Zig. Same language,
 - **UFCS** - Any function can be called with dot syntax on its first argument. No methods, no impl blocks
 - **Pattern matching** - Algebraic enums with exhaustive matching
 - **Pipeline operator** - Left-to-right data flow with `|>`
+- **Error handling** - `T?` optional types, `T!` result types, `or` for recovery, `?` for propagation, `fail` for errors
 - **Helpful compiler errors** - Source locations, span highlighting, fix suggestions
 
 ## Example
 
 ```
-import std/http { serve, get, post }
-import std/pg
+imp std/http { serve, get, post }
+imp std/pg
 
 fn main() {
   db = pg.connect(env("DATABASE_URL"))
 
   serve ":8080" {
     get "/users/:id" |req| {
-      user = db.find(User, req.params.id) ?? not_found()
+      user = db.find(User, req.params.id) or not_found()
       json(user)
     }
 
     post "/users" |req| {
-      input = req.json(CreateUser) ?? bad_request("invalid body")
+      input = req.json(CreateUser) or bad_request("invalid body")
       user = db.insert(User, input)
       json(user, status: 201)
     }
@@ -54,17 +55,21 @@ fn main() {
 ```
 
 ```
-// CLI tool
-fn main(args: []str) {
-  config = parse_args(args) ?? {
-    eprintln("usage: compress <input> <output>")
+imp std/fs
+imp std/os { args, exit }
+
+fn parse_config(raw: str) -> Config! {
+  if raw.len == 0 { fail "empty input" }
+  do_parse(raw)
+}
+
+fn main() {
+  raw = fs.read("config.toml") or |err| {
+    eprintln("can't read config: " + err)
     exit(1)
   }
-
-  data = fs.read_bytes(config.input) ?? die("can't read {config.input}")
-  compressed = zlib.compress(data, level: 6)
-  fs.write(config.output, compressed)
-  println("compressed {data.len} -> {compressed.len} bytes")
+  config = parse_config(raw)?
+  println("loaded: " + config.name)
 }
 ```
 

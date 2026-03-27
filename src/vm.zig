@@ -14,6 +14,7 @@ const ObjChannel = @import("value.zig").ObjChannel;
 const ObjListener = @import("value.zig").ObjListener;
 const ObjConn = @import("value.zig").ObjConn;
 const ObjDgram = @import("value.zig").ObjDgram;
+const ObjError = @import("value.zig").ObjError;
 const TaskState = @import("value.zig").TaskState;
 const stdlib = @import("stdlib.zig");
 const ffi_mod = @import("ffi.zig");
@@ -515,6 +516,36 @@ pub const VM = struct {
                     const offset = self.readU16();
                     if (self.peek(0).tag == .nil) {
                         self.currentFrame().ip += offset;
+                    }
+                },
+                .jump_if_error => {
+                    const offset = self.readU16();
+                    if (self.peek(0).tag == .error_val) {
+                        self.currentFrame().ip += offset;
+                    }
+                },
+                .make_error => {
+                    const val = self.pop();
+                    const err = ObjError.create(self.currentAlloc(), val);
+                    self.push(err.toValue());
+                },
+                .unwrap_error => {
+                    const val = self.peek(0);
+                    if (val.tag == .error_val) {
+                        const payload = val.asError().value;
+                        const s = self.valueToString(payload);
+                        const msg = s.asString().chars;
+                        std.debug.print("unwrap failed: {s}\n", .{msg});
+                        std.process.exit(1);
+                    } else if (val.tag == .nil) {
+                        std.debug.print("unwrap failed: nil\n", .{});
+                        std.process.exit(1);
+                    }
+                },
+                .extract_error => {
+                    const val = self.peek(0);
+                    if (val.tag == .error_val) {
+                        self.stack[self.sp - 1] = val.asError().value;
                     }
                 },
                 .loop_ => {
@@ -1187,6 +1218,41 @@ pub const VM = struct {
                     frame.ip -= 3;
                     return;
                 }
+            } else if (byte == @intFromEnum(OpCode.jump_if_nil)) {
+                const hi: u16 = code[frame.ip];
+                const lo: u16 = code[frame.ip + 1];
+                frame.ip += 2;
+                if (self.stack[self.sp - 1].tag == .nil) {
+                    frame.ip += (hi << 8) | lo;
+                }
+            } else if (byte == @intFromEnum(OpCode.jump_if_error)) {
+                const hi: u16 = code[frame.ip];
+                const lo: u16 = code[frame.ip + 1];
+                frame.ip += 2;
+                if (self.stack[self.sp - 1].tag == .error_val) {
+                    frame.ip += (hi << 8) | lo;
+                }
+            } else if (byte == @intFromEnum(OpCode.make_error)) {
+                const val = self.stack[self.sp - 1];
+                const err = ObjError.create(self.currentAlloc(), val);
+                self.stack[self.sp - 1] = err.toValue();
+            } else if (byte == @intFromEnum(OpCode.unwrap_error)) {
+                const val = self.stack[self.sp - 1];
+                if (val.tag == .error_val) {
+                    const payload = val.asError().value;
+                    const sv = self.valueToString(payload);
+                    const msg = sv.asString().chars;
+                    std.debug.print("unwrap failed: {s}\n", .{msg});
+                    std.process.exit(1);
+                } else if (val.tag == .nil) {
+                    std.debug.print("unwrap failed: nil\n", .{});
+                    std.process.exit(1);
+                }
+            } else if (byte == @intFromEnum(OpCode.extract_error)) {
+                const val = self.stack[self.sp - 1];
+                if (val.tag == .error_val) {
+                    self.stack[self.sp - 1] = val.asError().value;
+                }
             } else if (byte == @intFromEnum(OpCode.pop)) {
                 self.sp -= 1;
             } else if (byte == @intFromEnum(OpCode.slide)) {
@@ -1452,6 +1518,13 @@ pub const VM = struct {
             }
             const s = ca.dupe(u8, e.variant) catch return val;
             return ObjString.create(ca, s).toValue();
+        }
+        if (val.tag == .error_val) {
+            const payload = val.asError().value;
+            const inner = self.valueToString(payload);
+            const inner_str = inner.asString().chars;
+            const s2 = std.fmt.allocPrint(ca, "error({s})", .{inner_str}) catch return val;
+            return ObjString.create(ca, s2).toValue();
         }
         var buf: [64]u8 = undefined;
         const s = switch (val.tag) {
@@ -3986,6 +4059,181 @@ test "vm: udp method call syntax" {
         \\  assert_eq(msg.data, "method call")
         \\  net.close(server)
         \\  net.close(client)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or replaces nil coalescing" {
+    try testRun(
+        \\fn main() {
+        \\  x = nil or "fallback"
+        \\  assert_eq(x, "fallback")
+        \\  y = 42 or "fallback"
+        \\  assert_eq(y, 42)
+        \\  z = false or "fallback"
+        \\  assert_eq(z, false)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or chained" {
+    try testRun(
+        \\fn main() {
+        \\  x = nil or nil or "deep"
+        \\  assert_eq(x, "deep")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: fail creates error value" {
+    try testRun(
+        \\fn maybe(x: int) {
+        \\  if x > 0 { x } else { fail "negative" }
+        \\}
+        \\fn main() {
+        \\  r = maybe(5)
+        \\  assert_eq(r, 5)
+        \\  r2 = maybe(-1)
+        \\  assert_eq(r2 == 5, false)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or catches error" {
+    try testRun(
+        \\fn maybe(x: int) {
+        \\  if x > 0 { x } else { fail "nope" }
+        \\}
+        \\fn main() {
+        \\  r = maybe(-1) or 0
+        \\  assert_eq(r, 0)
+        \\  r2 = maybe(5) or 0
+        \\  assert_eq(r2, 5)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or catches both nil and error" {
+    try testRun(
+        \\fn get_nil() { nil }
+        \\fn get_err() { fail "bad" }
+        \\fn main() {
+        \\  a = get_nil() or "recovered"
+        \\  assert_eq(a, "recovered")
+        \\  b = get_err() or "recovered"
+        \\  assert_eq(b, "recovered")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: try_unwrap propagates nil" {
+    try testRun(
+        \\fn find(id: int) {
+        \\  if id == 1 { "alice" } else { nil }
+        \\}
+        \\fn greet(id: int) {
+        \\  name = find(id)?
+        \\  "hello " + name
+        \\}
+        \\fn main() {
+        \\  assert_eq(greet(1), "hello alice")
+        \\  assert_eq(greet(99), nil)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: try_unwrap propagates error" {
+    try testRun(
+        \\fn parse(s: str) {
+        \\  if s == "42" { 42 } else { fail "bad input" }
+        \\}
+        \\fn double(s: str) {
+        \\  n = parse(s)?
+        \\  n * 2
+        \\}
+        \\fn main() {
+        \\  assert_eq(double("42"), 84)
+        \\  r = double("bad")
+        \\  assert_eq(r == 84, false)
+        \\  safe = double("bad") or 0
+        \\  assert_eq(safe, 0)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or with error binding" {
+    try testRun(
+        \\fn parse(s: str) {
+        \\  if s == "ok" { 1 } else { fail "parse error: " + s }
+        \\}
+        \\fn main() {
+        \\  mut msg = ""
+        \\  parse("bad") or |err| {
+        \\    msg = err
+        \\  }
+        \\  assert_eq(msg, "parse error: bad")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or with error binding nil case" {
+    try testRun(
+        \\fn find(id: int) {
+        \\  if id == 1 { "alice" } else { nil }
+        \\}
+        \\fn main() {
+        \\  mut got = "none"
+        \\  find(99) or |err| {
+        \\    got = "handled"
+        \\  }
+        \\  assert_eq(got, "handled")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: or with error binding returns value" {
+    try testRun(
+        \\fn parse(s: str) {
+        \\  if s == "ok" { 100 } else { fail "bad" }
+        \\}
+        \\fn main() {
+        \\  r = parse("bad") or |err| {
+        \\    -1
+        \\  }
+        \\  assert_eq(r, -1)
+        \\  r2 = parse("ok") or |err| {
+        \\    -1
+        \\  }
+        \\  assert_eq(r2, 100)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: error propagation into string error context" {
+    try testRun(
+        \\fn inner() { fail "deep error" }
+        \\fn middle() {
+        \\  inner()?
+        \\  42
+        \\}
+        \\fn outer() {
+        \\  middle()?
+        \\  99
+        \\}
+        \\fn main() {
+        \\  r = outer() or "caught"
+        \\  assert_eq(r, "caught")
         \\  println("ok")
         \\}
     );

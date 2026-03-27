@@ -1,0 +1,11 @@
+42
+error(empty input)
+safe ok
+fallback ok
+fallback2 ok
+double ok
+error(invalid number: bad)
+d3 ok
+caught: invalid number: nope
+after or-binding
+all result tests passed
