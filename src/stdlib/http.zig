@@ -15,7 +15,7 @@ pub const fns = [_]root.NativeDef{
 };
 
 fn httpParseRequest(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string) return Value.initNil();
+    if (args[0].tag() != .string) return Value.initNil();
     const raw = args[0].asString().chars;
 
     const line_end = std.mem.indexOf(u8, raw, "\r\n") orelse return Value.initNil();
@@ -46,12 +46,12 @@ fn httpParseRequest(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn httpRespond(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string) return Value.initNil();
+    if (args[0].tag() != .string) return Value.initNil();
     return buildResponse(alloc, "200 OK", "text/plain", args[0].asString().chars);
 }
 
 fn httpRespondStatus(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .int or args[1].tag != .string) return Value.initNil();
+    if (args[0].tag() != .int or args[1].tag() != .string) return Value.initNil();
     const code = args[0].asInt();
     const body = args[1].asString().chars;
     var status_buf: [32]u8 = undefined;
@@ -78,7 +78,7 @@ fn httpJsonResponse(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn httpRoute(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .string) return Value.initNil();
+    if (args[0].tag() != .string or args[1].tag() != .string) return Value.initNil();
     const field_names = alloc.alloc([]const u8, 3) catch return Value.initNil();
     field_names[0] = "method";
     field_names[1] = "path";
@@ -88,16 +88,16 @@ fn httpRoute(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn httpMatchRoute(_: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .array or args[1].tag != .string or args[2].tag != .string) return Value.initNil();
+    if (args[0].tag() != .array or args[1].tag() != .string or args[2].tag() != .string) return Value.initNil();
     const routes = args[0].asArray();
     const method = args[1].asString().chars;
     const path = args[2].asString().chars;
 
     for (routes.items) |route_val| {
-        if (route_val.tag != .struct_) continue;
+        if (route_val.tag() != .struct_) continue;
         const route = route_val.asStruct();
         const fv = route.fieldValues();
-        if (fv[0].tag != .string or fv[1].tag != .string) continue;
+        if (fv[0].tag() != .string or fv[1].tag() != .string) continue;
 
         if (std.mem.eql(u8, fv[0].asString().chars, method) and
             std.mem.eql(u8, fv[1].asString().chars, path))

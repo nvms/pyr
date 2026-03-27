@@ -473,9 +473,9 @@ pub const VM = struct {
                 .modulo => try self.binaryOp(.modulo),
                 .negate => {
                     const val = self.pop();
-                    if (val.tag == .int) {
+                    if (val.tag() == .int) {
                         self.push(Value.initInt(-val.asInt()));
-                    } else if (val.tag == .float) {
+                    } else if (val.tag() == .float) {
                         self.push(Value.initFloat(-val.asFloat()));
                     } else {
                         self.runtimeError("operand must be a number", .{});
@@ -514,13 +514,13 @@ pub const VM = struct {
                 },
                 .jump_if_nil => {
                     const offset = self.readU16();
-                    if (self.peek(0).tag == .nil) {
+                    if (self.peek(0).tag() == .nil) {
                         self.currentFrame().ip += offset;
                     }
                 },
                 .jump_if_error => {
                     const offset = self.readU16();
-                    if (self.peek(0).tag == .error_val) {
+                    if (self.peek(0).tag() == .error_val) {
                         self.currentFrame().ip += offset;
                     }
                 },
@@ -531,20 +531,20 @@ pub const VM = struct {
                 },
                 .unwrap_error => {
                     const val = self.peek(0);
-                    if (val.tag == .error_val) {
+                    if (val.tag() == .error_val) {
                         const payload = val.asError().value;
                         const s = self.valueToString(payload);
                         const msg = s.asString().chars;
                         std.debug.print("unwrap failed: {s}\n", .{msg});
                         std.process.exit(1);
-                    } else if (val.tag == .nil) {
+                    } else if (val.tag() == .nil) {
                         std.debug.print("unwrap failed: nil\n", .{});
                         std.process.exit(1);
                     }
                 },
                 .extract_error => {
                     const val = self.peek(0);
-                    if (val.tag == .error_val) {
+                    if (val.tag() == .error_val) {
                         self.stack[self.sp - 1] = val.asError().value;
                     }
                 },
@@ -556,8 +556,8 @@ pub const VM = struct {
                 .call => {
                     const arg_count = self.readByte();
                     const callee = self.stack[self.sp - 1 - arg_count];
-                    const is_fast = if (callee.tag == .function) callee.asFunction().locals_only
-                        else if (callee.tag == .closure) callee.asClosure().function.locals_only
+                    const is_fast = if (callee.tag() == .function) callee.asFunction().locals_only
+                        else if (callee.tag() == .closure) callee.asClosure().function.locals_only
                         else false;
                     try self.callValue(callee, arg_count);
                     if (is_fast) try self.fastLoop();
@@ -619,7 +619,7 @@ pub const VM = struct {
                     const name_idx = self.readU16();
                     const field_name = self.currentChunk().constants.items[name_idx].asString().chars;
                     const val = self.pop();
-                    if (val.tag == .struct_) {
+                    if (val.tag() == .struct_) {
                         const s = val.asStruct();
                         if (s.getField(field_name)) |fv| {
                             self.push(fv);
@@ -627,14 +627,14 @@ pub const VM = struct {
                             self.runtimeError("struct '{s}' has no field '{s}'", .{ s.name, field_name });
                             return error.RuntimeError;
                         }
-                    } else if (val.tag == .string) {
+                    } else if (val.tag() == .string) {
                         if (std.mem.eql(u8, field_name, "len")) {
                             self.push(Value.initInt(@intCast(val.asString().chars.len)));
                         } else {
                             self.runtimeError("string has no field '{s}'", .{field_name});
                             return error.RuntimeError;
                         }
-                    } else if (val.tag == .array) {
+                    } else if (val.tag() == .array) {
                         if (std.mem.eql(u8, field_name, "len")) {
                             self.push(Value.initInt(@intCast(val.asArray().items.len)));
                         } else {
@@ -650,7 +650,7 @@ pub const VM = struct {
                 .get_field_idx => {
                     const idx = self.readByte();
                     const val = self.pop();
-                    if (val.tag == .struct_) {
+                    if (val.tag() == .struct_) {
                         const s = val.asStruct();
                         if (idx < s.field_count) {
                             self.push(s.fieldValues()[idx]);
@@ -669,7 +669,7 @@ pub const VM = struct {
                     const field_name = self.currentChunk().constants.items[name_idx].asString().chars;
                     const target = self.pop();
                     const val = self.stack[self.sp - 1];
-                    if (target.tag == .struct_) {
+                    if (target.tag() == .struct_) {
                         if (!target.asStruct().setField(field_name, val)) {
                             self.runtimeError("struct has no field '{s}'", .{field_name});
                             return error.RuntimeError;
@@ -684,7 +684,7 @@ pub const VM = struct {
                     const idx = self.readByte();
                     const target = self.pop();
                     const val = self.stack[self.sp - 1];
-                    if (target.tag == .struct_) {
+                    if (target.tag() == .struct_) {
                         const s = target.asStruct();
                         if (idx < s.field_count) {
                             s.fieldValues()[idx] = val;
@@ -702,7 +702,7 @@ pub const VM = struct {
                     const slot = self.readByte();
                     const field_idx = self.readByte();
                     const val = self.stack[self.currentFrame().slot_offset + slot];
-                    if (val.tag == .struct_) {
+                    if (val.tag() == .struct_) {
                         self.push(val.asStruct().fieldValues()[field_idx]);
                     } else {
                         self.runtimeError("cannot access field on non-struct value", .{});
@@ -712,7 +712,7 @@ pub const VM = struct {
 
                 .to_str => {
                     const val = self.pop();
-                    if (val.tag == .string) {
+                    if (val.tag() == .string) {
                         self.push(val);
                     } else {
                         self.push(self.valueToString(val));
@@ -742,7 +742,7 @@ pub const VM = struct {
                 .match_variant => {
                     const expected_vi = self.readByte();
                     const val = self.peek(0);
-                    if (val.tag == .enum_) {
+                    if (val.tag() == .enum_) {
                         self.push(Value.initBool(val.asEnum().variant_index == expected_vi));
                     } else {
                         self.push(Value.initBool(false));
@@ -793,7 +793,7 @@ pub const VM = struct {
                 .get_payload => {
                     const idx = self.readByte();
                     const val = self.pop();
-                    if (val.tag == .enum_) {
+                    if (val.tag() == .enum_) {
                         const e = val.asEnum();
                         if (idx < e.payloads.len) {
                             self.push(e.payloads[idx]);
@@ -851,43 +851,43 @@ pub const VM = struct {
                 .add_float => {
                     const b = self.pop();
                     const a = self.pop();
-                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initFloat(af + bf));
                 },
                 .sub_float => {
                     const b = self.pop();
                     const a = self.pop();
-                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initFloat(af - bf));
                 },
                 .mul_float => {
                     const b = self.pop();
                     const a = self.pop();
-                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initFloat(af * bf));
                 },
                 .div_float => {
                     const b = self.pop();
                     const a = self.pop();
-                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initFloat(if (bf != 0.0) af / bf else 0.0));
                 },
                 .less_float => {
                     const b = self.pop();
                     const a = self.pop();
-                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initBool(af < bf));
                 },
                 .greater_float => {
                     const b = self.pop();
                     const a = self.pop();
-                    const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-                    const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+                    const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+                    const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
                     self.push(Value.initBool(af > bf));
                 },
 
@@ -901,7 +901,7 @@ pub const VM = struct {
                 .index_get => {
                     const idx_val = self.pop();
                     const target = self.pop();
-                    if (target.tag == .array and idx_val.tag == .int) {
+                    if (target.tag() == .array and idx_val.tag() == .int) {
                         const arr = target.asArray();
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
@@ -910,7 +910,7 @@ pub const VM = struct {
                             self.runtimeError("array index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
                         }
-                    } else if (target.tag == .string and idx_val.tag == .int) {
+                    } else if (target.tag() == .string and idx_val.tag() == .int) {
                         const s = target.asString();
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
@@ -929,7 +929,7 @@ pub const VM = struct {
                     const idx_val = self.pop();
                     const target = self.pop();
                     const val = self.stack[self.sp - 1];
-                    if (target.tag == .array and idx_val.tag == .int) {
+                    if (target.tag() == .array and idx_val.tag() == .int) {
                         const arr = target.asArray();
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
@@ -991,7 +991,7 @@ pub const VM = struct {
                     const base = frame_.ip;
                     const val = self.stack[frame_.slot_offset + slot];
                     var off_idx: usize = @as(usize, n) * 2;
-                    if (val.tag == .enum_) {
+                    if (val.tag() == .enum_) {
                         const vi = val.asEnum().variant_index;
                         if (vi < n) off_idx = @as(usize, vi) * 2;
                     }
@@ -1043,7 +1043,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initInt(av.asInt() + bv.asInt());
                     } else {
                         try self.binaryOpSlow(av, bv, .add);
@@ -1053,7 +1053,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initInt(av.asInt() - bv.asInt());
                     } else {
                         try self.binaryOpSlow(av, bv, .subtract);
@@ -1063,7 +1063,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initInt(av.asInt() * bv.asInt());
                     } else {
                         try self.binaryOpSlow(av, bv, .multiply);
@@ -1073,7 +1073,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initBool(av.asInt() < bv.asInt());
                     } else {
                         try self.comparisonOpSlow(av, bv, .less);
@@ -1083,7 +1083,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initBool(av.asInt() > bv.asInt());
                     } else {
                         try self.comparisonOpSlow(av, bv, .greater);
@@ -1113,7 +1113,7 @@ pub const VM = struct {
                     const arg_count = code[frame.ip];
                     frame.ip += 1;
                     const callee = self.stack[self.sp - 1 - arg_count];
-                    if (callee.tag == .native_fn) {
+                    if (callee.tag() == .native_fn) {
                         const nf = callee.asNativeFn();
                         const args = self.stack[self.sp - arg_count .. self.sp];
                         const result = nf.func(self.currentAlloc(), args);
@@ -1121,9 +1121,9 @@ pub const VM = struct {
                         self.stack[self.sp] = result;
                         self.sp += 1;
                     } else {
-                        const func = if (callee.tag == .function)
+                        const func = if (callee.tag() == .function)
                             callee.asFunction()
-                        else if (callee.tag == .closure)
+                        else if (callee.tag() == .closure)
                             callee.asClosure().function
                         else {
                             self.runtimeError("can only call functions", .{});
@@ -1137,7 +1137,7 @@ pub const VM = struct {
                             .function = func,
                             .ip = 0,
                             .slot_offset = self.sp - arg_count - 1,
-                            .closure = if (callee.tag == .closure) callee.asClosure() else null,
+                            .closure = if (callee.tag() == .closure) callee.asClosure() else null,
                         };
                         self.frame_count += 1;
                         if (!func.locals_only) return;
@@ -1181,7 +1181,7 @@ pub const VM = struct {
                 @intFromEnum(OpCode.index_get) => {
                     const idx_val = self.stack[self.sp - 1];
                     const target = self.stack[self.sp - 2];
-                    if (target.tag == .array and idx_val.tag == .int) {
+                    if (target.tag() == .array and idx_val.tag() == .int) {
                         const arr = target.asArray();
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
@@ -1206,7 +1206,7 @@ pub const VM = struct {
                     const base = frame.ip;
                     const val = self.stack[frame.slot_offset + slot];
                     var off_idx: usize = @as(usize, n) * 2;
-                    if (val.tag == .enum_) {
+                    if (val.tag() == .enum_) {
                         const vi = val.asEnum().variant_index;
                         if (vi < n) off_idx = @as(usize, vi) * 2;
                     }
@@ -1218,7 +1218,7 @@ pub const VM = struct {
                     frame.ip += 1;
                     const val = self.stack[self.sp - 1];
                     self.sp -= 1;
-                    if (val.tag == .enum_) {
+                    if (val.tag() == .enum_) {
                         self.stack[self.sp] = val.asEnum().payloads[payload_idx];
                         self.sp += 1;
                     }
@@ -1234,7 +1234,7 @@ pub const VM = struct {
                     const idx = code[frame.ip];
                     frame.ip += 1;
                     const val = self.stack[self.sp - 1];
-                    if (val.tag == .struct_) {
+                    if (val.tag() == .struct_) {
                         self.stack[self.sp - 1] = val.asStruct().fieldValues()[idx];
                     } else {
                         frame.ip -= 2;
@@ -1245,8 +1245,8 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    const af: f64 = if (av.tag == .float) av.asFloat() else @floatFromInt(av.asInt());
-                    const bf: f64 = if (bv.tag == .float) bv.asFloat() else @floatFromInt(bv.asInt());
+                    const af: f64 = if (av.tag() == .float) av.asFloat() else @floatFromInt(av.asInt());
+                    const bf: f64 = if (bv.tag() == .float) bv.asFloat() else @floatFromInt(bv.asInt());
                     self.stack[self.sp - 1] = Value.initFloat(af + bf);
                 },
                 @intFromEnum(OpCode.get_upvalue) => {
@@ -1274,7 +1274,7 @@ pub const VM = struct {
                     frame.ip += 2;
                     const field_name = frame.function.chunk.constants.items[(hi << 8) | lo].asString().chars;
                     const val = self.stack[self.sp - 1];
-                    if (val.tag == .struct_) {
+                    if (val.tag() == .struct_) {
                         const s = val.asStruct();
                         if (s.getField(field_name)) |fv| {
                             self.stack[self.sp - 1] = fv;
@@ -1303,7 +1303,7 @@ pub const VM = struct {
                     const hi: u16 = code[frame.ip];
                     const lo: u16 = code[frame.ip + 1];
                     frame.ip += 2;
-                    if (self.stack[self.sp - 1].tag == .nil) {
+                    if (self.stack[self.sp - 1].tag() == .nil) {
                         frame.ip += (hi << 8) | lo;
                     }
                 },
@@ -1311,7 +1311,7 @@ pub const VM = struct {
                     const hi: u16 = code[frame.ip];
                     const lo: u16 = code[frame.ip + 1];
                     frame.ip += 2;
-                    if (self.stack[self.sp - 1].tag == .error_val) {
+                    if (self.stack[self.sp - 1].tag() == .error_val) {
                         frame.ip += (hi << 8) | lo;
                     }
                 },
@@ -1339,9 +1339,9 @@ pub const VM = struct {
                 },
                 @intFromEnum(OpCode.negate) => {
                     const val = self.stack[self.sp - 1];
-                    if (val.tag == .int) {
+                    if (val.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initInt(-val.asInt());
-                    } else if (val.tag == .float) {
+                    } else if (val.tag() == .float) {
                         self.stack[self.sp - 1] = Value.initFloat(-val.asFloat());
                     } else {
                         self.runtimeError("operand must be a number", .{});
@@ -1352,7 +1352,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         const bi = bv.asInt();
                         self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @divTrunc(av.asInt(), bi) else 0);
                     } else {
@@ -1363,7 +1363,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         const bi = bv.asInt();
                         self.stack[self.sp - 1] = Value.initInt(if (bi != 0) @mod(av.asInt(), bi) else 0);
                     } else {
@@ -1374,7 +1374,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initBool(av.asInt() <= bv.asInt());
                     } else {
                         try self.comparisonOpSlow(av, bv, .less_equal);
@@ -1384,7 +1384,7 @@ pub const VM = struct {
                     const bv = self.stack[self.sp - 1];
                     const av = self.stack[self.sp - 2];
                     self.sp -= 1;
-                    if (av.tag == .int and bv.tag == .int) {
+                    if (av.tag() == .int and bv.tag() == .int) {
                         self.stack[self.sp - 1] = Value.initBool(av.asInt() >= bv.asInt());
                     } else {
                         try self.comparisonOpSlow(av, bv, .greater_equal);
@@ -1414,7 +1414,7 @@ pub const VM = struct {
                     const expected_vi = code[frame.ip];
                     frame.ip += 1;
                     const val = self.stack[self.sp - 1];
-                    if (val.tag == .enum_) {
+                    if (val.tag() == .enum_) {
                         self.stack[self.sp] = Value.initBool(val.asEnum().variant_index == expected_vi);
                     } else {
                         self.stack[self.sp] = Value.initBool(false);
@@ -1428,20 +1428,20 @@ pub const VM = struct {
                 },
                 @intFromEnum(OpCode.unwrap_error) => {
                     const val = self.stack[self.sp - 1];
-                    if (val.tag == .error_val) {
+                    if (val.tag() == .error_val) {
                         const payload = val.asError().value;
                         const sv = self.valueToString(payload);
                         const msg = sv.asString().chars;
                         std.debug.print("unwrap failed: {s}\n", .{msg});
                         std.process.exit(1);
-                    } else if (val.tag == .nil) {
+                    } else if (val.tag() == .nil) {
                         std.debug.print("unwrap failed: nil\n", .{});
                         std.process.exit(1);
                     }
                 },
                 @intFromEnum(OpCode.extract_error) => {
                     const val = self.stack[self.sp - 1];
-                    if (val.tag == .error_val) {
+                    if (val.tag() == .error_val) {
                         self.stack[self.sp - 1] = val.asError().value;
                     }
                 },
@@ -1454,9 +1454,9 @@ pub const VM = struct {
     }
 
     fn binaryOpSlow(self: *VM, a: Value, b: Value, op: OpCode) Error!void {
-        if ((a.tag == .float or a.tag == .int) and (b.tag == .float or b.tag == .int)) {
-            const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-            const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+        if ((a.tag() == .float or a.tag() == .int) and (b.tag() == .float or b.tag() == .int)) {
+            const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+            const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
             self.stack[self.sp - 1] = Value.initFloat(switch (op) {
                 .add => af + bf,
                 .subtract => af - bf,
@@ -1467,7 +1467,7 @@ pub const VM = struct {
             });
             return;
         }
-        if (a.tag == .string and b.tag == .string and op == .add) {
+        if (a.tag() == .string and b.tag() == .string and op == .add) {
             const as = a.asString().chars;
             const bs = b.asString().chars;
             const ca = self.currentAlloc();
@@ -1483,9 +1483,9 @@ pub const VM = struct {
     }
 
     fn comparisonOpSlow(self: *VM, a: Value, b: Value, op: OpCode) Error!void {
-        if ((a.tag == .float or a.tag == .int) and (b.tag == .float or b.tag == .int)) {
-            const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-            const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+        if ((a.tag() == .float or a.tag() == .int) and (b.tag() == .float or b.tag() == .int)) {
+            const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+            const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
             self.stack[self.sp - 1] = Value.initBool(switch (op) {
                 .less => af < bf,
                 .greater => af > bf,
@@ -1500,7 +1500,7 @@ pub const VM = struct {
     }
 
     fn callValue(self: *VM, callee: Value, arg_count: u8) Error!void {
-        if (callee.tag == .native_fn) {
+        if (callee.tag() == .native_fn) {
             const nf = callee.asNativeFn();
             if (arg_count != nf.arity) {
                 self.runtimeError("expected {d} arguments but got {d}", .{ nf.arity, arg_count });
@@ -1513,7 +1513,7 @@ pub const VM = struct {
             return;
         }
 
-        if (callee.tag == .closure) {
+        if (callee.tag() == .closure) {
             const cl = callee.asClosure();
             if (arg_count != cl.function.arity) {
                 self.runtimeError("expected {d} arguments but got {d}", .{ cl.function.arity, arg_count });
@@ -1533,7 +1533,7 @@ pub const VM = struct {
             return;
         }
 
-        if (callee.tag != .function) {
+        if (callee.tag() != .function) {
             self.runtimeError("can only call functions", .{});
             return error.RuntimeError;
         }
@@ -1560,10 +1560,10 @@ pub const VM = struct {
 
     fn valueToString(self: *VM, val: Value) Value {
         const ca = self.currentAlloc();
-        if (val.tag == .string) return val;
-        if (val.tag == .enum_) {
+        if (val.tag() == .string) return val;
+        if (val.tag() == .enum_) {
             const e = val.asEnum();
-            if (e.payloads.len > 0 and e.payloads[0].tag == .string) {
+            if (e.payloads.len > 0 and e.payloads[0].tag() == .string) {
                 const inner = e.payloads[0].asString().chars;
                 const s = std.fmt.allocPrint(ca, "{s}({s})", .{ e.variant, inner }) catch return val;
                 return ObjString.create(ca, s).toValue();
@@ -1571,7 +1571,7 @@ pub const VM = struct {
             const s = ca.dupe(u8, e.variant) catch return val;
             return ObjString.create(ca, s).toValue();
         }
-        if (val.tag == .error_val) {
+        if (val.tag() == .error_val) {
             const payload = val.asError().value;
             const inner = self.valueToString(payload);
             const inner_str = inner.asString().chars;
@@ -1579,7 +1579,7 @@ pub const VM = struct {
             return ObjString.create(ca, s2).toValue();
         }
         var buf: [64]u8 = undefined;
-        const s = switch (val.tag) {
+        const s = switch (val.tag()) {
             .int => std.fmt.bufPrint(&buf, "{d}", .{val.asInt()}) catch "?",
             .float => std.fmt.bufPrint(&buf, "{d}", .{val.asFloat()}) catch "?",
             .bool_ => if (val.asBool()) "true" else "false",
@@ -1595,7 +1595,7 @@ pub const VM = struct {
         const b = self.pop();
         const a = self.pop();
 
-        if (a.tag == .int and b.tag == .int) {
+        if (a.tag() == .int and b.tag() == .int) {
             const ai = a.asInt();
             const bi = b.asInt();
             self.push(Value.initInt(switch (op) {
@@ -1609,9 +1609,9 @@ pub const VM = struct {
             return;
         }
 
-        if ((a.tag == .float or a.tag == .int) and (b.tag == .float or b.tag == .int)) {
-            const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-            const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+        if ((a.tag() == .float or a.tag() == .int) and (b.tag() == .float or b.tag() == .int)) {
+            const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+            const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
             self.push(Value.initFloat(switch (op) {
                 .add => af + bf,
                 .subtract => af - bf,
@@ -1623,7 +1623,7 @@ pub const VM = struct {
             return;
         }
 
-        if (a.tag == .string and b.tag == .string and op == .add) {
+        if (a.tag() == .string and b.tag() == .string and op == .add) {
             const as = a.asString().chars;
             const bs = b.asString().chars;
             const ca = self.currentAlloc();
@@ -1643,7 +1643,7 @@ pub const VM = struct {
         const b = self.pop();
         const a = self.pop();
 
-        if (a.tag == .int and b.tag == .int) {
+        if (a.tag() == .int and b.tag() == .int) {
             const result = switch (op) {
                 .less => a.asInt() < b.asInt(),
                 .greater => a.asInt() > b.asInt(),
@@ -1655,9 +1655,9 @@ pub const VM = struct {
             return;
         }
 
-        if ((a.tag == .float or a.tag == .int) and (b.tag == .float or b.tag == .int)) {
-            const af: f64 = if (a.tag == .float) a.asFloat() else @floatFromInt(a.asInt());
-            const bf: f64 = if (b.tag == .float) b.asFloat() else @floatFromInt(b.asInt());
+        if ((a.tag() == .float or a.tag() == .int) and (b.tag() == .float or b.tag() == .int)) {
+            const af: f64 = if (a.tag() == .float) a.asFloat() else @floatFromInt(a.asInt());
+            const bf: f64 = if (b.tag() == .float) b.asFloat() else @floatFromInt(b.asInt());
             const result = switch (op) {
                 .less => af < bf,
                 .greater => af > bf,
@@ -1715,16 +1715,16 @@ pub const VM = struct {
     fn execSpawn(self: *VM) Error!void {
         const callee = self.pop();
 
-        const func = if (callee.tag == .closure)
+        const func = if (callee.tag() == .closure)
             callee.asClosure().function
-        else if (callee.tag == .function)
+        else if (callee.tag() == .function)
             callee.asFunction()
         else {
             self.runtimeError("spawn requires a function or closure", .{});
             return error.RuntimeError;
         };
 
-        const closure = if (callee.tag == .closure) callee.asClosure() else null;
+        const closure = if (callee.tag() == .closure) callee.asClosure() else null;
         const task = ObjTask.create(self.alloc, func, closure);
         task.state = .ready;
         self.sched.enqueue(task);
@@ -1785,7 +1785,7 @@ pub const VM = struct {
     fn execChannelSend(self: *VM) Error!void {
         const val = self.pop();
         const ch_val = self.pop();
-        if (ch_val.tag != .channel) {
+        if (ch_val.tag() != .channel) {
             self.runtimeError("send on non-channel value", .{});
             return error.RuntimeError;
         }
@@ -1823,7 +1823,7 @@ pub const VM = struct {
 
     fn execChannelRecv(self: *VM) Error!void {
         const ch_val = self.pop();
-        if (ch_val.tag != .channel) {
+        if (ch_val.tag() != .channel) {
             self.runtimeError("recv on non-channel value", .{});
             return error.RuntimeError;
         }
@@ -1858,7 +1858,7 @@ pub const VM = struct {
 
     fn execAwaitTask(self: *VM) Error!void {
         const task_val = self.pop();
-        if (task_val.tag != .task) {
+        if (task_val.tag() != .task) {
             self.runtimeError("await requires a task value", .{});
             return error.RuntimeError;
         }
@@ -1906,7 +1906,7 @@ pub const VM = struct {
 
     fn execNetAccept(self: *VM) Error!void {
         const target = self.pop();
-        if (target.tag != .listener) {
+        if (target.tag() != .listener) {
             self.runtimeError("accept on non-listener value", .{});
             return error.RuntimeError;
         }
@@ -1963,15 +1963,15 @@ pub const VM = struct {
 
     fn execNetRead(self: *VM) Error!void {
         const target = self.pop();
-        if (target.tag == .tls_conn) {
+        if (target.tag() == .tls_conn) {
             self.execTlsRead(target.asTlsConn());
             return;
         }
-        if (target.tag == .ssl_conn) {
+        if (target.tag() == .ssl_conn) {
             self.execSslRead(target.asSslConn());
             return;
         }
-        if (target.tag != .conn) {
+        if (target.tag() != .conn) {
             self.runtimeError("read on non-conn value", .{});
             return error.RuntimeError;
         }
@@ -2044,15 +2044,15 @@ pub const VM = struct {
     fn execNetWrite(self: *VM) Error!void {
         const data_val = self.pop();
         const target = self.pop();
-        if (target.tag == .tls_conn) {
+        if (target.tag() == .tls_conn) {
             self.execTlsWrite(target.asTlsConn(), data_val);
             return;
         }
-        if (target.tag == .ssl_conn) {
+        if (target.tag() == .ssl_conn) {
             self.execSslWrite(target.asSslConn(), data_val);
             return;
         }
-        if (target.tag != .conn or data_val.tag != .string) {
+        if (target.tag() != .conn or data_val.tag() != .string) {
             self.push(self.ioError("write requires conn and string"));
             return;
         }
@@ -2095,7 +2095,7 @@ pub const VM = struct {
     fn execNetConnect(self: *VM) Error!void {
         const port_val = self.pop();
         const addr_val = self.pop();
-        if (addr_val.tag != .string or port_val.tag != .int) {
+        if (addr_val.tag() != .string or port_val.tag() != .int) {
             self.push(self.ioError("connect requires string and int"));
             return;
         }
@@ -2152,7 +2152,7 @@ pub const VM = struct {
         const addr_val = self.pop();
         const data_val = self.pop();
         const target = self.pop();
-        if (target.tag != .dgram or data_val.tag != .string or addr_val.tag != .string or port_val.tag != .int) {
+        if (target.tag() != .dgram or data_val.tag() != .string or addr_val.tag() != .string or port_val.tag() != .int) {
             self.push(self.ioError("sendto requires dgram, string, string, int"));
             return;
         }
@@ -2172,7 +2172,7 @@ pub const VM = struct {
 
     fn execNetRecvfrom(self: *VM) Error!void {
         const target = self.pop();
-        if (target.tag != .dgram) {
+        if (target.tag() != .dgram) {
             self.runtimeError("recvfrom on non-dgram value", .{});
             return error.RuntimeError;
         }
@@ -2256,7 +2256,7 @@ pub const VM = struct {
         const abs_slot = self.currentFrame().slot_offset + slot;
         const lhs = self.stack[abs_slot];
 
-        if (lhs.tag != .string or rhs.tag != .string) {
+        if (lhs.tag() != .string or rhs.tag() != .string) {
             self.push(lhs);
             self.push(rhs);
             self.binaryOp(.add) catch {};
@@ -2464,7 +2464,7 @@ pub const VM = struct {
     }
 
     fn execTlsWrite(self: *VM, obj: *@import("value.zig").ObjTlsConn, data_val: Value) void {
-        if (data_val.tag != .string) {
+        if (data_val.tag() != .string) {
             self.push(self.ioError("write requires string"));
             return;
         }
@@ -2526,7 +2526,7 @@ pub const VM = struct {
             self.push(self.ioError("OpenSSL not available"));
             return;
         };
-        if (data_val.tag != .string) {
+        if (data_val.tag() != .string) {
             self.push(self.ioError("write requires string"));
             return;
         }

@@ -164,44 +164,44 @@ pub const Compiler = struct {
 
     fn nativeSqrt(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
-        const f: f64 = if (v.tag == .float) v.asFloat() else if (v.tag == .int) @floatFromInt(v.asInt()) else 0.0;
+        const f: f64 = if (v.tag() == .float) v.asFloat() else if (v.tag() == .int) @floatFromInt(v.asInt()) else 0.0;
         return Value.initFloat(@sqrt(f));
     }
 
     fn nativeAbs(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
-        if (v.tag == .int) {
+        if (v.tag() == .int) {
             const i = v.asInt();
             return Value.initInt(if (i < 0) -i else i);
         }
-        if (v.tag == .float) return Value.initFloat(@abs(v.asFloat()));
+        if (v.tag() == .float) return Value.initFloat(@abs(v.asFloat()));
         return Value.initInt(0);
     }
 
     fn nativeInt(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
-        if (v.tag == .int) return v;
-        if (v.tag == .float) return Value.initInt(@intFromFloat(v.asFloat()));
-        if (v.tag == .bool_) return Value.initInt(@intFromBool(v.asBool()));
+        if (v.tag() == .int) return v;
+        if (v.tag() == .float) return Value.initInt(@intFromFloat(v.asFloat()));
+        if (v.tag() == .bool_) return Value.initInt(@intFromBool(v.asBool()));
         return Value.initInt(0);
     }
 
     fn nativeFloat(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
-        if (v.tag == .float) return v;
-        if (v.tag == .int) return Value.initFloat(@floatFromInt(v.asInt()));
+        if (v.tag() == .float) return v;
+        if (v.tag() == .int) return Value.initFloat(@floatFromInt(v.asInt()));
         return Value.initFloat(0.0);
     }
 
     fn nativeLen(_: std.mem.Allocator, args: []const Value) Value {
         const v = args[0];
-        if (v.tag == .string) return Value.initInt(@intCast(v.asString().chars.len));
-        if (v.tag == .array) return Value.initInt(@intCast(v.asArray().items.len));
+        if (v.tag() == .string) return Value.initInt(@intCast(v.asString().chars.len));
+        if (v.tag() == .array) return Value.initInt(@intCast(v.asArray().items.len));
         return Value.initInt(0);
     }
 
     fn nativePush(alloc: std.mem.Allocator, args: []const Value) Value {
-        if (args[0].tag == .array) {
+        if (args[0].tag() == .array) {
             args[0].asArray().push(alloc, args[1]);
         }
         return Value.initNil();

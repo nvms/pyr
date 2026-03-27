@@ -70,7 +70,7 @@ pub fn buildRecvfromResult(alloc: std.mem.Allocator, data: []const u8, src_addr:
 }
 
 fn netListen(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .int) return root.makeIoError(alloc, "listen requires string and int");
+    if (args[0].tag() != .string or args[1].tag() != .int) return root.makeIoError(alloc, "listen requires string and int");
     const addr_str = args[0].asString().chars;
     const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
 
@@ -98,7 +98,7 @@ fn netListen(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn netAccept(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .listener) return root.makeIoError(alloc, "accept requires listener");
+    if (args[0].tag() != .listener) return root.makeIoError(alloc, "accept requires listener");
     const listener = args[0].asListener();
     const client_fd = std.posix.accept(listener.fd, null, null, 0) catch return root.makeIoError(alloc, "accept failed");
     return ObjConn.create(alloc, client_fd).toValue();
@@ -117,7 +117,7 @@ pub fn resolveAddress(alloc: std.mem.Allocator, addr_str: []const u8, port: u16)
 }
 
 fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .int) return root.makeIoError(alloc, "connect requires string and int");
+    if (args[0].tag() != .string or args[1].tag() != .int) return root.makeIoError(alloc, "connect requires string and int");
     const addr_str = args[0].asString().chars;
     const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
 
@@ -133,8 +133,8 @@ fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn netRead(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag == .tls_conn) return tlsRead(alloc, args[0].asTlsConn());
-    if (args[0].tag != .conn) return root.makeIoError(alloc, "read requires conn");
+    if (args[0].tag() == .tls_conn) return tlsRead(alloc, args[0].asTlsConn());
+    if (args[0].tag() != .conn) return root.makeIoError(alloc, "read requires conn");
     const conn = args[0].asConn();
     var buf: [8192]u8 = undefined;
     const n = std.posix.read(conn.fd, &buf) catch return root.makeIoError(alloc, "read failed");
@@ -178,8 +178,8 @@ fn tlsRead(alloc: std.mem.Allocator, obj: *ObjTlsConn) Value {
 }
 
 fn netWrite(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag == .tls_conn) return tlsWrite(alloc, args[0].asTlsConn(), args);
-    if (args[0].tag != .conn or args[1].tag != .string) return root.makeIoError(alloc, "write requires conn and string");
+    if (args[0].tag() == .tls_conn) return tlsWrite(alloc, args[0].asTlsConn(), args);
+    if (args[0].tag() != .conn or args[1].tag() != .string) return root.makeIoError(alloc, "write requires conn and string");
     const conn = args[0].asConn();
     const data = args[1].asString().chars;
     var written: usize = 0;
@@ -190,7 +190,7 @@ fn netWrite(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn tlsWrite(alloc: std.mem.Allocator, obj: *ObjTlsConn, args: []const Value) Value {
-    if (args.len < 2 or args[1].tag != .string) return root.makeIoError(alloc, "write requires string");
+    if (args.len < 2 or args[1].tag() != .string) return root.makeIoError(alloc, "write requires string");
     const data = args[1].asString().chars;
     obj.client.writer.writeAll(data) catch return root.makeIoError(alloc, "tls write failed");
     obj.client.writer.flush() catch return root.makeIoError(alloc, "tls flush failed");
@@ -199,18 +199,18 @@ fn tlsWrite(alloc: std.mem.Allocator, obj: *ObjTlsConn, args: []const Value) Val
 }
 
 fn netClose(_: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag == .listener) {
+    if (args[0].tag() == .listener) {
         std.posix.close(args[0].asListener().fd);
-    } else if (args[0].tag == .conn) {
+    } else if (args[0].tag() == .conn) {
         std.posix.close(args[0].asConn().fd);
-    } else if (args[0].tag == .dgram) {
+    } else if (args[0].tag() == .dgram) {
         std.posix.close(args[0].asDgram().fd);
-    } else if (args[0].tag == .tls_conn) {
+    } else if (args[0].tag() == .tls_conn) {
         const obj = args[0].asTlsConn();
         obj.client.end() catch {};
         obj.client.writer.flush() catch {};
         std.posix.close(obj.fd);
-    } else if (args[0].tag == .ssl_conn) {
+    } else if (args[0].tag() == .ssl_conn) {
         const ssl_mod = @import("ssl.zig");
         if (ssl_mod.get()) |ssl| {
             ssl.shutdown(args[0].asSslConn().ssl);
@@ -222,23 +222,23 @@ fn netClose(_: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn netTimeout(_: std.mem.Allocator, args: []const Value) Value {
-    const ms: i32 = if (args[1].tag == .int) @intCast(@as(i64, @max(-1, args[1].asInt()))) else -1;
-    if (args[0].tag == .listener) {
+    const ms: i32 = if (args[1].tag() == .int) @intCast(@as(i64, @max(-1, args[1].asInt()))) else -1;
+    if (args[0].tag() == .listener) {
         args[0].asListener().timeout_ms = ms;
-    } else if (args[0].tag == .conn) {
+    } else if (args[0].tag() == .conn) {
         args[0].asConn().timeout_ms = ms;
-    } else if (args[0].tag == .dgram) {
+    } else if (args[0].tag() == .dgram) {
         args[0].asDgram().timeout_ms = ms;
-    } else if (args[0].tag == .tls_conn) {
+    } else if (args[0].tag() == .tls_conn) {
         args[0].asTlsConn().timeout_ms = ms;
-    } else if (args[0].tag == .ssl_conn) {
+    } else if (args[0].tag() == .ssl_conn) {
         args[0].asSslConn().timeout_ms = ms;
     }
     return Value.initNil();
 }
 
 fn netUdpBind(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .int) return root.makeIoError(alloc, "udp_bind requires string and int");
+    if (args[0].tag() != .string or args[1].tag() != .int) return root.makeIoError(alloc, "udp_bind requires string and int");
     const addr_str = args[0].asString().chars;
     const port: u16 = @intCast(@as(i64, @max(0, @min(65535, args[1].asInt()))));
 
@@ -266,7 +266,7 @@ fn netUdpOpen(alloc: std.mem.Allocator, _: []const Value) Value {
 }
 
 fn netSendto(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .dgram or args[1].tag != .string or args[2].tag != .string or args[3].tag != .int)
+    if (args[0].tag() != .dgram or args[1].tag() != .string or args[2].tag() != .string or args[3].tag() != .int)
         return root.makeIoError(alloc, "sendto requires dgram, string, string, int");
     const dgram = args[0].asDgram();
     const data = args[1].asString().chars;
@@ -280,7 +280,7 @@ fn netSendto(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn netRecvfrom(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .dgram) return root.makeIoError(alloc, "recvfrom requires dgram");
+    if (args[0].tag() != .dgram) return root.makeIoError(alloc, "recvfrom requires dgram");
     const dgram = args[0].asDgram();
 
     if (dgram.timeout_ms >= 0) {

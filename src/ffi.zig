@@ -86,7 +86,7 @@ pub const FfiState = struct {
                     int_count += 1;
                 },
                 .cstr => {
-                    if (args[i].tag == .string) {
+                    if (args[i].tag() == .string) {
                         const chars = args[i].asString().chars;
                         const z = alloc.allocSentinel(u8, chars.len, 0) catch {
                             int_args[int_count] = 0;
@@ -103,7 +103,7 @@ pub const FfiState = struct {
                     int_count += 1;
                 },
                 .f64_ => {
-                    float_args[float_count] = if (args[i].tag == .float) args[i].asFloat() else @floatFromInt(args[i].asInt());
+                    float_args[float_count] = if (args[i].tag() == .float) args[i].asFloat() else @floatFromInt(args[i].asInt());
                     float_count += 1;
                 },
                 .void_ => {},
@@ -148,7 +148,7 @@ pub const FfiState = struct {
 };
 
 fn marshalToInt(v: Value) usize {
-    return switch (v.tag) {
+    return switch (v.tag()) {
         .int => @bitCast(v.asInt()),
         .ptr => v.asPtr(),
         .nil => 0,
@@ -159,7 +159,7 @@ fn marshalToInt(v: Value) usize {
 }
 
 fn marshalToStr(v: Value) usize {
-    if (v.tag == .string) {
+    if (v.tag() == .string) {
         const chars = v.asString().chars;
         // check for null terminator
         if (chars.len > 0 and chars.ptr[chars.len] == 0) {
@@ -169,8 +169,8 @@ fn marshalToStr(v: Value) usize {
         // pyr strings from source are null-terminated in practice
         return @intFromPtr(chars.ptr);
     }
-    if (v.tag == .nil) return 0;
-    if (v.tag == .ptr) return v.asPtr();
+    if (v.tag() == .nil) return 0;
+    if (v.tag() == .ptr) return v.asPtr();
     return 0;
 }
 

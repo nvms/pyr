@@ -1,215 +1,238 @@
 const std = @import("std");
 
 pub const Value = struct {
-    tag: Tag,
-    data: u64,
+    bits: u64,
 
-    pub const Tag = enum(u8) {
-        nil,
-        bool_,
-        int,
-        float,
-        string,
-        function,
-        struct_,
-        enum_,
-        native_fn,
-        closure,
-        array,
-        task,
-        channel,
-        listener,
-        conn,
-        dgram,
-        tls_conn,
-        ssl_ctx,
-        ssl_conn,
-        ptr,
-        error_val,
+    const QNAN: u64 = 0x7FFC_0000_0000_0000;
+    const TAG_SHIFT: u6 = 45;
+    const PAYLOAD_MASK: u64 = (@as(u64, 1) << 45) - 1;
+
+    pub const Tag = enum(u5) {
+        nil = 0,
+        bool_ = 1,
+        int = 2,
+        float = 3,
+        string = 4,
+        function = 5,
+        struct_ = 6,
+        enum_ = 7,
+        native_fn = 8,
+        closure = 9,
+        array = 10,
+        task = 11,
+        channel = 12,
+        listener = 13,
+        conn = 14,
+        dgram = 15,
+        tls_conn = 16,
+        ssl_ctx = 17,
+        ssl_conn = 18,
+        ptr = 19,
+        error_val = 20,
     };
 
+    fn encode(t: Tag, val: u64) Value {
+        return .{ .bits = QNAN | (@as(u64, @intFromEnum(t)) << TAG_SHIFT) | (val & PAYLOAD_MASK) };
+    }
+
+    pub fn tag(self: Value) Tag {
+        if ((self.bits & QNAN) != QNAN) return .float;
+        return @enumFromInt(@as(u5, @truncate((self.bits >> TAG_SHIFT) & 0x1F)));
+    }
+
     pub fn initNil() Value {
-        return .{ .tag = .nil, .data = 0 };
+        return encode(.nil, 0);
     }
 
     pub fn initBool(v: bool) Value {
-        return .{ .tag = .bool_, .data = @intFromBool(v) };
+        return encode(.bool_, @intFromBool(v));
     }
 
     pub fn initInt(v: i64) Value {
-        return .{ .tag = .int, .data = @bitCast(v) };
+        return encode(.int, @bitCast(v));
     }
 
     pub fn initFloat(v: f64) Value {
-        return .{ .tag = .float, .data = @bitCast(v) };
+        const b: u64 = @bitCast(v);
+        if ((b & QNAN) == QNAN) return .{ .bits = 0x7FF8_0000_0000_0000 };
+        return .{ .bits = b };
     }
 
-    pub fn initString(ptr: *ObjString) Value {
-        return .{ .tag = .string, .data = @intFromPtr(ptr) };
+    pub fn initString(p: *ObjString) Value {
+        return encode(.string, @intFromPtr(p));
     }
 
-    pub fn initFunction(ptr: *ObjFunction) Value {
-        return .{ .tag = .function, .data = @intFromPtr(ptr) };
+    pub fn initFunction(p: *ObjFunction) Value {
+        return encode(.function, @intFromPtr(p));
     }
 
-    pub fn initStruct(ptr: *ObjStruct) Value {
-        return .{ .tag = .struct_, .data = @intFromPtr(ptr) };
+    pub fn initStruct(p: *ObjStruct) Value {
+        return encode(.struct_, @intFromPtr(p));
     }
 
-    pub fn initEnum(ptr: *ObjEnum) Value {
-        return .{ .tag = .enum_, .data = @intFromPtr(ptr) };
+    pub fn initEnum(p: *ObjEnum) Value {
+        return encode(.enum_, @intFromPtr(p));
     }
 
-    pub fn initNativeFn(ptr: *ObjNativeFn) Value {
-        return .{ .tag = .native_fn, .data = @intFromPtr(ptr) };
+    pub fn initNativeFn(p: *ObjNativeFn) Value {
+        return encode(.native_fn, @intFromPtr(p));
     }
 
-    pub fn initClosure(ptr: *ObjClosure) Value {
-        return .{ .tag = .closure, .data = @intFromPtr(ptr) };
+    pub fn initClosure(p: *ObjClosure) Value {
+        return encode(.closure, @intFromPtr(p));
     }
 
-    pub fn initArray(ptr: *ObjArray) Value {
-        return .{ .tag = .array, .data = @intFromPtr(ptr) };
+    pub fn initArray(p: *ObjArray) Value {
+        return encode(.array, @intFromPtr(p));
     }
 
-    pub fn initTask(ptr: *ObjTask) Value {
-        return .{ .tag = .task, .data = @intFromPtr(ptr) };
+    pub fn initTask(p: *ObjTask) Value {
+        return encode(.task, @intFromPtr(p));
     }
 
-    pub fn initChannel(ptr: *ObjChannel) Value {
-        return .{ .tag = .channel, .data = @intFromPtr(ptr) };
+    pub fn initChannel(p: *ObjChannel) Value {
+        return encode(.channel, @intFromPtr(p));
     }
 
-    pub fn initListener(ptr: *ObjListener) Value {
-        return .{ .tag = .listener, .data = @intFromPtr(ptr) };
+    pub fn initListener(p: *ObjListener) Value {
+        return encode(.listener, @intFromPtr(p));
     }
 
     pub fn initConn(p: *ObjConn) Value {
-        return .{ .tag = .conn, .data = @intFromPtr(p) };
+        return encode(.conn, @intFromPtr(p));
     }
 
-    pub fn initDgram(ptr: *ObjDgram) Value {
-        return .{ .tag = .dgram, .data = @intFromPtr(ptr) };
+    pub fn initDgram(p: *ObjDgram) Value {
+        return encode(.dgram, @intFromPtr(p));
     }
 
-    pub fn initTlsConn(ptr: *ObjTlsConn) Value {
-        return .{ .tag = .tls_conn, .data = @intFromPtr(ptr) };
+    pub fn initTlsConn(p: *ObjTlsConn) Value {
+        return encode(.tls_conn, @intFromPtr(p));
     }
 
-    pub fn initSslCtx(ptr: *ObjSslCtx) Value {
-        return .{ .tag = .ssl_ctx, .data = @intFromPtr(ptr) };
+    pub fn initSslCtx(p: *ObjSslCtx) Value {
+        return encode(.ssl_ctx, @intFromPtr(p));
     }
 
-    pub fn initSslConn(ptr: *ObjSslConn) Value {
-        return .{ .tag = .ssl_conn, .data = @intFromPtr(ptr) };
+    pub fn initSslConn(p: *ObjSslConn) Value {
+        return encode(.ssl_conn, @intFromPtr(p));
     }
 
     pub fn initPtr(p: usize) Value {
-        return .{ .tag = .ptr, .data = p };
+        return encode(.ptr, p);
     }
 
-    pub fn initError(ptr: *ObjError) Value {
-        return .{ .tag = .error_val, .data = @intFromPtr(ptr) };
+    pub fn initError(p: *ObjError) Value {
+        return encode(.error_val, @intFromPtr(p));
+    }
+
+    fn payload(self: Value) u64 {
+        return self.bits & PAYLOAD_MASK;
+    }
+
+    fn ptrFromPayload(self: Value) *anyopaque {
+        return @ptrFromInt(self.payload());
     }
 
     pub fn asError(self: Value) *ObjError {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asPtr(self: Value) usize {
-        return self.data;
+        return self.payload();
     }
 
     pub fn asBool(self: Value) bool {
-        return self.data != 0;
+        return self.payload() != 0;
     }
 
     pub fn asInt(self: Value) i64 {
-        return @bitCast(self.data);
+        const raw = self.payload();
+        const shift: u6 = 64 - 45;
+        return @as(i64, @bitCast(raw << shift)) >> shift;
     }
 
     pub fn asFloat(self: Value) f64 {
-        return @bitCast(self.data);
+        return @bitCast(self.bits);
     }
 
     pub fn asString(self: Value) *ObjString {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asFunction(self: Value) *ObjFunction {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asStruct(self: Value) *ObjStruct {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asEnum(self: Value) *ObjEnum {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asNativeFn(self: Value) *ObjNativeFn {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asClosure(self: Value) *ObjClosure {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asArray(self: Value) *ObjArray {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asTask(self: Value) *ObjTask {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asChannel(self: Value) *ObjChannel {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asListener(self: Value) *ObjListener {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asConn(self: Value) *ObjConn {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asDgram(self: Value) *ObjDgram {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asTlsConn(self: Value) *ObjTlsConn {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asSslCtx(self: Value) *ObjSslCtx {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn asSslConn(self: Value) *ObjSslConn {
-        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
     pub fn isTruthy(self: Value) bool {
-        return switch (self.tag) {
+        return switch (self.tag()) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
             .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn => true,
-            .ptr => self.data != 0,
+            .ptr => self.payload() != 0,
             .error_val => false,
         };
     }
 
     pub fn eql(a: Value, b: Value) bool {
-        if (a.tag != b.tag) return false;
-        return switch (a.tag) {
+        if (a.tag() != b.tag()) return false;
+        return switch (a.tag()) {
             .nil => true,
-            .bool_ => a.asBool() == b.asBool(),
-            .int => a.asInt() == b.asInt(),
+            .bool_, .int => a.bits == b.bits,
             .float => a.asFloat() == b.asFloat(),
             .string => std.mem.eql(u8, a.asString().chars, b.asString().chars),
             .enum_ => {
@@ -223,8 +246,6 @@ pub const Value = struct {
                 }
                 return true;
             },
-            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn, .ptr => a.data == b.data,
-            .error_val => eql(a.asError().value, b.asError().value),
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -234,11 +255,13 @@ pub const Value = struct {
                 }
                 return true;
             },
+            .error_val => eql(a.asError().value, b.asError().value),
+            else => a.bits == b.bits,
         };
     }
 
     pub fn dump(self: Value) void {
-        switch (self.tag) {
+        switch (self.tag()) {
             .nil => std.debug.print("nil", .{}),
             .bool_ => std.debug.print("{}", .{self.asBool()}),
             .int => std.debug.print("{d}", .{self.asInt()}),
@@ -278,7 +301,7 @@ pub const Value = struct {
             .tls_conn => std.debug.print("<tls_conn>", .{}),
             .ssl_ctx => std.debug.print("<ssl_ctx>", .{}),
             .ssl_conn => std.debug.print("<ssl_conn>", .{}),
-            .ptr => std.debug.print("<ptr 0x{x}>", .{self.data}),
+            .ptr => std.debug.print("<ptr 0x{x}>", .{self.payload()}),
             .error_val => {
                 std.debug.print("error(", .{});
                 self.asError().value.dump();
@@ -726,6 +749,16 @@ test "value: int round-trip" {
     try std.testing.expectEqual(@as(i64, 42), v.asInt());
 }
 
+test "value: negative int round-trip" {
+    const v = Value.initInt(-1);
+    try std.testing.expectEqual(@as(i64, -1), v.asInt());
+}
+
+test "value: large int round-trip" {
+    const v = Value.initInt(1_000_000_000_000);
+    try std.testing.expectEqual(@as(i64, 1_000_000_000_000), v.asInt());
+}
+
 test "value: float round-trip" {
     const v = Value.initFloat(3.14);
     try std.testing.expectEqual(@as(f64, 3.14), v.asFloat());
@@ -746,4 +779,15 @@ test "value: equality" {
     try std.testing.expect(Value.eql(Value.initInt(5), Value.initInt(5)));
     try std.testing.expect(!Value.eql(Value.initInt(5), Value.initInt(6)));
     try std.testing.expect(!Value.eql(Value.initInt(5), Value.initFloat(5.0)));
+}
+
+test "value: tag detection" {
+    try std.testing.expectEqual(Value.Tag.nil, Value.initNil().tag());
+    try std.testing.expectEqual(Value.Tag.bool_, Value.initBool(true).tag());
+    try std.testing.expectEqual(Value.Tag.int, Value.initInt(42).tag());
+    try std.testing.expectEqual(Value.Tag.float, Value.initFloat(3.14).tag());
+}
+
+test "value: size is 8 bytes" {
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(Value));
 }

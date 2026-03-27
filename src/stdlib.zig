@@ -65,7 +65,7 @@ pub fn writeBytes(fd: std.posix.fd_t, bytes: []const u8) void {
 }
 
 pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void {
-    switch (v.tag) {
+    switch (v.tag()) {
         .nil => writeBytes(fd, "nil"),
         .bool_ => writeBytes(fd, if (v.asBool()) "true" else "false"),
         .int => {
@@ -121,7 +121,7 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
         .ssl_conn => writeBytes(fd, "<ssl_conn>"),
         .ptr => {
             var buf: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "<ptr 0x{x}>", .{v.data}) catch return;
+            const s = std.fmt.bufPrint(&buf, "<ptr 0x{x}>", .{v.asPtr()}) catch return;
             writeBytes(fd, s);
         },
         .array => {

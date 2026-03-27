@@ -219,7 +219,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - arrays: `[1, 2, 3]` literals, `arr[i]` indexing (also works on strings), `push(arr, val)`, `len(arr)`, deep equality via `==`, `for x in arr` iteration
   - ObjArray with growable backing store (capacity doubling). array_create, index_get, index_set opcodes in run()
   - for-in compiles to hidden `$iter` + `$idx` locals, index-based loop with len check and index_get per iteration
-- value types: nil, bool, int (i64), float (f64), string (*ObjString), function (*ObjFunction), struct_ (*ObjStruct), enum_ (*ObjEnum), native_fn (*ObjNativeFn), closure (*ObjClosure), array (*ObjArray), task (*ObjTask), channel (*ObjChannel), listener (*ObjListener), conn (*ObjConn), dgram (*ObjDgram), tls_conn (*ObjTlsConn), ssl_ctx (*ObjSslCtx), ssl_conn (*ObjSslConn), ptr (raw C pointer for FFI), error_val (*ObjError - wraps any Value as error payload)
+- NaN-boxed values: Value is a single u64 (8 bytes, down from 16). doubles stored as raw IEEE 754 bits. non-double types encoded in the quiet NaN space: QNAN base (0x7FFC000000000000) + 5-bit type tag (bits 49-45) + 45-bit payload. tag() method returns Tag enum, isFloat detected by (bits & QNAN) != QNAN. integers sign-extended from 45 bits (range +/- 17.6 trillion). pointers stored in 45-bit payload (32TB address space). floats canonicalized to 0x7FF8... if they collide with QNAN pattern. halved memory for stack, arrays, channels, struct fields - major performance win for data-heavy workloads
+- value types: nil, bool, int (i45 signed), float (f64), string (*ObjString), function (*ObjFunction), struct_ (*ObjStruct), enum_ (*ObjEnum), native_fn (*ObjNativeFn), closure (*ObjClosure), array (*ObjArray), task (*ObjTask), channel (*ObjChannel), listener (*ObjListener), conn (*ObjConn), dgram (*ObjDgram), tls_conn (*ObjTlsConn), ssl_ctx (*ObjSslCtx), ssl_conn (*ObjSslConn), ptr (raw C pointer for FFI), error_val (*ObjError - wraps any Value as error payload)
 - arena memory model: `arena { ... }` blocks create child arena allocators. all allocations inside use the child arena. freed in bulk on block exit. ArenaStack side struct (heap-allocated, avoids LLVM perturbation) holds up to 16 nested arenas. push_arena/pop_arena opcodes. VM.currentAlloc() routes allocations to active arena
 - concat_local opcode: compile-time detection of `s = s + expr` pattern. compiler emits concat_local instead of get_local+add+set_local. VM maintains a growable ConcatState buffer (heap-allocated, avoids LLVM perturbation). amortized O(1) append instead of O(n) realloc per iteration. also handles `s += expr` compound assignment
 - type-specialized opcodes: add_int, sub_int, mul_int, div_int, mod_int, less_int, greater_int, add_float, sub_float, mul_float, div_float, less_float, greater_float - skip tag checks entirely when compiler can prove operand types. int ops in fastLoop, float ops in run() only (fastLoop size limit)
@@ -266,15 +267,15 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - while loop body compilation: uses inline beginScope/endScope instead of compileBlock to avoid emitting return_ for trailing expressions. compileBlock emits return_ for trailing expressions (correct for function bodies) but wrong for loop bodies where trailing expressions should be discarded
 - defer: scoped cleanup (like zig). `defer expr` and `defer { block }`. LIFO order. runs at scope exit - normal end, return, fail, or ? propagation. compile-time construct: compiler stores deferred AST nodes per scope depth, emits them at every exit point. no new opcodes. emitScopeDefers for normal scope exit, emitAllDefers for early returns. compileBlock's trailing expression path emits defers before return_
 - mutable references: `*mut T` parameter types declare mutation intent. `&mut x` required at call sites. sema enforces: field assignment on non-`*mut` params is compile error, `&mut` on immutable vars is error, unnecessary `&mut` to non-`*mut` params is error. pure compile-time - no new VM opcodes or value types. `&mut x` compiles to just `x` (already a pointer for heap types). FnType.mut_params bitmask (u64) tracks which params are `*mut`
-- 246 tests, 32 validated examples, 10 benchmarks
+- 251 tests, 32 validated examples, 10 benchmarks
 - UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`
-- benchmarks: fib(35) 0.80s (python 0.85s), loop 10M 0.20s (python 0.21s), closure 10M 0.25s (python 0.31s), struct 10M 0.32s (python 0.19s), string 100K 0.008s (python 0.14s), array 10M 1.57s (python 0.60s), match 30M 4.35s (python 2.03s), arena 1M 0.51s (python 0.20s), channel 100K 0.03s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
+- benchmarks: fib(35) 0.66s (python 0.88s), loop 10M 0.20s (python 0.21s), closure 10M 0.25s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.007s (python 0.15s), array 10M 1.01s (python 0.64s), match 30M 2.90s (python 2.33s), arena 1M 0.30s (python 0.21s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** performance (NaN boxing for 8-byte Values, function inlining for small pure functions), dogfooding, stdlib expansion
+**next:** performance (function inlining for small pure functions), dogfooding, stdlib expansion
 
 ## roadmap
 
@@ -297,6 +298,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 17. ~~error handling~~ - postfix T? optional types, T!/T!(E) result types, `or` replaces `??` (catches nil + error), `or |err|` error binding, `fail` keyword, `?` propagates both nil and error, `!` crash unwrap. error_val Value tag with ObjError. jump_if_error/make_error/unwrap_error/extract_error opcodes. IoError coexists for rich I/O errors
 18. ~~std/tls server~~ - server-side TLS via runtime dlopen of OpenSSL/LibreSSL (no build-time dependency). tls.context(cert, key) + tls.upgrade(conn, ctx) for server mode. ObjSslCtx/ObjSslConn value types. SSL_read/SSL_write dispatch in VM. blocking handshake (SSL_accept) - scheduler stalls during handshake in spawned tasks
 19. ~~package manager / module resolution~~ - git-based packages (go-style). pyr.pkg manifest, pyr.lock lockfile, ~/.pyr/cache/ with bare repo + versioned checkouts. pyr init/install/add CLI commands. module resolution falls back to package cache when local file not found
+20. ~~NaN boxing~~ - Value packed from 16 bytes to 8 bytes. QNAN base + 5-bit tag + 45-bit payload. 36% faster array_sum, 33% faster match, 41% faster arena, 18% faster fib. all 251 tests and 32 examples pass
 
 ## implementation notes
 
@@ -306,6 +308,7 @@ critical invariants to always keep in mind:
 - LLVM perturbation: any change to VM struct, CallFrame, OpCode enum, or run() switch can cause regressions across ALL benchmarks. always benchmark after structural changes
 - fastLoop return_ must clean up the stack BEFORE checking exit condition
 - new specialized opcodes go in run() only unless proven safe in fastLoop (float ops in fastLoop caused 7x regression)
+- NaN boxing: Value.tag is a method (`.tag()`), not a field. Value.bits is the raw u64. integers are 45-bit signed (sign-extended). pointers are 45-bit (32TB). never access `.data` - use the typed accessors (asInt, asFloat, asString, etc)
 
 ## design principles
 

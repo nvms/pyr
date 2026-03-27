@@ -30,7 +30,7 @@ pub const fns = [_]root.NativeDef{
 };
 
 fn tlsContext(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string or args[1].tag != .string) {
+    if (args[0].tag() != .string or args[1].tag() != .string) {
         return root.makeIoError(alloc, "context requires cert and key paths");
     }
 
@@ -50,9 +50,9 @@ fn tlsContext(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn tlsUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .conn) return root.makeIoError(alloc, "upgrade requires conn");
+    if (args[0].tag() != .conn) return root.makeIoError(alloc, "upgrade requires conn");
 
-    if (args[1].tag == .ssl_ctx) return sslServerUpgrade(alloc, args);
+    if (args[1].tag() == .ssl_ctx) return sslServerUpgrade(alloc, args);
 
     return tlsClientUpgrade(alloc, args);
 }
@@ -75,7 +75,7 @@ fn sslServerUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
 
 fn tlsClientUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
     const conn = args[0].asConn();
-    const hostname: ?[]const u8 = if (args[1].tag == .string) args[1].asString().chars else null;
+    const hostname: ?[]const u8 = if (args[1].tag() == .string) args[1].asString().chars else null;
 
     const stream_read_buf = alloc.alloc(u8, buf_len) catch return root.makeIoError(alloc, "out of memory");
     const stream_write_buf = alloc.alloc(u8, buf_len) catch return root.makeIoError(alloc, "out of memory");

@@ -11,7 +11,7 @@ pub const fns = [_]root.NativeDef{
 };
 
 fn osEnv(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string) return Value.initNil();
+    if (args[0].tag() != .string) return Value.initNil();
     const key = args[0].asString().chars;
     const keyz = alloc.dupeZ(u8, key) catch return Value.initNil();
     defer alloc.free(keyz);
@@ -32,6 +32,6 @@ fn osArgs(alloc: std.mem.Allocator, _: []const Value) Value {
 }
 
 fn osExit(_: std.mem.Allocator, args: []const Value) Value {
-    const code: u8 = if (args[0].tag == .int) @intCast(@as(i64, @max(0, @min(255, args[0].asInt())))) else 1;
+    const code: u8 = if (args[0].tag() == .int) @intCast(@as(i64, @max(0, @min(255, args[0].asInt())))) else 1;
     std.process.exit(code);
 }

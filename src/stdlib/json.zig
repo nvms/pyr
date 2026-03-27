@@ -17,7 +17,7 @@ fn jsonEncode(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 pub fn writeValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v: Value) void {
-    switch (v.tag) {
+    switch (v.tag()) {
         .nil => buf.appendSlice(alloc, "null") catch return,
         .bool_ => buf.appendSlice(alloc, if (v.asBool()) "true" else "false") catch return,
         .int => {
@@ -100,7 +100,7 @@ fn writeString(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), s: []
 }
 
 fn jsonDecode(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag != .string) return Value.initNil();
+    if (args[0].tag() != .string) return Value.initNil();
     var parser = JsonParser{ .src = args[0].asString().chars, .pos = 0, .alloc = alloc };
     return parser.parseValue();
 }

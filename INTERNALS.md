@@ -18,7 +18,7 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 
 ## VM architecture
 
-- value representation is a tagged struct: `{ tag: Tag, data: u64 }`. tag indicates the type, data is bitcast/ptrcast depending on type. no NaN-boxing - clean, debuggable, 16 bytes per value
+- NaN-boxed value representation: Value is a single u64 (8 bytes). doubles stored as raw IEEE 754 bits. non-double types use quiet NaN space: QNAN base (0x7FFC000000000000) | (5-bit tag << 45) | 45-bit payload. tag() method returns Tag enum by checking (bits & QNAN) != QNAN for float, otherwise extracting bits 49-45. integers sign-extended from 45 bits via shift-left-19-then-arithmetic-shift-right-19. pointers stored in lower 45 bits. floats that collide with QNAN pattern are canonicalized to 0x7FF8000000000000
 - object types (ObjString, ObjFunction, ObjStruct, ObjEnum, ObjNativeFn) are separate heap-allocated structs. the Value tag distinguishes them (no ObjHeader pattern - zig struct layout makes that unreliable)
 - bytecode is single-byte opcodes with u8/u16 inline operands. stack-based evaluation
 - each function compiles to its own Chunk (code + constants + line info)
