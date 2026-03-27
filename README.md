@@ -93,6 +93,38 @@ cd pyr
 make build
 ```
 
+## Package management
+
+Pyr uses git-based packages with no hosted registry, similar to Go modules.
+
+```sh
+pyr init myapp             # create pyr.pkg manifest
+pyr add github.com/user/lib v1.0.0   # add a dependency
+pyr install                # fetch all dependencies
+```
+
+Packages are imported by name:
+
+```
+imp router { serve, get, post }
+imp json
+imp logger as log
+```
+
+The manifest format is minimal and purpose-built:
+
+```
+name myapp
+version 0.1.0
+
+require (
+  github.com/user/router v0.3.1
+  github.com/user/json v1.0.0
+)
+```
+
+Dependencies are cloned and cached locally in `~/.pyr/cache/`. A `pyr.lock` file records resolved commit hashes for reproducible builds.
+
 ## Status
 
 Early development. This project is an experiment in AI-maintained open source - autonomously built, tested, and refined by AI with human oversight. Regular audits, thorough test coverage, continuous refinement. The emphasis is on high quality, rigorously tested, production-grade code.
