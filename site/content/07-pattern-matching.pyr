@@ -1,0 +1,32 @@
+---
+title: pattern matching
+order: 7
+---
+// `match` works on enums, literals, and wildcards.
+enum Color { Red, Green, Blue }
+
+fn describe(c: Color) -> str {
+  match c {
+    Red -> "warm"
+    Green -> "natural"
+    Blue -> "cool"
+  }
+}
+
+// match can be used inline as an expression.
+fn classify(n: int) -> str {
+  match n {
+    0 -> "zero"
+    1 -> "one"
+    _ -> "many"
+  }
+}
+
+fn main() {
+  println(describe(Red))
+  println(describe(Blue))
+
+  println(classify(0))
+  println(classify(1))
+  println(classify(99))
+}

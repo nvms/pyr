@@ -93,7 +93,7 @@
       "patterns": [
         {
           "name": "keyword.control.pyr",
-          "match": "\\b(if|else|match|for|in|while|return|spawn|arena|await_all)\\b"
+          "match": "\\b(if|else|match|for|in|while|return|spawn|arena|await_all|defer|or|fail)\\b"
         },
         {
           "name": "keyword.other.pyr",

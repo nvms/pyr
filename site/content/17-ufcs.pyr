@@ -1,0 +1,26 @@
+---
+title: UFCS
+order: 17
+---
+// any function can be called with dot syntax
+// on its first argument. no methods, no impl blocks.
+fn double(x: int) -> int = x * 2
+fn negate(x: int) -> int = 0 - x
+
+fn main() {
+// these two are identical.
+  println(double(5))
+  println(5.double())
+
+// chaining works naturally.
+  result = 5.double().negate()
+  println(result)
+
+// builtins work with UFCS too.
+  nums = [3, 1, 4, 1, 5]
+  println(nums.len)
+  println(nums.contains(4))
+
+// string builtins chain cleanly.
+  println("hello world".to_upper().replace("WORLD", "pyr"))
+}

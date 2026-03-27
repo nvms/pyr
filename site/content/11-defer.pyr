@@ -1,0 +1,47 @@
+---
+title: defer
+order: 11
+---
+// `defer` runs cleanup code when the scope exits.
+// it fires on normal return, early return, `fail`,
+// and `?` propagation.
+fn process() {
+  println("start")
+  defer println("cleanup")
+  println("work")
+}
+
+// multiple defers run in reverse (LIFO) order.
+fn multi() {
+  defer println("third")
+  defer println("second")
+  defer println("first")
+  println("body")
+}
+
+// defer blocks can contain multiple statements.
+fn with_block() {
+  defer {
+    println("step 1")
+    println("step 2")
+  }
+  println("main work")
+}
+
+// defer in a loop runs at each iteration end.
+fn in_loop() {
+  for i in range(3) {
+    defer println("cleanup {i}")
+    println("iteration {i}")
+  }
+}
+
+fn main() {
+  process()
+  println("---")
+  multi()
+  println("---")
+  with_block()
+  println("---")
+  in_loop()
+}

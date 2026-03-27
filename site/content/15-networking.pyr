@@ -1,0 +1,34 @@
+---
+title: networking
+order: 15
+---
+// pyr has built-in TCP networking via `std/net`.
+imp std/net { listen, connect }
+imp std/io { println }
+
+// a simple echo server that handles one connection.
+fn echo_server() {
+  server = listen("127.0.0.1", 9000)
+  defer net.close(server)
+
+  conn = server.accept()
+  defer net.close(conn)
+
+  data = conn.read()
+  conn.write(data)
+}
+
+// connect to a server, send data, read response.
+fn client() {
+  conn = connect("127.0.0.1", 9000)
+  defer net.close(conn)
+
+  conn.write("hello")
+  response = conn.read()
+  println(response)
+}
+
+fn main() {
+  spawn { echo_server() }
+  client()
+}

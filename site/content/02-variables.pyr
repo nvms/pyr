@@ -1,0 +1,23 @@
+---
+title: variables
+order: 2
+---
+// variables are immutable by default.
+fn main() {
+  x = 5
+  name = "alice"
+
+// use `mut` to make a variable mutable.
+  mut y = 10
+  y = 20
+
+// type annotations are optional but supported.
+  count: int = 42
+  label: str = "hello"
+
+// printing uses `println`. string interpolation
+// uses `{}` inside double quotes.
+  println("x is {x}")
+  println("y is {y}")
+  println("{label}: {count}")
+}

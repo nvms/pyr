@@ -1,0 +1,37 @@
+---
+title: arena memory
+order: 16
+---
+// `arena` blocks create a scoped memory region.
+// all allocations inside use the arena allocator.
+// everything is freed in bulk when the block exits.
+struct Data {
+  value: int
+}
+
+fn main() {
+  mut total = 0
+
+// arena blocks are ideal for per-iteration allocations.
+// no individual frees, no GC pauses.
+  for i in range(1000) {
+    arena {
+      d = Data { value: i }
+      total += d.value
+    }
+  }
+
+  println(total)
+
+// arenas can nest. inner arenas free first.
+  arena {
+    outer = Data { value: 1 }
+
+    arena {
+      inner = Data { value: 2 }
+      println(inner.value)
+    }
+
+    println(outer.value)
+  }
+}

@@ -1,0 +1,39 @@
+---
+title: concurrency
+order: 14
+---
+// `spawn` creates a green thread (task).
+// tasks are cooperatively scheduled.
+fn worker(id: int) {
+  println("worker {id} done")
+}
+
+// `channel(n)` creates a bounded channel.
+// `.send()` and `.recv()` block when full/empty.
+fn producer(ch, n: int) {
+  for i in range(n) {
+    ch.send(i)
+  }
+}
+
+// `await_all` waits for multiple tasks and
+// collects their results into an array.
+fn compute(x: int) -> int = x * x
+
+fn main() {
+  spawn { worker(1) }
+  spawn { worker(2) }
+
+  ch = channel(4)
+  spawn { producer(ch, 4) }
+
+  for i in range(4) {
+    println(ch.recv())
+  }
+
+  results = await_all(
+    spawn { compute(3) },
+    spawn { compute(4) }
+  )
+  println(results)
+}

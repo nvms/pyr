@@ -1,0 +1,29 @@
+---
+title: arrays
+order: 8
+---
+// arrays are created with `[]` syntax.
+fn main() {
+  nums = [10, 20, 30, 40, 50]
+
+// access elements by index.
+  println(nums[0])
+  println(nums[4])
+
+// `len` returns the length. `push` appends.
+  mut items = [1, 2, 3]
+  push(items, 4)
+  println(len(items))
+
+// iterate with `for..in`.
+  for n in nums {
+    println(n)
+  }
+
+// `for..in range` for numeric loops.
+  mut sum = 0
+  for i in range(5) {
+    sum += nums[i]
+  }
+  println(sum)
+}

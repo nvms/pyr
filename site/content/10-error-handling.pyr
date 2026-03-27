@@ -1,0 +1,41 @@
+---
+title: error handling
+order: 10
+---
+// `T?` is an optional type. functions can return `nil`.
+fn find(items, target: int) -> int? {
+  for i in range(len(items)) {
+    if items[i] == target {
+      return i
+    }
+  }
+  nil
+}
+
+// `T!` is a result type. `fail` returns an error.
+fn divide(a: int, b: int) -> int! {
+  if b == 0 {
+    fail "division by zero"
+  }
+  a / b
+}
+
+// `or` provides a fallback for nil or error values.
+// `?` propagates errors to the caller.
+fn safe_divide(a: int, b: int) -> int! {
+  result = divide(a, b)?
+  result
+}
+
+fn main() {
+  idx = find([10, 20, 30], 20)
+  println(idx or -1)
+
+  println(find([10, 20, 30], 99) or -1)
+
+  println(divide(10, 3) or 0)
+  println(divide(10, 0) or 0)
+
+// `or |err|` binds the error value.
+  divide(1, 0) or |err| println("error: {err}")
+}

@@ -1,0 +1,32 @@
+---
+title: functions
+order: 3
+---
+// functions are declared with `fn`. the last
+// expression in a function body is the return value.
+fn add(a: int, b: int) -> int {
+  a + b
+}
+
+// one-liner functions use `=` syntax.
+fn double(x: int) -> int = x * 2
+
+// functions without a return type return `nil`.
+fn greet(name: str) {
+  println("hello {name}")
+}
+
+// `return` is available for early exits.
+fn first_positive(a: int, b: int) -> int {
+  if a > 0 {
+    return a
+  }
+  b
+}
+
+fn main() {
+  println(add(3, 4))
+  println(double(5))
+  greet("world")
+  println(first_positive(-1, 42))
+}

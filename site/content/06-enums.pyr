@@ -1,0 +1,28 @@
+---
+title: enums
+order: 6
+---
+// enums are algebraic types. variants can carry payloads.
+enum Shape {
+  Circle(float)
+  Rect(float, float)
+  Point
+}
+
+// pattern matching destructures enum variants.
+fn area(s: Shape) -> float {
+  match s {
+    Circle(r) -> 3.14159 * r * r
+    Rect(w, h) -> w * h
+    Point -> 0.0
+  }
+}
+
+fn main() {
+  c = Circle(5.0)
+  r = Rect(3.0, 4.0)
+
+  println(area(c))
+  println(area(r))
+  println(area(Point))
+}
