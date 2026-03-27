@@ -194,7 +194,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - locals_only analysis marks functions for fast-path dispatch
 - VM interpreter: dual-loop dispatch (16 tests)
   - `run()`: switch-based, handles all opcodes
-  - `fastLoop()`: if/else chains for hot-path opcodes (6.6x speedup on fib(35))
+  - `fastLoop()`: switch dispatch for hot-path opcodes (6.6x speedup on fib(35), switch replaced if/else for ~5% uniform gain)
   - int/float arithmetic, string values, booleans, variable bindings
   - function definitions and calls, if/else, while loops, comparisons, negation, print/println
   - struct creation and field access (ObjStruct with named fields)
@@ -266,14 +266,15 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - while loop body compilation: uses inline beginScope/endScope instead of compileBlock to avoid emitting return_ for trailing expressions. compileBlock emits return_ for trailing expressions (correct for function bodies) but wrong for loop bodies where trailing expressions should be discarded
 - defer: scoped cleanup (like zig). `defer expr` and `defer { block }`. LIFO order. runs at scope exit - normal end, return, fail, or ? propagation. compile-time construct: compiler stores deferred AST nodes per scope depth, emits them at every exit point. no new opcodes. emitScopeDefers for normal scope exit, emitAllDefers for early returns. compileBlock's trailing expression path emits defers before return_
 - mutable references: `*mut T` parameter types declare mutation intent. `&mut x` required at call sites. sema enforces: field assignment on non-`*mut` params is compile error, `&mut` on immutable vars is error, unnecessary `&mut` to non-`*mut` params is error. pure compile-time - no new VM opcodes or value types. `&mut x` compiles to just `x` (already a pointer for heap types). FnType.mut_params bitmask (u64) tracks which params are `*mut`
-- 241 tests, 31 validated examples, 10 benchmarks
-- benchmarks: fib(35) 0.84s (python 0.84s), loop 10M 0.20s (python 0.20s), closure 10M 0.26s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.53s (python 0.59s), match 30M 4.32s (python 2.16s), arena 1M 0.50s (python 0.22s), channel 100K 0.03s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
+- 246 tests, 32 validated examples, 10 benchmarks
+- UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`
+- benchmarks: fib(35) 0.80s (python 0.85s), loop 10M 0.20s (python 0.21s), closure 10M 0.25s (python 0.31s), struct 10M 0.32s (python 0.19s), string 100K 0.008s (python 0.14s), array 10M 1.57s (python 0.60s), match 30M 4.35s (python 2.03s), arena 1M 0.51s (python 0.20s), channel 100K 0.03s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** TBD - language refinement, more stdlib modules, or tooling improvements
+**next:** performance (NaN boxing for 8-byte Values, function inlining for small pure functions), dogfooding, stdlib expansion
 
 ## roadmap
 

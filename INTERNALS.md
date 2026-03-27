@@ -30,7 +30,7 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 
 ## fastLoop (performance-critical)
 
-- separate function from run(), uses if/else chains instead of switch. LLVM optimizes it more aggressively than the large run() switch
+- separate function from run(), uses switch dispatch (replaced if/else chains, switch gave ~5% uniform improvement via LLVM jump table). LLVM optimizes it more aggressively than the large run() switch due to reduced opcode set and simplified error handling
 - handles: get_local, set_local, get_global, constant, arithmetic (add/subtract/multiply/divide/modulo), comparisons (less/greater/etc), logic (not/equal/not_equal), jumps, call, return, pop, nil/true/false, negate, get_field_idx, get_field, get_upvalue, match_variant, get_payload, index_get, match_jump, slide, inc_local, mul_int, mod_int
 - inlines call/return for locals_only functions so entire recursion tree stays in one zig function
 - on unknown opcode: rewinds ip by 1 and returns to run() (ip must be rewound because fastLoop already advanced past the opcode byte)
