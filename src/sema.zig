@@ -160,6 +160,19 @@ pub const Sema = struct {
         self.define("push", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("assert", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("assert_eq", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("contains", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("index_of", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("slice", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("join", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("reverse", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("pop", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("split", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("trim", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("starts_with", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("ends_with", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("replace", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("to_upper", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("to_lower", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("channel", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("await_all", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
 

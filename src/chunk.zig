@@ -101,6 +101,8 @@ pub const OpCode = enum(u8) {
     make_error,
     unwrap_error,
     extract_error,
+    index_local,
+    index_local_local,
 };
 
 pub const Chunk = struct {

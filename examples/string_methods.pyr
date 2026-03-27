@@ -1,0 +1,39 @@
+fn main() {
+  s = "hello world"
+
+  assert(contains(s, "world"))
+  assert(!contains(s, "xyz"))
+
+  assert_eq(index_of(s, "world"), 6)
+  assert_eq(index_of(s, "xyz"), -1)
+
+  assert_eq(slice(s, 0, 5), "hello")
+  assert_eq(slice(s, 6, 11), "world")
+
+  assert(starts_with(s, "hello"))
+  assert(!starts_with(s, "world"))
+  assert(ends_with(s, "world"))
+  assert(!ends_with(s, "hello"))
+
+  assert_eq(to_upper(s), "HELLO WORLD")
+  assert_eq(to_lower("FOO BAR"), "foo bar")
+
+  assert_eq(trim("  hello  "), "hello")
+  assert_eq(trim("\n\tfoo\n"), "foo")
+
+  assert_eq(replace(s, "world", "pyr"), "hello pyr")
+  assert_eq(replace("aabaa", "a", "x"), "xxbxx")
+
+  parts = split("a,b,c", ",")
+  assert_eq(len(parts), 3)
+  assert_eq(parts[0], "a")
+  assert_eq(parts[2], "c")
+
+  chars = split("hi", "")
+  assert_eq(len(chars), 2)
+  assert_eq(chars[0], "h")
+
+  assert_eq(reverse("abc"), "cba")
+
+  println("string method tests passed")
+}

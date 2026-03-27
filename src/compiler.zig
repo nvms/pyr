@@ -6,6 +6,7 @@ const Value = @import("value.zig").Value;
 const ObjString = @import("value.zig").ObjString;
 const ObjFunction = @import("value.zig").ObjFunction;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
+const ObjArray = @import("value.zig").ObjArray;
 const ModuleLoader = @import("module.zig").ModuleLoader;
 const Module = @import("module.zig").Module;
 const stdlib = @import("stdlib.zig");
@@ -132,6 +133,19 @@ pub const Compiler = struct {
         self.defineNativeFn("push", 2, &nativePush);
         self.defineNativeFn("assert", 1, &nativeAssert);
         self.defineNativeFn("assert_eq", 2, &nativeAssertEq);
+        self.defineNativeFn("contains", 2, &nativeContains);
+        self.defineNativeFn("index_of", 2, &nativeIndexOf);
+        self.defineNativeFn("slice", 3, &nativeSlice);
+        self.defineNativeFn("join", 2, &nativeJoin);
+        self.defineNativeFn("reverse", 1, &nativeReverse);
+        self.defineNativeFn("pop", 1, &nativePop);
+        self.defineNativeFn("split", 2, &nativeSplit);
+        self.defineNativeFn("trim", 1, &nativeTrim);
+        self.defineNativeFn("starts_with", 2, &nativeStartsWith);
+        self.defineNativeFn("ends_with", 2, &nativeEndsWith);
+        self.defineNativeFn("replace", 3, &nativeReplace);
+        self.defineNativeFn("to_upper", 1, &nativeToUpper);
+        self.defineNativeFn("to_lower", 1, &nativeToLower);
 
         self.registerBuiltinEnum("IoError", &.{
             .{ .name = "Eof", .payloads = 0 },
@@ -225,6 +239,201 @@ pub const Compiler = struct {
             std.process.exit(1);
         }
         return Value.initNil();
+    }
+
+    fn nativeContains(_: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() == .array) {
+            for (args[0].asArray().items) |item| {
+                if (Value.eql(item, args[1])) return Value.initBool(true);
+            }
+            return Value.initBool(false);
+        }
+        if (args[0].tag() == .string and args[1].tag() == .string) {
+            const haystack = args[0].asString().chars;
+            const needle = args[1].asString().chars;
+            if (std.mem.indexOf(u8, haystack, needle) != null) return Value.initBool(true);
+            return Value.initBool(false);
+        }
+        return Value.initBool(false);
+    }
+
+    fn nativeIndexOf(_: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() == .array) {
+            for (args[0].asArray().items, 0..) |item, i| {
+                if (Value.eql(item, args[1])) return Value.initInt(@intCast(i));
+            }
+            return Value.initInt(-1);
+        }
+        if (args[0].tag() == .string and args[1].tag() == .string) {
+            const haystack = args[0].asString().chars;
+            const needle = args[1].asString().chars;
+            if (std.mem.indexOf(u8, haystack, needle)) |pos| return Value.initInt(@intCast(pos));
+            return Value.initInt(-1);
+        }
+        return Value.initInt(-1);
+    }
+
+    fn nativeSlice(alloc: std.mem.Allocator, args: []const Value) Value {
+        const start_raw = if (args[1].tag() == .int) args[1].asInt() else return Value.initNil();
+        const end_raw = if (args[2].tag() == .int) args[2].asInt() else return Value.initNil();
+        if (args[0].tag() == .array) {
+            const items = args[0].asArray().items;
+            const start: usize = @intCast(@max(0, start_raw));
+            const end: usize = @intCast(@min(@as(i64, @intCast(items.len)), end_raw));
+            if (start >= end) return ObjArray.create(alloc, &.{}).toValue();
+            return ObjArray.create(alloc, items[start..end]).toValue();
+        }
+        if (args[0].tag() == .string) {
+            const chars = args[0].asString().chars;
+            const start: usize = @intCast(@max(0, start_raw));
+            const end: usize = @intCast(@min(@as(i64, @intCast(chars.len)), end_raw));
+            if (start >= end) return ObjString.create(alloc, "").toValue();
+            const sub = alloc.dupe(u8, chars[start..end]) catch return Value.initNil();
+            return ObjString.create(alloc, sub).toValue();
+        }
+        return Value.initNil();
+    }
+
+    fn nativeJoin(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .array or args[1].tag() != .string) return Value.initNil();
+        const items = args[0].asArray().items;
+        const sep = args[1].asString().chars;
+        var buf = std.ArrayListUnmanaged(u8){};
+        for (items, 0..) |item, i| {
+            if (i > 0) buf.appendSlice(alloc, sep) catch return Value.initNil();
+            if (item.tag() == .string) {
+                buf.appendSlice(alloc, item.asString().chars) catch return Value.initNil();
+            } else {
+                var tmp: [64]u8 = undefined;
+                const s = valueToStr(alloc, item, &tmp);
+                buf.appendSlice(alloc, s) catch return Value.initNil();
+            }
+        }
+        const result = alloc.dupe(u8, buf.items) catch return Value.initNil();
+        return ObjString.create(alloc, result).toValue();
+    }
+
+    fn valueToStr(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) []const u8 {
+        return switch (v.tag()) {
+            .int => std.fmt.bufPrint(buf, "{d}", .{v.asInt()}) catch "",
+            .float => std.fmt.bufPrint(buf, "{d}", .{v.asFloat()}) catch "",
+            .bool_ => if (v.asBool()) "true" else "false",
+            .nil => "nil",
+            .string => v.asString().chars,
+            else => {
+                const s = alloc.dupe(u8, "<value>") catch return "";
+                return s;
+            },
+        };
+    }
+
+    fn nativeReverse(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() == .array) {
+            const items = args[0].asArray().items;
+            const new = alloc.alloc(Value, items.len) catch return Value.initNil();
+            for (items, 0..) |item, i| new[items.len - 1 - i] = item;
+            return ObjArray.create(alloc, new).toValue();
+        }
+        if (args[0].tag() == .string) {
+            const chars = args[0].asString().chars;
+            const new = alloc.alloc(u8, chars.len) catch return Value.initNil();
+            for (chars, 0..) |c, i| new[chars.len - 1 - i] = c;
+            return ObjString.create(alloc, new).toValue();
+        }
+        return Value.initNil();
+    }
+
+    fn nativePop(_: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .array) return Value.initNil();
+        const arr = args[0].asArray();
+        if (arr.items.len == 0) return Value.initNil();
+        const val = arr.items[arr.items.len - 1];
+        arr.items = arr.items[0 .. arr.items.len - 1];
+        return val;
+    }
+
+    fn nativeSplit(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string or args[1].tag() != .string) return Value.initNil();
+        const str = args[0].asString().chars;
+        const sep = args[1].asString().chars;
+        const arr = ObjArray.create(alloc, &.{});
+        if (sep.len == 0) {
+            for (str) |c| {
+                const s = alloc.alloc(u8, 1) catch return Value.initNil();
+                s[0] = c;
+                arr.push(alloc, ObjString.create(alloc, s).toValue());
+            }
+            return arr.toValue();
+        }
+        var rest = str;
+        while (rest.len > 0) {
+            if (std.mem.indexOf(u8, rest, sep)) |pos| {
+                const part = alloc.dupe(u8, rest[0..pos]) catch return Value.initNil();
+                arr.push(alloc, ObjString.create(alloc, part).toValue());
+                rest = rest[pos + sep.len ..];
+            } else {
+                const part = alloc.dupe(u8, rest) catch return Value.initNil();
+                arr.push(alloc, ObjString.create(alloc, part).toValue());
+                break;
+            }
+        }
+        return arr.toValue();
+    }
+
+    fn nativeTrim(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string) return Value.initNil();
+        const chars = args[0].asString().chars;
+        const trimmed = std.mem.trim(u8, chars, " \t\n\r");
+        const result = alloc.dupe(u8, trimmed) catch return Value.initNil();
+        return ObjString.create(alloc, result).toValue();
+    }
+
+    fn nativeStartsWith(_: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string or args[1].tag() != .string) return Value.initBool(false);
+        return Value.initBool(std.mem.startsWith(u8, args[0].asString().chars, args[1].asString().chars));
+    }
+
+    fn nativeEndsWith(_: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string or args[1].tag() != .string) return Value.initBool(false);
+        return Value.initBool(std.mem.endsWith(u8, args[0].asString().chars, args[1].asString().chars));
+    }
+
+    fn nativeReplace(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string or args[1].tag() != .string or args[2].tag() != .string) return Value.initNil();
+        const str = args[0].asString().chars;
+        const old = args[1].asString().chars;
+        const new = args[2].asString().chars;
+        if (old.len == 0) return args[0];
+        var buf = std.ArrayListUnmanaged(u8){};
+        var rest = str;
+        while (rest.len > 0) {
+            if (std.mem.indexOf(u8, rest, old)) |pos| {
+                buf.appendSlice(alloc, rest[0..pos]) catch return Value.initNil();
+                buf.appendSlice(alloc, new) catch return Value.initNil();
+                rest = rest[pos + old.len ..];
+            } else {
+                buf.appendSlice(alloc, rest) catch return Value.initNil();
+                break;
+            }
+        }
+        const result = alloc.dupe(u8, buf.items) catch return Value.initNil();
+        return ObjString.create(alloc, result).toValue();
+    }
+
+    fn nativeToUpper(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string) return Value.initNil();
+        const chars = args[0].asString().chars;
+        const result = alloc.alloc(u8, chars.len) catch return Value.initNil();
+        for (chars, 0..) |c, i| result[i] = std.ascii.toUpper(c);
+        return ObjString.create(alloc, result).toValue();
+    }
+
+    fn nativeToLower(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .string) return Value.initNil();
+        const chars = args[0].asString().chars;
+        const result = alloc.alloc(u8, chars.len) catch return Value.initNil();
+        for (chars, 0..) |c, i| result[i] = std.ascii.toLower(c);
+        return ObjString.create(alloc, result).toValue();
     }
 
     // ---------------------------------------------------------------
@@ -671,11 +880,9 @@ pub const Compiler = struct {
         self.emitOp(.pop);
 
         self.beginScope();
-        self.emitOp(.get_local);
+        self.emitOp(.index_local_local);
         self.emitByte(iter_slot);
-        self.emitOp(.get_local);
         self.emitByte(idx_slot);
-        self.emitOp(.index_get);
         self.addLocal(binding);
 
         for (body.stmts) |s| self.compileStmt(s);
@@ -685,13 +892,8 @@ pub const Compiler = struct {
         }
         self.endScope();
 
-        self.emitOp(.get_local);
+        self.emitOp(.inc_local);
         self.emitByte(idx_slot);
-        self.emitConstant(Value.initInt(1));
-        self.emitOp(.add_int);
-        self.emitOp(.set_local);
-        self.emitByte(idx_slot);
-        self.emitOp(.pop);
 
         self.emitLoop(loop_start);
         self.patchJump(exit_jump);
@@ -844,6 +1046,14 @@ pub const Compiler = struct {
                 }
             },
             .index => |idx| {
+                if (idx.target.kind == .identifier) {
+                    if (self.resolveLocal(idx.target.kind.identifier)) |slot| {
+                        self.compileExpr(idx.idx);
+                        self.emitOp(.index_local);
+                        self.emitByte(slot);
+                        return;
+                    }
+                }
                 self.compileExpr(idx.target);
                 self.compileExpr(idx.idx);
                 self.emitOp(.index_get);
@@ -2280,6 +2490,8 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .get_upvalue, .set_upvalue => i += 1,
             .array_create => i += 1,
             .index_get, .index_set, .array_push, .array_len => {},
+            .index_local => i += 1,
+            .index_local_local => i += 2,
             .slide => i += 1,
             .inc_local => i += 1,
             .match_jump => {

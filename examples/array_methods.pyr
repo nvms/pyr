@@ -1,0 +1,32 @@
+fn main() {
+  nums = [10, 20, 30, 40, 50]
+
+  assert(contains(nums, 30))
+  assert(!contains(nums, 99))
+
+  assert_eq(index_of(nums, 30), 2)
+  assert_eq(index_of(nums, 99), -1)
+
+  s = slice(nums, 1, 4)
+  assert_eq(len(s), 3)
+  assert_eq(s[0], 20)
+  assert_eq(s[2], 40)
+
+  r = reverse(nums)
+  assert_eq(r[0], 50)
+  assert_eq(r[4], 10)
+
+  mut stack = [1, 2, 3]
+  val = pop(stack)
+  assert_eq(val, 3)
+  assert_eq(len(stack), 2)
+
+  words = ["hello", "world", "pyr"]
+  assert_eq(join(words, " "), "hello world pyr")
+  assert_eq(join(words, ", "), "hello, world, pyr")
+
+  nums2 = [1, 2, 3]
+  assert_eq(join(nums2, "-"), "1-2-3")
+
+  println("array method tests passed")
+}

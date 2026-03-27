@@ -925,6 +925,67 @@ pub const VM = struct {
                         return error.RuntimeError;
                     }
                 },
+                .index_local => {
+                    const frame_ = &self.frames[self.frame_count - 1];
+                    const slot = frame_.function.chunk.code.items[frame_.ip];
+                    frame_.ip += 1;
+                    const target = self.stack[frame_.slot_offset + slot];
+                    const idx_val = self.pop();
+                    if (target.tag() == .array and idx_val.tag() == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            self.push(arr.items[@intCast(idx)]);
+                        } else {
+                            self.runtimeError("array index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else if (target.tag() == .string and idx_val.tag() == .int) {
+                        const s = target.asString();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
+                            const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
+                            self.push(ObjString.create(self.currentAlloc(), ch).toValue());
+                        } else {
+                            self.runtimeError("string index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot index into this value", .{});
+                        return error.RuntimeError;
+                    }
+                },
+                .index_local_local => {
+                    const frame_ = &self.frames[self.frame_count - 1];
+                    const arr_slot = frame_.function.chunk.code.items[frame_.ip];
+                    const idx_slot = frame_.function.chunk.code.items[frame_.ip + 1];
+                    frame_.ip += 2;
+                    const target = self.stack[frame_.slot_offset + arr_slot];
+                    const idx_val = self.stack[frame_.slot_offset + idx_slot];
+                    if (target.tag() == .array and idx_val.tag() == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            self.push(arr.items[@intCast(idx)]);
+                        } else {
+                            self.runtimeError("array index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else if (target.tag() == .string and idx_val.tag() == .int) {
+                        const s = target.asString();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
+                            const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
+                            self.push(ObjString.create(self.currentAlloc(), ch).toValue());
+                        } else {
+                            self.runtimeError("string index out of bounds: {d}", .{idx});
+                            return error.RuntimeError;
+                        }
+                    } else {
+                        self.runtimeError("cannot index into this value", .{});
+                        return error.RuntimeError;
+                    }
+                },
                 .index_set => {
                     const idx_val = self.pop();
                     const target = self.pop();
@@ -1193,6 +1254,46 @@ pub const VM = struct {
                         }
                     } else {
                         frame.ip -= 1;
+                        return;
+                    }
+                },
+                @intFromEnum(OpCode.index_local) => {
+                    const slot = code[frame.ip];
+                    frame.ip += 1;
+                    const target = self.stack[frame.slot_offset + slot];
+                    const idx_val = self.stack[self.sp - 1];
+                    if (target.tag() == .array and idx_val.tag() == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            self.stack[self.sp - 1] = arr.items[@intCast(idx)];
+                        } else {
+                            frame.ip -= 2;
+                            return;
+                        }
+                    } else {
+                        frame.ip -= 2;
+                        return;
+                    }
+                },
+                @intFromEnum(OpCode.index_local_local) => {
+                    const arr_slot = code[frame.ip];
+                    const idx_slot = code[frame.ip + 1];
+                    frame.ip += 2;
+                    const target = self.stack[frame.slot_offset + arr_slot];
+                    const idx_val = self.stack[frame.slot_offset + idx_slot];
+                    if (target.tag() == .array and idx_val.tag() == .int) {
+                        const arr = target.asArray();
+                        const idx = idx_val.asInt();
+                        if (idx >= 0 and idx < @as(i64, @intCast(arr.items.len))) {
+                            self.stack[self.sp] = arr.items[@intCast(idx)];
+                            self.sp += 1;
+                        } else {
+                            frame.ip -= 3;
+                            return;
+                        }
+                    } else {
+                        frame.ip -= 3;
                         return;
                     }
                 },
