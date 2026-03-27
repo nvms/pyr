@@ -1,6 +1,7 @@
 ---
 title: Arrays
 order: 9
+description: Arrays are growable, indexed collections. Most operations return new arrays - the original stays untouched. push and pop are the exceptions, mutating in place.
 ---
 // Arrays are created with `[]` syntax.
 fn main() {
@@ -9,11 +10,29 @@ fn main() {
 // Access elements by index.
   println(nums[0])
   println(nums[4])
+  println(nums.len)
 
-// `len` returns the length. `push` appends.
+// `push` and `pop` mutate in place. The array must be `mut`.
   mut items = [1, 2, 3]
   push(items, 4)
-  println(len(items))
+  println(items)
+  last = pop(items)
+  println(last)
+  println(items)
+
+// `slice` returns a new array. The original is unchanged.
+  middle = nums.slice(1, 4)
+  println(middle)
+  println(nums)
+
+// `reverse` also returns a new array.
+  println(nums.reverse())
+  println(nums)
+
+// Search operations.
+  println(nums.contains(30))
+  println(nums.index_of(40))
+  println(nums.contains(99))
 
 // Iterate with `for..in`.
   for n in nums {
@@ -22,7 +41,7 @@ fn main() {
 
 // `for..in range` for numeric loops.
   mut sum = 0
-  for i in range(5) {
+  for i in range(nums.len) {
     sum += nums[i]
   }
   println(sum)
