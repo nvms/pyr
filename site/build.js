@@ -53,10 +53,10 @@ function parseFrontmatter(raw) {
 }
 
 function renderDocs(text) {
-  return text
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .split('\n')
-    .map(line => `<p>${line}</p>`)
+  const escaped = text.replace(/`([^`]+)`/g, '<code>$1</code>')
+  const paragraphs = escaped.split('\n\n')
+  return paragraphs
+    .map(p => `<p>${p.replace(/\n/g, ' ')}</p>`)
     .join('\n')
 }
 
@@ -100,6 +100,7 @@ async function main() {
     examples.push({
       slug,
       title: meta.title || slug.replace(/-/g, ' '),
+      description: meta.description || '',
       order: meta.order || '99',
       file,
       output,
@@ -150,8 +151,13 @@ async function main() {
       </div>`
     }
 
+    const descBlock = example.description
+      ? `<p class="description">${example.description}</p>`
+      : ''
+
     const html = template
       .replaceAll('{{title}}', example.title)
+      .replace('{{description}}', descBlock)
       .replace('{{nav}}', nav)
       .replace('{{rows}}', rows)
       .replace('{{output}}', outputBlock)
