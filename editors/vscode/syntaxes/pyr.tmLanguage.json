@@ -1,0 +1,260 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "pyr",
+  "scopeName": "source.pyr",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#extern-block" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#function-call" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.pyr",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "function definition",
+          "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.other.fn.pyr" },
+            "2": { "name": "entity.name.function.pyr" }
+          }
+        },
+        {
+          "comment": "anonymous function (fn keyword without name)",
+          "match": "\\b(fn)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.other.fn.pyr" }
+          }
+        },
+        {
+          "comment": "struct definition",
+          "match": "\\b(struct)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.struct.pyr" },
+            "2": { "name": "entity.name.type.struct.pyr" }
+          }
+        },
+        {
+          "comment": "enum definition",
+          "match": "\\b(enum)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.enum.pyr" },
+            "2": { "name": "entity.name.type.enum.pyr" }
+          }
+        },
+        {
+          "comment": "trait definition",
+          "match": "\\b(trait)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.trait.pyr" },
+            "2": { "name": "entity.name.type.trait.pyr" }
+          }
+        },
+        {
+          "comment": "import statement",
+          "match": "\\b(imp)\\s+([a-zA-Z_][a-zA-Z0-9_/]*)(?:\\s+(as)\\s+([a-zA-Z_][a-zA-Z0-9_]*))?",
+          "captures": {
+            "1": { "name": "keyword.control.import.pyr" },
+            "2": { "name": "entity.name.module.pyr" },
+            "3": { "name": "keyword.control.as.pyr" },
+            "4": { "name": "entity.name.module.alias.pyr" }
+          }
+        }
+      ]
+    },
+    "extern-block": {
+      "patterns": [
+        {
+          "comment": "extern block header",
+          "match": "\\b(extern)\\s+(\"[^\"]*\")",
+          "captures": {
+            "1": { "name": "keyword.other.extern.pyr" },
+            "2": { "name": "string.quoted.double.pyr" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.pyr",
+          "match": "\\b(if|else|match|for|in|while|return|spawn|arena|await_all)\\b"
+        },
+        {
+          "name": "keyword.other.pyr",
+          "match": "\\b(fn|struct|enum|trait|pub|imp|as|mut|extern)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "comment": "builtin types",
+          "name": "support.type.primitive.pyr",
+          "match": "\\b(int|float|str|bool|byte|usize|isize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|cint|cstr|ptr|void)\\b"
+        },
+        {
+          "comment": "capitalized type names (structs, enums, variants)",
+          "name": "entity.name.type.pyr",
+          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.pyr",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.nil.pyr",
+          "match": "\\b(nil)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "string with interpolation",
+          "name": "string.quoted.double.pyr",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "comment": "escape sequences",
+              "name": "constant.character.escape.pyr",
+              "match": "\\\\[ntr\\\\\"{}0]|\\\\x[0-9a-fA-F]{2}"
+            },
+            {
+              "comment": "interpolation",
+              "name": "meta.interpolation.pyr",
+              "begin": "(?<!\\\\)\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.pyr" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.pyr" }
+              },
+              "patterns": [
+                { "include": "#keywords" },
+                { "include": "#numbers" },
+                { "include": "#operators" },
+                { "include": "#function-call" },
+                { "include": "#types" },
+                { "include": "#constants" },
+                { "include": "#identifiers" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "hex literal",
+          "name": "constant.numeric.hex.pyr",
+          "match": "\\b0x[0-9a-fA-F][0-9a-fA-F_]*\\b"
+        },
+        {
+          "comment": "binary literal",
+          "name": "constant.numeric.binary.pyr",
+          "match": "\\b0b[01][01_]*\\b"
+        },
+        {
+          "comment": "octal literal",
+          "name": "constant.numeric.octal.pyr",
+          "match": "\\b0o[0-7][0-7_]*\\b"
+        },
+        {
+          "comment": "float literal",
+          "name": "constant.numeric.float.pyr",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+        },
+        {
+          "comment": "integer literal",
+          "name": "constant.numeric.integer.pyr",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.pyr",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.fat-arrow.pyr",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.pipe.pyr",
+          "match": "\\|>"
+        },
+        {
+          "name": "keyword.operator.null-coalescing.pyr",
+          "match": "\\?\\?"
+        },
+        {
+          "name": "keyword.operator.comparison.pyr",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "name": "keyword.operator.logical.pyr",
+          "match": "&&|\\|\\|"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.pyr",
+          "match": "\\+=|-=|\\*=|/="
+        },
+        {
+          "name": "keyword.operator.range.pyr",
+          "match": "\\.\\."
+        }
+      ]
+    },
+    "function-call": {
+      "patterns": [
+        {
+          "comment": "type constructor call (capitalized)",
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.type.pyr" }
+          }
+        },
+        {
+          "comment": "function call",
+          "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.pyr" }
+          }
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.pyr",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

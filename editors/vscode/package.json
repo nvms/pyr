@@ -1,0 +1,54 @@
+{
+  "name": "pyr",
+  "displayName": "pyr",
+  "description": "Language support for the pyr programming language",
+  "version": "0.1.0",
+  "publisher": "nvms",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nvms/pyr"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": ["Programming Languages"],
+  "activationEvents": [
+    "onLanguage:pyr"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "pyr",
+        "aliases": ["pyr", "Pyr"],
+        "extensions": [".pyr"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pyr",
+        "scopeName": "source.pyr",
+        "path": "./syntaxes/pyr.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "pyr",
+      "properties": {
+        "pyr.lsp.path": {
+          "type": "string",
+          "default": "pyr",
+          "description": "Path to the pyr binary (must support 'pyr lsp' subcommand)"
+        },
+        "pyr.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the pyr language server for diagnostics"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

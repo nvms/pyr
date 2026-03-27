@@ -1,0 +1,115 @@
+// SYNTAX TEST "source.pyr" "comprehensive syntax"
+
+// string interpolation
+name = "hello {world}"
+//     ^ string.quoted.double.pyr
+
+// escape sequences
+msg = "line1\nline2"
+//          ^^ constant.character.escape.pyr
+
+msg2 = "tab\there"
+//         ^^ constant.character.escape.pyr
+
+msg3 = "hex\x41end"
+//         ^^^^ constant.character.escape.pyr
+
+msg4 = "escaped brace"
+//     ^ string.quoted.double.pyr
+
+msg5 = "null\0end"
+//          ^^ constant.character.escape.pyr
+
+// type annotations
+fn process(x: int, y: float) -> str {
+//            ^^^ support.type.primitive.pyr
+//                    ^^^^^ support.type.primitive.pyr
+//                              ^^^ support.type.primitive.pyr
+  "done"
+}
+
+// ffi types
+fn call(s: cstr) -> cint {
+//         ^^^^ support.type.primitive.pyr
+//                  ^^^^ support.type.primitive.pyr
+  0
+}
+
+// capitalized types are entity.name.type
+c = Circle(5.0)
+//  ^^^^^^ entity.name.type.pyr
+
+p = Point
+//  ^^^^^ entity.name.type.pyr
+
+// mut keyword
+mut count = 0
+// <- keyword.other.pyr
+
+// pub keyword
+pub fn serve() {
+// <- keyword.other.pyr
+
+}
+
+// pattern matching with arrows
+result = match shape {
+//       ^^^^^ keyword.control.pyr
+  Circle(r) -> r * r
+//          ^^ keyword.operator.arrow.pyr
+  _ -> 0.0
+}
+
+// null coalescing
+val = x ?? y
+//      ^^ keyword.operator.null-coalescing.pyr
+
+// logical operators
+ok = a && b || c
+//     ^^ keyword.operator.logical.pyr
+//          ^^ keyword.operator.logical.pyr
+
+// compound assignment
+x += 1
+//^^ keyword.operator.assignment.compound.pyr
+
+// range operator
+s = a..b
+//   ^^ keyword.operator.range.pyr
+
+// while loop
+while x > 0 {
+// <-- keyword.control.pyr
+  x = x - 1
+}
+
+// return
+fn early() {
+  return 42
+//^^^^^^ keyword.control.pyr
+}
+
+// for-in
+for item in items {
+// <- keyword.control.pyr
+//       ^^ keyword.control.pyr
+}
+
+// spawn and arena
+spawn { work() }
+// <-- keyword.control.pyr
+
+arena { alloc() }
+// <-- keyword.control.pyr
+
+// await_all
+results = await_all(t1, t2)
+//        ^^^^^^^^^ keyword.control.pyr
+
+// octal literal
+perms = 0o755
+//      ^^^^^ constant.numeric.octal.pyr
+
+// underscores in numbers
+big = 1_000_000
+//    ^^^^^^^^^ constant.numeric.integer.pyr

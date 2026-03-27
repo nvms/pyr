@@ -1,0 +1,57 @@
+// SYNTAX TEST "source.pyr" "basic syntax"
+
+// line comment
+// ^^^^^^^^^^^^^ comment.line.double-slash.pyr
+
+fn add(a: int, b: int) -> int {
+// <- keyword.other.fn.pyr
+
+struct User {
+// <--- keyword.other.struct.pyr
+
+enum Shape {
+// <- keyword.other.enum.pyr
+
+imp std/io { println }
+// <- keyword.control.import.pyr
+
+imp std/net as net
+// <- keyword.control.import.pyr
+
+x = 42
+//  ^^ constant.numeric.integer.pyr
+
+x = 0xFF
+//  ^^^^ constant.numeric.hex.pyr
+
+y = 0b1010
+//  ^^^^^^ constant.numeric.binary.pyr
+
+z = 3.14
+//  ^^^^ constant.numeric.float.pyr
+
+b = true
+//  ^^^^ constant.language.boolean.pyr
+
+n = nil
+//  ^^^ constant.language.nil.pyr
+
+extern "c" {
+// <--- keyword.other.extern.pyr
+
+val = find(42) ?? "default"
+//             ^^ keyword.operator.null-coalescing.pyr
+
+result = match s {
+//       ^^^^^ keyword.control.pyr
+
+for i in range(10) {
+//    ^^ keyword.control.pyr
+}
+
+spawn { worker() }
+// <-- keyword.control.pyr
+
+arena {
+// <-- keyword.control.pyr
+}

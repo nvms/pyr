@@ -1,0 +1,25 @@
+// SYNTAX TEST "source.pyr" "escape sequences"
+
+s = "\n"
+//   ^^ constant.character.escape.pyr
+
+s = "\t"
+//   ^^ constant.character.escape.pyr
+
+s = "\r"
+//   ^^ constant.character.escape.pyr
+
+s = "\\"
+//   ^^ constant.character.escape.pyr
+
+s = "\""
+//   ^^ constant.character.escape.pyr
+
+s = "\0"
+//   ^^ constant.character.escape.pyr
+
+s = "\x41"
+//   ^^^^ constant.character.escape.pyr
+
+s = "\{not interpolation\}"
+//   ^^ constant.character.escape.pyr

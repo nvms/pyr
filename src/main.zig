@@ -6,6 +6,7 @@ const compiler = @import("compiler.zig");
 const vm_mod = @import("vm.zig");
 const module = @import("module.zig");
 const pkg = @import("pkg.zig");
+const lsp = @import("lsp.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -55,6 +56,10 @@ pub fn main() !void {
         pkg.install(allocator, manifest) catch {
             std.process.exit(1);
         };
+    } else if (std.mem.eql(u8, command, "lsp")) {
+        var server = lsp.Server.init(allocator);
+        defer server.deinit();
+        try server.run();
     } else if (std.mem.eql(u8, command, "add")) {
         if (args.len < 3) {
             std.debug.print("error: pyr add requires a package url\n", .{});
@@ -232,6 +237,7 @@ fn printUsage() void {
         \\  init [name]             create pyr.pkg
         \\  install                 fetch all dependencies
         \\  add <url> [version]     add a dependency
+        \\  lsp                     start LSP server
         \\  version                 print version
         \\
     , .{});
@@ -246,4 +252,5 @@ test {
     _ = @import("module.zig");
     _ = @import("stdlib.zig");
     _ = @import("pkg.zig");
+    _ = @import("lsp.zig");
 }
