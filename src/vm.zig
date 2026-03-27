@@ -4238,3 +4238,35 @@ test "vm: error propagation into string error context" {
         \\}
     );
 }
+
+test "vm: defer basic" {
+    try testRun("fn main() {\n  defer println(99)\n  println(1)\n}");
+}
+
+test "vm: defer LIFO order" {
+    try testRun("fn main() {\n  defer println(1)\n  defer println(2)\n  defer println(3)\n  println(0)\n}");
+}
+
+test "vm: defer with early return" {
+    try testRun("fn f(x: int) -> int {\n  defer println(\"cleanup\")\n  if x > 10 {\n    return x * 2\n  }\n  x + 1\n}\nfn main() {\n  println(f(5))\n  println(f(20))\n}");
+}
+
+test "vm: defer in loop" {
+    try testRun("fn main() {\n  for i in range(3) {\n    defer println(\"d\")\n    println(i)\n  }\n}");
+}
+
+test "vm: defer block" {
+    try testRun("fn main() {\n  defer {\n    println(1)\n    println(2)\n  }\n  println(0)\n}");
+}
+
+test "vm: defer with fail" {
+    try testRun("fn f() -> int! {\n  defer println(\"cleanup\")\n  fail \"err\"\n}\nfn main() {\n  f() or println(\"caught\")\n}");
+}
+
+test "vm: defer with ? propagation" {
+    try testRun("fn f(x: int?) -> int! {\n  defer println(\"cleanup\")\n  val = x?\n  val + 1\n}\nfn main() {\n  f(nil) or println(\"caught\")\n}");
+}
+
+test "vm: defer with trailing expression" {
+    try testRun("fn f() -> int {\n  defer println(\"cleanup\")\n  42\n}\nfn main() {\n  assert_eq(f(), 42)\n  println(\"ok\")\n}");
+}

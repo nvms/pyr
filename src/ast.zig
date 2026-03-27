@@ -113,6 +113,7 @@ pub const Stmt = struct {
         for_loop: ForLoop,
         while_loop: WhileLoop,
         arena_block: *const Block,
+        defer_stmt: Defer,
         expr_stmt: *const Expr,
     };
 };
@@ -134,6 +135,15 @@ pub const Return = struct {
 
 pub const Fail = struct {
     value: *const Expr,
+};
+
+pub const Defer = struct {
+    body: Body,
+
+    pub const Body = union(enum) {
+        expr: *const Expr,
+        block: *const Block,
+    };
 };
 
 pub const ForLoop = struct {

@@ -450,6 +450,23 @@ pub const Parser = struct {
             return self.parseWhileStmt(start);
         }
 
+        if (self.peek() == .kw_defer) {
+            _ = self.expect(.kw_defer) orelse return null;
+            self.skipNewlines();
+            if (self.peek() == .lbrace) {
+                const block = self.parseBlock() orelse return null;
+                return .{
+                    .span = self.spanFrom(start),
+                    .kind = .{ .defer_stmt = .{ .body = .{ .block = block } } },
+                };
+            }
+            const expr = self.parseExpr() orelse return null;
+            return .{
+                .span = self.spanFrom(start),
+                .kind = .{ .defer_stmt = .{ .body = .{ .expr = expr } } },
+            };
+        }
+
         if (self.peek() == .kw_arena) {
             _ = self.expect(.kw_arena) orelse return null;
             self.skipNewlines();
@@ -1920,6 +1937,23 @@ test "parse fail statement" {
     const block = result.items[0].kind.fn_decl.body.block;
     try std.testing.expectEqual(@as(usize, 1), block.stmts.len);
     try std.testing.expectEqual(ast.Stmt.Kind.fail, std.meta.activeTag(block.stmts[0].kind));
+}
+
+test "parse defer expression" {
+    const result = testParse("fn f() {\n  defer close(x)\n}");
+    try expectNoErrors(result);
+    const block = result.items[0].kind.fn_decl.body.block;
+    try std.testing.expectEqual(@as(usize, 1), block.stmts.len);
+    try std.testing.expectEqual(ast.Stmt.Kind.defer_stmt, std.meta.activeTag(block.stmts[0].kind));
+}
+
+test "parse defer block" {
+    const result = testParse("fn f() {\n  defer {\n    a()\n    b()\n  }\n}");
+    try expectNoErrors(result);
+    const block = result.items[0].kind.fn_decl.body.block;
+    try std.testing.expectEqual(@as(usize, 1), block.stmts.len);
+    const d = block.stmts[0].kind.defer_stmt;
+    try std.testing.expectEqual(ast.Defer.Body.block, std.meta.activeTag(d.body));
 }
 
 test "parse unwrap crash postfix" {

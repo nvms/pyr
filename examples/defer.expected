@@ -1,0 +1,32 @@
+basic: start
+basic: end
+basic: deferred
+---
+order: start
+order: end
+order: second deferred
+order: first deferred
+---
+early: cleanup
+early: 6
+early: cleanup
+early: 40
+---
+loop: iteration
+loop: deferred
+loop: iteration
+loop: deferred
+loop: iteration
+loop: deferred
+---
+block: body
+block: first
+block: second
+---
+fail: cleanup
+fail: caught error
+---
+prop: cleanup
+---
+prop: cleanup
+prop: caught error

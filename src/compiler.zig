@@ -53,6 +53,13 @@ pub const Compiler = struct {
     ffi_funcs: std.StringHashMapUnmanaged(u16),
     source: []const u8,
     current_line: u32,
+    deferred: [64]DeferEntry = undefined,
+    defer_count: u8 = 0,
+
+    pub const DeferEntry = struct {
+        body: ast.Defer.Body,
+        scope_depth: u32,
+    };
 
     pub const Local = struct {
         name: []const u8,
@@ -491,6 +498,7 @@ pub const Compiler = struct {
 
         if (block.trailing) |expr| {
             self.compileExpr(expr);
+            self.emitAllDefers();
             self.emitOp(.return_);
         }
 
@@ -542,11 +550,13 @@ pub const Compiler = struct {
                 } else {
                     self.emitOp(.nil);
                 }
+                self.emitAllDefers();
                 self.emitOp(.return_);
             },
             .fail => |f| {
                 self.compileExpr(f.value);
                 self.emitOp(.make_error);
+                self.emitAllDefers();
                 self.emitOp(.return_);
             },
             .for_loop => |fl| self.compileForLoop(fl),
@@ -570,6 +580,14 @@ pub const Compiler = struct {
                 self.emitOp(.push_arena);
                 self.compileBlock(blk);
                 self.emitOp(.pop_arena);
+            },
+            .defer_stmt => |d| {
+                if (self.defer_count >= 64) return;
+                self.deferred[self.defer_count] = .{
+                    .body = d.body,
+                    .scope_depth = self.scope_depth,
+                };
+                self.defer_count += 1;
             },
             .expr_stmt => |expr| {
                 self.compileExpr(expr);
@@ -848,6 +866,7 @@ pub const Compiler = struct {
                 const skip = self.emitJump(.jump);
                 self.patchJump(nil_jump);
                 self.patchJump(err_jump);
+                self.emitAllDefers();
                 self.emitOp(.return_);
                 self.patchJump(skip);
             },
@@ -1870,7 +1889,49 @@ pub const Compiler = struct {
         self.scope_depth += 1;
     }
 
+    fn emitDeferBody(self: *Compiler, body: ast.Defer.Body) void {
+        switch (body) {
+            .expr => |expr| {
+                self.compileExpr(expr);
+                self.emitOp(.pop);
+            },
+            .block => |blk| {
+                for (blk.stmts) |s| self.compileStmt(s);
+                if (blk.trailing) |expr| {
+                    self.compileExpr(expr);
+                    self.emitOp(.pop);
+                }
+            },
+        }
+    }
+
+    fn emitScopeDefers(self: *Compiler) void {
+        var i: u8 = self.defer_count;
+        while (i > 0) {
+            i -= 1;
+            if (self.deferred[i].scope_depth == self.scope_depth) {
+                self.emitDeferBody(self.deferred[i].body);
+            } else break;
+        }
+    }
+
+    fn emitAllDefers(self: *Compiler) void {
+        var i: u8 = self.defer_count;
+        while (i > 0) {
+            i -= 1;
+            self.emitDeferBody(self.deferred[i].body);
+        }
+    }
+
+    fn popScopeDefers(self: *Compiler) void {
+        while (self.defer_count > 0 and self.deferred[self.defer_count - 1].scope_depth == self.scope_depth) {
+            self.defer_count -= 1;
+        }
+    }
+
     fn endScope(self: *Compiler) void {
+        self.emitScopeDefers();
+        self.popScopeDefers();
         self.scope_depth -= 1;
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
             self.emitOp(.pop);
@@ -1879,6 +1940,8 @@ pub const Compiler = struct {
     }
 
     fn endScopeKeepTop(self: *Compiler) void {
+        self.emitScopeDefers();
+        self.popScopeDefers();
         self.scope_depth -= 1;
         var count: u8 = 0;
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {

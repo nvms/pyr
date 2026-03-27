@@ -420,6 +420,12 @@ pub const Sema = struct {
             .arena_block => |blk| {
                 self.analyzeBlock(blk);
             },
+            .defer_stmt => |d| {
+                switch (d.body) {
+                    .expr => |expr| self.analyzeExpr(expr),
+                    .block => |blk| self.analyzeBlock(blk),
+                }
+            },
             .expr_stmt => |expr| self.analyzeExpr(expr),
         }
     }
