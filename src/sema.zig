@@ -519,6 +519,7 @@ pub const Sema = struct {
             .array_literal => |elems| {
                 for (elems) |elem| self.analyzeExpr(elem);
             },
+            .try_unwrap => |inner| self.analyzeExpr(inner),
         }
     }
 

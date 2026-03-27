@@ -6,6 +6,11 @@ fn find_user(id: int) {
   }
 }
 
+fn greet(id: int) {
+  name = find_user(id)?
+  "hello " + name
+}
+
 fn main() {
   user = find_user(1) ?? "unknown"
   assert_eq(user, "alice")
@@ -29,6 +34,9 @@ fn main() {
   assert_eq(true || false, true)
   assert_eq(nil || false, false)
   assert_eq(nil || "yes", "yes")
+
+  assert_eq(greet(1), "hello alice")
+  assert_eq(greet(99), nil)
 
   println("all option tests passed")
 }

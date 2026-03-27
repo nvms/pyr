@@ -836,6 +836,14 @@ pub const Compiler = struct {
                 self.emitOp(.array_create);
                 self.emitByte(@intCast(elems.len));
             },
+            .try_unwrap => |inner| {
+                self.compileExpr(inner);
+                const not_nil = self.emitJump(.jump_if_nil);
+                const skip = self.emitJump(.jump);
+                self.patchJump(not_nil);
+                self.emitOp(.return_);
+                self.patchJump(skip);
+            },
         }
     }
 

@@ -849,6 +849,13 @@ pub const Parser = struct {
                     .kind = .{ .index = .{ .target = lhs, .idx = idx } },
                 });
             },
+            .question => {
+                _ = self.advance();
+                return self.create(ast.Expr, .{
+                    .span = self.spanFrom(start),
+                    .kind = .{ .try_unwrap = lhs },
+                });
+            },
             else => return lhs,
         }
     }
@@ -1239,7 +1246,7 @@ pub const Parser = struct {
     }
 
     fn isPostfixToken(tag: Token.Tag) bool {
-        return tag == .dot or tag == .lparen or tag == .lbracket;
+        return tag == .dot or tag == .lparen or tag == .lbracket or tag == .question;
     }
 
     // ---------------------------------------------------------------
