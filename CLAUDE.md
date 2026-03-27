@@ -283,7 +283,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 13. ~~error values for I/O~~ - IoError built-in enum (Eof, Closed, Error(str), Timeout). I/O returns error enums instead of nil/false, distinguishes closed vs error vs eof
 14. ~~read/accept timeouts~~ - net.timeout(target, ms) with per-waiter deadlines in scheduler. prevents hung clients from stalling scheduler
 15. UDP support - datagram sockets round out the networking story
-16. package manager / module resolution
+16. std/tls - TLS support via std/tls compiler-intrinsic module. zig-native TLS 1.3 (std.crypto.tls) for client-side, system TLS lib (Security.framework on macOS, OpenSSL on linux) for server-side. API: tls.context(cert, key) for server, tls.upgrade(conn, ctx) wraps conn with transparent read/write. must integrate with scheduler for non-blocking handshake. multi-session feature
+17. package manager / module resolution
 
 ## implementation notes
 
