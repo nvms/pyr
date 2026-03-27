@@ -276,6 +276,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
+- anonymous struct literals: `.{ field: val }` inferred from context (zig-style). when the compiler knows the expected type from a function param, return type, or annotated binding, allow omitting the struct name. pure syntax sugar - desugars to `TypeName { field: val }` during compilation
 
 **next:** performance (function inlining for small pure functions, match dispatch optimization), dogfooding, map/filter/reduce (need VM callback support)
 
