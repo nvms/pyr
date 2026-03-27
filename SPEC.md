@@ -348,6 +348,41 @@ arena {
 
 the server stdlib wraps each request handler in an implicit arena block.
 
+## defer
+
+scoped cleanup, like zig. runs when its enclosing scope exits - whether by reaching the end, `return`, `fail`, or `?` propagation. multiple defers in the same scope run in reverse order (LIFO):
+```
+fn process() {
+  conn = net.connect("localhost", 5432)
+  defer net.close(conn)
+
+  arena {
+    defer flush_logs()
+    // arena freed AND logs flushed on exit
+  }
+
+  // conn closed when process() returns
+}
+```
+
+two forms - single expression or block:
+```
+defer net.close(conn)
+defer {
+  flush()
+  log("done")
+}
+```
+
+scoped, not function-level (unlike go). defer in a loop runs at each iteration end:
+```
+for file in files {
+  f = fs.open(file)
+  defer fs.close(f)
+  // f closed at end of each iteration
+}
+```
+
 ## pointers (systems work)
 
 high-level code never sees pointers. for systems/FFI work:
