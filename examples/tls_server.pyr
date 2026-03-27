@@ -1,0 +1,23 @@
+imp std/net as net
+imp std/tls as tls
+
+fn main() {
+  ctx = tls.context("test_tls/cert.pem", "test_tls/key.pem")
+  assert(ctx != nil)
+  println("listening on 19543")
+
+  server = net.listen("127.0.0.1", 19543)
+  net.timeout(server, 5000)
+
+  conn = net.accept(server)
+  secure = tls.upgrade(conn, ctx)
+  println("handshake done")
+
+  data = secure.read()
+  println("received: " + data)
+  secure.write("echo: " + data)
+
+  net.close(secure)
+  net.close(server)
+  println("done")
+}

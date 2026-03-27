@@ -117,6 +117,8 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
         .conn => writeBytes(fd, "<conn>"),
         .dgram => writeBytes(fd, "<dgram>"),
         .tls_conn => writeBytes(fd, "<tls_conn>"),
+        .ssl_ctx => writeBytes(fd, "<ssl_ctx>"),
+        .ssl_conn => writeBytes(fd, "<ssl_conn>"),
         .ptr => {
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "<ptr 0x{x}>", .{v.data}) catch return;

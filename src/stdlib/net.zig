@@ -210,6 +210,13 @@ fn netClose(_: std.mem.Allocator, args: []const Value) Value {
         obj.client.end() catch {};
         obj.client.writer.flush() catch {};
         std.posix.close(obj.fd);
+    } else if (args[0].tag == .ssl_conn) {
+        const ssl_mod = @import("ssl.zig");
+        if (ssl_mod.get()) |ssl| {
+            ssl.shutdown(args[0].asSslConn().ssl);
+            ssl.freeSsl(args[0].asSslConn().ssl);
+        }
+        std.posix.close(args[0].asSslConn().fd);
     }
     return Value.initNil();
 }
@@ -224,6 +231,8 @@ fn netTimeout(_: std.mem.Allocator, args: []const Value) Value {
         args[0].asDgram().timeout_ms = ms;
     } else if (args[0].tag == .tls_conn) {
         args[0].asTlsConn().timeout_ms = ms;
+    } else if (args[0].tag == .ssl_conn) {
+        args[0].asSslConn().timeout_ms = ms;
     }
     return Value.initNil();
 }

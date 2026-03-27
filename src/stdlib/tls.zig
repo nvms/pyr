@@ -3,7 +3,10 @@ const Value = @import("../value.zig").Value;
 const ObjString = @import("../value.zig").ObjString;
 const ObjConn = @import("../value.zig").ObjConn;
 const ObjTlsConn = @import("../value.zig").ObjTlsConn;
+const ObjSslCtx = @import("../value.zig").ObjSslCtx;
+const ObjSslConn = @import("../value.zig").ObjSslConn;
 const root = @import("../stdlib.zig");
+const ssl_mod = @import("ssl.zig");
 
 const tls = std.crypto.tls;
 const Certificate = std.crypto.Certificate;
@@ -23,11 +26,54 @@ fn getCaBundle(alloc: std.mem.Allocator) ?Certificate.Bundle {
 
 pub const fns = [_]root.NativeDef{
     .{ .name = "upgrade", .arity = 2, .func = &tlsUpgrade },
+    .{ .name = "context", .arity = 2, .func = &tlsContext },
 };
+
+fn tlsContext(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag != .string or args[1].tag != .string) {
+        return root.makeIoError(alloc, "context requires cert and key paths");
+    }
+
+    const ssl = ssl_mod.get() orelse return root.makeIoError(alloc, "OpenSSL not available");
+
+    const cert = args[0].asString().chars;
+    const key = args[1].asString().chars;
+
+    const cert_z = alloc.dupeZ(u8, cert) catch return root.makeIoError(alloc, "out of memory");
+    const key_z = alloc.dupeZ(u8, key) catch return root.makeIoError(alloc, "out of memory");
+
+    const ctx = ssl.createContext(cert_z, key_z) orelse return root.makeIoError(alloc, "failed to load certificate or key");
+
+    const obj = alloc.create(ObjSslCtx) catch return root.makeIoError(alloc, "out of memory");
+    obj.* = .{ .ctx = ctx };
+    return obj.toValue();
+}
 
 fn tlsUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
     if (args[0].tag != .conn) return root.makeIoError(alloc, "upgrade requires conn");
 
+    if (args[1].tag == .ssl_ctx) return sslServerUpgrade(alloc, args);
+
+    return tlsClientUpgrade(alloc, args);
+}
+
+fn sslServerUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
+    const ssl = ssl_mod.get() orelse return root.makeIoError(alloc, "OpenSSL not available");
+    const conn = args[0].asConn();
+    const ctx = args[1].asSslCtx();
+
+    const ssl_ptr = ssl.accept(ctx.ctx, conn.fd) orelse return root.makeIoError(alloc, "ssl handshake failed");
+
+    const obj = alloc.create(ObjSslConn) catch return root.makeIoError(alloc, "out of memory");
+    obj.* = .{
+        .fd = conn.fd,
+        .ssl = ssl_ptr,
+        .timeout_ms = conn.timeout_ms,
+    };
+    return obj.toValue();
+}
+
+fn tlsClientUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
     const conn = args[0].asConn();
     const hostname: ?[]const u8 = if (args[1].tag == .string) args[1].asString().chars else null;
 

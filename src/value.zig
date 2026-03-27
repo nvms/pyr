@@ -22,6 +22,8 @@ pub const Value = struct {
         conn,
         dgram,
         tls_conn,
+        ssl_ctx,
+        ssl_conn,
         ptr,
     };
 
@@ -91,6 +93,14 @@ pub const Value = struct {
 
     pub fn initTlsConn(ptr: *ObjTlsConn) Value {
         return .{ .tag = .tls_conn, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initSslCtx(ptr: *ObjSslCtx) Value {
+        return .{ .tag = .ssl_ctx, .data = @intFromPtr(ptr) };
+    }
+
+    pub fn initSslConn(ptr: *ObjSslConn) Value {
+        return .{ .tag = .ssl_conn, .data = @intFromPtr(ptr) };
     }
 
     pub fn initPtr(p: usize) Value {
@@ -165,13 +175,21 @@ pub const Value = struct {
         return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
     }
 
+    pub fn asSslCtx(self: Value) *ObjSslCtx {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
+    pub fn asSslConn(self: Value) *ObjSslConn {
+        return @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(self.data))));
+    }
+
     pub fn isTruthy(self: Value) bool {
         return switch (self.tag) {
             .nil => false,
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram, .tls_conn => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn => true,
             .ptr => self.data != 0,
         };
     }
@@ -195,7 +213,7 @@ pub const Value = struct {
                 }
                 return true;
             },
-            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ptr => a.data == b.data,
+            .function, .struct_, .native_fn, .closure, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn, .ptr => a.data == b.data,
             .array => {
                 const aa = a.asArray();
                 const ba = b.asArray();
@@ -247,6 +265,8 @@ pub const Value = struct {
             .conn => std.debug.print("<conn>", .{}),
             .dgram => std.debug.print("<dgram>", .{}),
             .tls_conn => std.debug.print("<tls_conn>", .{}),
+            .ssl_ctx => std.debug.print("<ssl_ctx>", .{}),
+            .ssl_conn => std.debug.print("<ssl_conn>", .{}),
             .ptr => std.debug.print("<ptr 0x{x}>", .{self.data}),
             .array => {
                 const arr = self.asArray();
@@ -626,6 +646,24 @@ pub const ObjTlsConn = struct {
 
     pub fn toValue(self: *ObjTlsConn) Value {
         return Value.initTlsConn(self);
+    }
+};
+
+pub const ObjSslCtx = struct {
+    ctx: *anyopaque,
+
+    pub fn toValue(self: *ObjSslCtx) Value {
+        return Value.initSslCtx(self);
+    }
+};
+
+pub const ObjSslConn = struct {
+    fd: std.posix.fd_t,
+    ssl: *anyopaque,
+    timeout_ms: i32,
+
+    pub fn toValue(self: *ObjSslConn) Value {
+        return Value.initSslConn(self);
     }
 };
 

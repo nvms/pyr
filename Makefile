@@ -11,7 +11,7 @@ examples: build ## Run and validate example programs
 	@failed=0; total=0; \
 	for f in examples/*.pyr; do \
 		name=$$(basename $$f .pyr); \
-		if [ "$$name" = "mathlib" ]; then continue; fi; \
+		if [ "$$name" = "mathlib" ] || [ "$$name" = "tls_server" ]; then continue; fi; \
 		total=$$((total + 1)); \
 		expected="examples/$$name.expected"; \
 		if [ -f "$$expected" ]; then \

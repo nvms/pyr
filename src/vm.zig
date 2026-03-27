@@ -1842,6 +1842,10 @@ pub const VM = struct {
             self.execTlsRead(target.asTlsConn());
             return;
         }
+        if (target.tag == .ssl_conn) {
+            self.execSslRead(target.asSslConn());
+            return;
+        }
         if (target.tag != .conn) {
             self.runtimeError("read on non-conn value", .{});
             return error.RuntimeError;
@@ -1917,6 +1921,10 @@ pub const VM = struct {
         const target = self.pop();
         if (target.tag == .tls_conn) {
             self.execTlsWrite(target.asTlsConn(), data_val);
+            return;
+        }
+        if (target.tag == .ssl_conn) {
+            self.execSslWrite(target.asSslConn(), data_val);
             return;
         }
         if (target.tag != .conn or data_val.tag != .string) {
@@ -2348,6 +2356,65 @@ pub const VM = struct {
             self.push(self.ioError("tls flush failed"));
             return;
         };
+        self.push(Value.initBool(true));
+    }
+
+    fn execSslRead(self: *VM, obj: *@import("value.zig").ObjSslConn) void {
+        const ssl_mod = @import("stdlib/ssl.zig");
+        const ssl = ssl_mod.get() orelse {
+            self.push(self.ioError("OpenSSL not available"));
+            return;
+        };
+        const alloc = self.currentAlloc();
+
+        const tmo: i32 = if (obj.timeout_ms >= 0) obj.timeout_ms else 5000;
+        var pollfds = [1]std.posix.pollfd{.{ .fd = obj.fd, .events = std.posix.POLL.IN, .revents = 0 }};
+        const poll_n = std.posix.poll(&pollfds, tmo) catch {
+            self.push(self.ioError("poll failed"));
+            return;
+        };
+        if (poll_n == 0) {
+            if (obj.timeout_ms >= 0) {
+                self.push(self.ioTimeout());
+            } else {
+                self.push(self.ioEof());
+            }
+            return;
+        }
+
+        var buf: [16384]u8 = undefined;
+        const n = ssl.read(obj.ssl, &buf);
+        if (n <= 0) {
+            self.push(self.ioEof());
+            return;
+        }
+        const owned = alloc.dupe(u8, buf[0..@intCast(n)]) catch {
+            self.push(self.ioError("out of memory"));
+            return;
+        };
+        self.push(ObjString.create(alloc, owned).toValue());
+    }
+
+    fn execSslWrite(self: *VM, obj: *@import("value.zig").ObjSslConn, data_val: Value) void {
+        const ssl_mod = @import("stdlib/ssl.zig");
+        const ssl = ssl_mod.get() orelse {
+            self.push(self.ioError("OpenSSL not available"));
+            return;
+        };
+        if (data_val.tag != .string) {
+            self.push(self.ioError("write requires string"));
+            return;
+        }
+        const data = data_val.asString().chars;
+        var written: usize = 0;
+        while (written < data.len) {
+            const n = ssl.write(obj.ssl, data[written..]);
+            if (n <= 0) {
+                self.push(self.ioError("ssl write failed"));
+                return;
+            }
+            written += @intCast(n);
+        }
         self.push(Value.initBool(true));
     }
 };
