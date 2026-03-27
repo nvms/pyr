@@ -1,6 +1,7 @@
 ---
 title: Closures
 order: 4
+description: Closures are anonymous functions that capture variables from their surrounding scope. Pyr closures use copy-capture - they snapshot values at creation time, so mutations inside a closure never affect the outer scope.
 ---
 // Closures are anonymous functions created with `fn`.
 // They capture variables from their enclosing scope.
@@ -11,11 +12,24 @@ fn main() {
   println(triple(5))
   println(triple(10))
 
-// Closures can be passed to other functions.
-  apply(7, fn(x) x + 1)
+// Closures can be passed to functions. Use `fn(T) -> T`
+// to type the parameter.
+  println(apply(7, fn(x) x + 1))
+  println(apply(7, fn(x) x * x))
+
+// Type aliases make repeated function types readable.
+  do_both(5, fn(x) x + 10, fn(x) x * 2)
 }
 
-// A function that takes a closure as an argument.
-fn apply(val: int, f) {
-  println(f(val))
+// A function that takes a typed closure parameter.
+fn apply(val: int, f: fn(int) -> int) -> int {
+  f(val)
+}
+
+// With a type alias for cleaner signatures.
+type IntOp = fn(int) -> int
+
+fn do_both(val: int, a: IntOp, b: IntOp) {
+  println(a(val))
+  println(b(val))
 }
