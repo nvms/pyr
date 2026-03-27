@@ -5,6 +5,7 @@ const sema = @import("sema.zig");
 const compiler = @import("compiler.zig");
 const vm_mod = @import("vm.zig");
 const module = @import("module.zig");
+const pkg = @import("pkg.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -35,11 +36,50 @@ pub fn main() !void {
         try buildFile(allocator, args[2]);
     } else if (std.mem.eql(u8, command, "version")) {
         std.debug.print("pyr 0.1.0\n", .{});
+    } else if (std.mem.eql(u8, command, "init")) {
+        const name = if (args.len >= 3) args[2] else inferProjectName();
+        pkg.initManifest(allocator, name) catch {
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "install")) {
+        const source = std.fs.cwd().readFileAlloc(allocator, "pyr.pkg", 1024 * 1024) catch {
+            std.debug.print("error: no pyr.pkg found\n", .{});
+            std.process.exit(1);
+        };
+        defer allocator.free(source);
+        const manifest = pkg.parseManifest(allocator, source) orelse {
+            std.debug.print("error: could not parse pyr.pkg\n", .{});
+            std.process.exit(1);
+        };
+        defer allocator.free(manifest.deps);
+        pkg.install(allocator, manifest) catch {
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "add")) {
+        if (args.len < 3) {
+            std.debug.print("error: pyr add requires a package url\n", .{});
+            std.debug.print("usage: pyr add <url> [version]\n", .{});
+            std.process.exit(1);
+        }
+        const url = args[2];
+        const version = if (args.len >= 4) args[3] else "latest";
+        pkg.addDependency(allocator, url, version) catch {
+            std.process.exit(1);
+        };
     } else {
         std.debug.print("error: unknown command '{s}'\n", .{command});
         printUsage();
         std.process.exit(1);
     }
+}
+
+fn inferProjectName() []const u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd = std.fs.cwd().realpath(".", &buf) catch return "myproject";
+    if (std.mem.lastIndexOfScalar(u8, cwd, '/')) |idx| {
+        return cwd[idx + 1 ..];
+    }
+    return "myproject";
 }
 
 fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@import("value.zig").ObjFunction, ffi_descs: []@import("ffi.zig").FfiDesc, arena: std.heap.ArenaAllocator } {
@@ -65,6 +105,11 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
     const dir = module.dirOf(path, arena.allocator());
     var loader = module.ModuleLoader.init(arena.allocator(), dir);
 
+    var pkg_map = loadPackageMap(arena.allocator(), dir);
+    if (pkg_map) |*pm| {
+        loader.package_map = pm;
+    }
+
     const analysis = sema.Sema.analyzeModule(arena.allocator(), result, &loader, dir);
     if (analysis.errors.len > 0) {
         for (analysis.errors) |err| {
@@ -78,6 +123,13 @@ fn compile(allocator: std.mem.Allocator, path: []const u8) !struct { func: *@imp
     };
 
     return .{ .func = cr.func, .ffi_descs = cr.ffi_descs, .arena = arena };
+}
+
+fn loadPackageMap(alloc: std.mem.Allocator, dir: []const u8) ?std.StringHashMapUnmanaged([]const u8) {
+    const found = pkg.findManifest(alloc, dir) orelse return null;
+    if (found.manifest.deps.len == 0) return null;
+    const cache_root = pkg.cacheDir(alloc) orelse return null;
+    return pkg.buildPackageMap(alloc, found.manifest, cache_root);
 }
 
 fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
@@ -175,9 +227,12 @@ fn printUsage() void {
         \\usage: pyr <command> [args]
         \\
         \\commands:
-        \\  run <file>      run a .pyr file
-        \\  build <file>    check a .pyr file
-        \\  version         print version
+        \\  run <file>              run a .pyr file
+        \\  build <file>            check a .pyr file
+        \\  init [name]             create pyr.pkg
+        \\  install                 fetch all dependencies
+        \\  add <url> [version]     add a dependency
+        \\  version                 print version
         \\
     , .{});
 }
@@ -190,4 +245,5 @@ test {
     _ = @import("vm.zig");
     _ = @import("module.zig");
     _ = @import("stdlib.zig");
+    _ = @import("pkg.zig");
 }

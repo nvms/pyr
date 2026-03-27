@@ -40,7 +40,7 @@ pyr is a bytecode VM language. source compiles to bytecode, bytecode runs on a s
 
 ```
 src/
-  main.zig         - CLI entry point (pyr build, pyr run, pyr version)
+  main.zig         - CLI entry point (pyr run, pyr build, pyr init, pyr install, pyr add, pyr version)
   lexer.zig        - tokenizer
   token.zig        - token types
   parser.zig       - recursive descent parser -> AST
@@ -50,6 +50,8 @@ src/
   chunk.zig        - bytecode format (opcodes + constant pool)
   compiler.zig     - AST -> bytecode compiler
   vm.zig           - bytecode interpreter (switch dispatch)
+  module.zig       - module loading + package-aware resolution
+  pkg.zig          - package manager (manifest parser, lock file, git ops, cache)
 ```
 
 ### CLI
@@ -256,7 +258,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - `nil` keyword (not `none`) for null values. Value tag is `.nil`
 - option types and error handling: `?T` syntax parsed in type expressions. `??` null coalescing operator (jump_if_nil opcode - checks nil tag specifically, not truthiness, so `false ?? x` correctly returns false). `expr?` suffix operator for early return on nil (try_unwrap AST node, compiles to jump_if_nil + return_ pattern). `&&` and `||` short-circuit logical operators
 - 81 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, jump_if_nil, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, net_sendto, net_recvfrom, ffi_call
-- CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
+- package manager: git-based, go-style. `pyr.pkg` manifest (name, version, require block). `pyr.lock` lockfile with commit hashes. `~/.pyr/cache/` local cache mirroring git paths. `pyr init [name]` creates manifest, `pyr install` fetches all deps, `pyr add <url> [version]` adds dependency. resolution order: stdlib -> local file -> pyr.pkg dependencies. packages imported by their name field: `imp router { serve }`, `imp router`, `imp router as r`. package entry point is `src/main.pyr`. bare repo cache for efficient fetches, version tags resolved via git rev-parse. src/pkg.zig contains manifest parser, lock file, git ops, cache management. module.zig extended with package_map for fallback resolution
+- CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr init [name]`, `pyr install`, `pyr add <url> [version]`, `pyr version`
 - IoError: built-in enum type (Eof, Closed, Error(str), Timeout) registered in both compiler and sema. I/O operations return IoError variants instead of nil/false on failure. net_read returns Eof on clean close, Closed on reset, Error(msg) on other failures. net_write returns true on success, IoError on failure. fs.read returns IoError on failure. enum equality compares by type_name + variant_index + payloads (structural, not pointer identity). zero-payload variants (Eof, Closed, Timeout) usable as expressions for direct comparison: `if data == Eof`
 - read/accept timeouts: `net.timeout(target, ms)` sets per-connection or per-listener timeout in milliseconds. -1 to disable. stored as timeout_ms on ObjListener/ObjConn. blocking path: poll() with timeout, returns IoError.Timeout on expiry. scheduler path: io_deadlines parallel array stores epoch-ms deadlines, pollAndWake computes min deadline as poll timeout, expires waiters past deadline. connections with timeout set are forced nonblocking so poll path is always reachable
 - while loop body compilation: uses inline beginScope/endScope instead of compileBlock to avoid emitting return_ for trailing expressions. compileBlock emits return_ for trailing expressions (correct for function bodies) but wrong for loop bodies where trailing expressions should be discarded
@@ -267,7 +270,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** package manager / module resolution
+**next:** TBD - language refinement, more stdlib modules, or tooling improvements
 
 ## roadmap
 
@@ -289,7 +292,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 16. ~~std/tls client~~ - TLS 1.2/1.3 client via zig's std.crypto.tls.Client. tls.upgrade(conn, hostname) for client-side. system CA bundle cached. transparent read/write. poll-based reads with timeout. DNS resolution in net.connect
 17. ~~error handling~~ - ?T option types (parser + sema), ?? null coalescing (jump_if_nil opcode, nil-specific not falsy), ? suffix early return (try_unwrap AST node), && || short-circuit logical operators. IoError coexists for rich I/O errors
 18. ~~std/tls server~~ - server-side TLS via runtime dlopen of OpenSSL/LibreSSL (no build-time dependency). tls.context(cert, key) + tls.upgrade(conn, ctx) for server mode. ObjSslCtx/ObjSslConn value types. SSL_read/SSL_write dispatch in VM. blocking handshake (SSL_accept) - scheduler stalls during handshake in spawned tasks
-19. package manager / module resolution
+19. ~~package manager / module resolution~~ - git-based packages (go-style). pyr.pkg manifest, pyr.lock lockfile, ~/.pyr/cache/ with bare repo + versioned checkouts. pyr init/install/add CLI commands. module resolution falls back to package cache when local file not found
 
 ## implementation notes
 
