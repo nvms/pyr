@@ -4,40 +4,61 @@ pub const Value = struct {
     bits: u64,
 
     const QNAN: u64 = 0x7FFC_0000_0000_0000;
-    const TAG_SHIFT: u6 = 45;
-    const PAYLOAD_MASK: u64 = (@as(u64, 1) << 45) - 1;
+    const SIGN: u64 = 0x8000_0000_0000_0000;
+    const TAG_SHIFT: u6 = 47;
+    const PAYLOAD_MASK: u64 = (@as(u64, 1) << 47) - 1;
 
     pub const Tag = enum(u5) {
         nil = 0,
         bool_ = 1,
         int = 2,
-        float = 3,
-        string = 4,
-        function = 5,
-        struct_ = 6,
-        enum_ = 7,
-        native_fn = 8,
-        closure = 9,
-        array = 10,
-        task = 11,
-        channel = 12,
-        listener = 13,
-        conn = 14,
-        dgram = 15,
-        tls_conn = 16,
-        ssl_ctx = 17,
-        ssl_conn = 18,
-        ptr = 19,
-        error_val = 20,
+        string = 3,
+        function = 4,
+        struct_ = 5,
+        enum_ = 6,
+        array = 7,
+        closure = 8,
+        native_fn = 9,
+        task = 10,
+        channel = 11,
+        error_val = 12,
+        conn = 13,
+        ptr = 14,
+        ext = 15,
+        float = 16,
     };
 
+    pub const ExtKind = enum(u3) { listener, dgram, tls_conn, ssl_ctx, ssl_conn };
+
     fn encode(t: Tag, val: u64) Value {
-        return .{ .bits = QNAN | (@as(u64, @intFromEnum(t)) << TAG_SHIFT) | (val & PAYLOAD_MASK) };
+        const tv: u64 = @intFromEnum(t);
+        const hi: u64 = (tv >> 3) & 1;
+        const lo: u64 = tv & 0x7;
+        return .{ .bits = (hi * SIGN) | QNAN | (lo << TAG_SHIFT) | (val & PAYLOAD_MASK) };
+    }
+
+    fn encodeExt(kind: ExtKind, ptr_val: usize) Value {
+        const tagged_ptr = (ptr_val & ~@as(u64, 0x7)) | @intFromEnum(kind);
+        return encode(.ext, tagged_ptr);
     }
 
     pub fn tag(self: Value) Tag {
         if ((self.bits & QNAN) != QNAN) return .float;
-        return @enumFromInt(@as(u5, @truncate((self.bits >> TAG_SHIFT) & 0x1F)));
+        const hi: u5 = @truncate((self.bits >> 63) & 1);
+        const lo: u5 = @truncate((self.bits >> TAG_SHIFT) & 0x7);
+        return @enumFromInt((hi << 3) | lo);
+    }
+
+    pub fn isExt(self: Value) bool {
+        return self.tag() == .ext;
+    }
+
+    pub fn extKind(self: Value) ExtKind {
+        return @enumFromInt(@as(u3, @truncate(self.payload())));
+    }
+
+    fn extPtr(self: Value) *anyopaque {
+        return @ptrFromInt(self.payload() & ~@as(u64, 0x7));
     }
 
     pub fn initNil() Value {
@@ -95,7 +116,7 @@ pub const Value = struct {
     }
 
     pub fn initListener(p: *ObjListener) Value {
-        return encode(.listener, @intFromPtr(p));
+        return encodeExt(.listener, @intFromPtr(p));
     }
 
     pub fn initConn(p: *ObjConn) Value {
@@ -103,19 +124,19 @@ pub const Value = struct {
     }
 
     pub fn initDgram(p: *ObjDgram) Value {
-        return encode(.dgram, @intFromPtr(p));
+        return encodeExt(.dgram, @intFromPtr(p));
     }
 
     pub fn initTlsConn(p: *ObjTlsConn) Value {
-        return encode(.tls_conn, @intFromPtr(p));
+        return encodeExt(.tls_conn, @intFromPtr(p));
     }
 
     pub fn initSslCtx(p: *ObjSslCtx) Value {
-        return encode(.ssl_ctx, @intFromPtr(p));
+        return encodeExt(.ssl_ctx, @intFromPtr(p));
     }
 
     pub fn initSslConn(p: *ObjSslConn) Value {
-        return encode(.ssl_conn, @intFromPtr(p));
+        return encodeExt(.ssl_conn, @intFromPtr(p));
     }
 
     pub fn initPtr(p: usize) Value {
@@ -148,7 +169,7 @@ pub const Value = struct {
 
     pub fn asInt(self: Value) i64 {
         const raw = self.payload();
-        const shift: u6 = 64 - 45;
+        const shift: u6 = 64 - 47;
         return @as(i64, @bitCast(raw << shift)) >> shift;
     }
 
@@ -193,7 +214,7 @@ pub const Value = struct {
     }
 
     pub fn asListener(self: Value) *ObjListener {
-        return @ptrCast(@alignCast(self.ptrFromPayload()));
+        return @ptrCast(@alignCast(self.extPtr()));
     }
 
     pub fn asConn(self: Value) *ObjConn {
@@ -201,19 +222,19 @@ pub const Value = struct {
     }
 
     pub fn asDgram(self: Value) *ObjDgram {
-        return @ptrCast(@alignCast(self.ptrFromPayload()));
+        return @ptrCast(@alignCast(self.extPtr()));
     }
 
     pub fn asTlsConn(self: Value) *ObjTlsConn {
-        return @ptrCast(@alignCast(self.ptrFromPayload()));
+        return @ptrCast(@alignCast(self.extPtr()));
     }
 
     pub fn asSslCtx(self: Value) *ObjSslCtx {
-        return @ptrCast(@alignCast(self.ptrFromPayload()));
+        return @ptrCast(@alignCast(self.extPtr()));
     }
 
     pub fn asSslConn(self: Value) *ObjSslConn {
-        return @ptrCast(@alignCast(self.ptrFromPayload()));
+        return @ptrCast(@alignCast(self.extPtr()));
     }
 
     pub fn isTruthy(self: Value) bool {
@@ -222,7 +243,7 @@ pub const Value = struct {
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .listener, .conn, .dgram, .tls_conn, .ssl_ctx, .ssl_conn => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .conn, .ext => true,
             .ptr => self.payload() != 0,
             .error_val => false,
         };
@@ -295,13 +316,9 @@ pub const Value = struct {
             .closure => std.debug.print("<closure>", .{}),
             .task => std.debug.print("<task>", .{}),
             .channel => std.debug.print("<channel>", .{}),
-            .listener => std.debug.print("<listener>", .{}),
             .conn => std.debug.print("<conn>", .{}),
-            .dgram => std.debug.print("<dgram>", .{}),
-            .tls_conn => std.debug.print("<tls_conn>", .{}),
-            .ssl_ctx => std.debug.print("<ssl_ctx>", .{}),
-            .ssl_conn => std.debug.print("<ssl_conn>", .{}),
             .ptr => std.debug.print("<ptr 0x{x}>", .{self.payload()}),
+            .ext => std.debug.print("<{s}>", .{@tagName(self.extKind())}),
             .error_val => {
                 std.debug.print("error(", .{});
                 self.asError().value.dump();
@@ -623,6 +640,7 @@ pub const ObjListener = struct {
     fd: std.posix.fd_t,
     port: u16,
     timeout_ms: i32,
+    _align: usize = 0,
 
     pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t, port: u16) *ObjListener {
         const l = alloc.create(ObjListener) catch @panic("oom");
@@ -666,6 +684,7 @@ pub const ObjDgram = struct {
     fd: std.posix.fd_t,
     timeout_ms: i32,
     bound: bool,
+    _align: usize = 0,
 
     pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t, bound: bool) *ObjDgram {
         const d = alloc.create(ObjDgram) catch @panic("oom");
@@ -790,4 +809,14 @@ test "value: tag detection" {
 
 test "value: size is 8 bytes" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Value));
+}
+
+test "value: ext round-trip" {
+    const alloc = std.testing.allocator;
+    const listener = ObjListener.create(alloc, 42, 8080);
+    defer alloc.destroy(listener);
+    const v = Value.initListener(listener);
+    try std.testing.expectEqual(Value.Tag.ext, v.tag());
+    try std.testing.expectEqual(Value.ExtKind.listener, v.extKind());
+    try std.testing.expectEqual(@as(std.posix.fd_t, 42), v.asListener().fd);
 }

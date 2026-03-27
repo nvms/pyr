@@ -2022,7 +2022,7 @@ pub const VM = struct {
 
     fn execNetAccept(self: *VM) Error!void {
         const target = self.pop();
-        if (target.tag() != .listener) {
+        if (target.tag() != .ext) {
             self.runtimeError("accept on non-listener value", .{});
             return error.RuntimeError;
         }
@@ -2079,13 +2079,9 @@ pub const VM = struct {
 
     fn execNetRead(self: *VM) Error!void {
         const target = self.pop();
-        if (target.tag() == .tls_conn) {
-            self.execTlsRead(target.asTlsConn());
-            return;
-        }
-        if (target.tag() == .ssl_conn) {
-            self.execSslRead(target.asSslConn());
-            return;
+        if (target.tag() == .ext) {
+            if (target.extKind() == .tls_conn) { self.execTlsRead(target.asTlsConn()); return; }
+            if (target.extKind() == .ssl_conn) { self.execSslRead(target.asSslConn()); return; }
         }
         if (target.tag() != .conn) {
             self.runtimeError("read on non-conn value", .{});
@@ -2160,13 +2156,9 @@ pub const VM = struct {
     fn execNetWrite(self: *VM) Error!void {
         const data_val = self.pop();
         const target = self.pop();
-        if (target.tag() == .tls_conn) {
-            self.execTlsWrite(target.asTlsConn(), data_val);
-            return;
-        }
-        if (target.tag() == .ssl_conn) {
-            self.execSslWrite(target.asSslConn(), data_val);
-            return;
+        if (target.tag() == .ext) {
+            if (target.extKind() == .tls_conn) { self.execTlsWrite(target.asTlsConn(), data_val); return; }
+            if (target.extKind() == .ssl_conn) { self.execSslWrite(target.asSslConn(), data_val); return; }
         }
         if (target.tag() != .conn or data_val.tag() != .string) {
             self.push(self.ioError("write requires conn and string"));
@@ -2268,7 +2260,7 @@ pub const VM = struct {
         const addr_val = self.pop();
         const data_val = self.pop();
         const target = self.pop();
-        if (target.tag() != .dgram or data_val.tag() != .string or addr_val.tag() != .string or port_val.tag() != .int) {
+        if (target.tag() != .ext or data_val.tag() != .string or addr_val.tag() != .string or port_val.tag() != .int) {
             self.push(self.ioError("sendto requires dgram, string, string, int"));
             return;
         }
@@ -2288,7 +2280,7 @@ pub const VM = struct {
 
     fn execNetRecvfrom(self: *VM) Error!void {
         const target = self.pop();
-        if (target.tag() != .dgram) {
+        if (target.tag() != .ext) {
             self.runtimeError("recvfrom on non-dgram value", .{});
             return error.RuntimeError;
         }

@@ -113,12 +113,8 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
         .closure => writeBytes(fd, "<closure>"),
         .task => writeBytes(fd, "<task>"),
         .channel => writeBytes(fd, "<channel>"),
-        .listener => writeBytes(fd, "<listener>"),
         .conn => writeBytes(fd, "<conn>"),
-        .dgram => writeBytes(fd, "<dgram>"),
-        .tls_conn => writeBytes(fd, "<tls_conn>"),
-        .ssl_ctx => writeBytes(fd, "<ssl_ctx>"),
-        .ssl_conn => writeBytes(fd, "<ssl_conn>"),
+        .ext => writeBytes(fd, @tagName(v.extKind())),
         .ptr => {
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "<ptr 0x{x}>", .{v.asPtr()}) catch return;
