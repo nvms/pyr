@@ -383,12 +383,38 @@ for file in files {
 }
 ```
 
-## pointers (systems work)
+## mutable references
 
-high-level code never sees pointers. for systems/FFI work:
+structs and arrays are heap-allocated. passing them copies the pointer, not the data. by default, function parameters are immutable - field assignment on a non-`*mut` param is a compile error:
 ```
-ptr: *User = &user
-mut_ptr: *mut User = &mut user
+fn read_name(u: User) -> str {
+  u.name                        // ok, reading
+}
+
+fn reset_name(u: User) {
+  u.name = "anonymous"          // compile error
+}
+```
+
+to mutate through a parameter, declare it `*mut T` and pass `&mut` at the call site:
+```
+fn reset_name(u: *mut User) {
+  u.name = "anonymous"          // ok
+}
+
+mut user = User { name: "alice" }
+reset_name(&mut user)           // explicit mutation intent
+```
+
+rules:
+- `*mut T` in a parameter type means "this function mutates the argument"
+- `&mut x` at the call site is required for `*mut T` params
+- `&mut x` requires `x` to be declared `mut`
+- passing `&mut` to a non-`*mut` param is a compile error (unnecessary marker)
+- no new runtime types or opcodes - this is pure compile-time enforcement
+
+for raw pointers and FFI work:
+```
 raw: *u8 = buf.ptr
 next = ptr.offset(1)
 value = ptr.*
