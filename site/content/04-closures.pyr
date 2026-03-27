@@ -16,20 +16,9 @@ fn main() {
 // to type the parameter.
   println(apply(7, fn(x) x + 1))
   println(apply(7, fn(x) x * x))
-
-// Type aliases make repeated function types readable.
-  do_both(5, fn(x) x + 10, fn(x) x * 2)
 }
 
 // A function that takes a typed closure parameter.
 fn apply(val: int, f: fn(int) -> int) -> int {
   f(val)
-}
-
-// With a type alias for cleaner signatures.
-type IntOp = fn(int) -> int
-
-fn do_both(val: int, a: IntOp, b: IntOp) {
-  println(a(val))
-  println(b(val))
 }
