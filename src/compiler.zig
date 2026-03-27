@@ -56,6 +56,14 @@ pub const Compiler = struct {
     current_line: u32,
     deferred: [64]DeferEntry = undefined,
     defer_count: u8 = 0,
+    inline_fns: std.StringHashMapUnmanaged(ast.FnDecl) = .{},
+    inline_subs: ?*[16]InlineSub = null,
+    inline_sub_count: u8 = 0,
+
+    const InlineSub = struct {
+        name: []const u8,
+        expr: *const ast.Expr,
+    };
 
     pub const DeferEntry = struct {
         body: ast.Defer.Body,
@@ -463,6 +471,9 @@ pub const Compiler = struct {
                 const ret = typeHintFromExpr(decl.return_type);
                 if (ret != .unknown) {
                     self.fn_returns.put(self.alloc, decl.name, ret) catch @panic("oom");
+                }
+                if (decl.body == .expr and isInlineable(decl.body.expr)) {
+                    self.inline_fns.put(self.alloc, decl.name, decl) catch @panic("oom");
                 }
             },
             .struct_decl => |decl| {
@@ -1604,6 +1615,8 @@ pub const Compiler = struct {
                     return;
                 }
             }
+
+            if (self.tryInlineCall(name, call.args)) return;
         }
 
         if (call.callee.kind == .field_access) {
@@ -1663,6 +1676,7 @@ pub const Compiler = struct {
             const fa = call.callee.kind.field_access;
             const is_ns = if (fa.target.kind == .identifier) self.isModuleNamespace(fa.target.kind.identifier) else false;
             if (!is_ns and self.canResolveCallable(fa.field)) {
+                if (self.tryInlineUfcs(fa.field, fa.target, call.args)) return;
                 self.compileGetVar(fa.field);
                 self.compileExpr(fa.target);
                 for (call.args) |arg| {
@@ -1680,6 +1694,67 @@ pub const Compiler = struct {
         }
         self.emitOp(.call);
         self.emitByte(@intCast(call.args.len));
+    }
+
+    fn tryInlineCall(self: *Compiler, name: []const u8, args: []const *const ast.Expr) bool {
+        const decl = self.findInlineFn(name) orelse return false;
+        if (args.len != decl.params.len) return false;
+        if (!allSimpleArgs(args)) return false;
+        self.inlineSubstitute(decl, args, null);
+        return true;
+    }
+
+    fn tryInlineUfcs(self: *Compiler, name: []const u8, target: *const ast.Expr, args: []const *const ast.Expr) bool {
+        const decl = self.findInlineFn(name) orelse return false;
+        if (args.len + 1 != decl.params.len) return false;
+        if (!isSimpleArg(target)) return false;
+        if (!allSimpleArgs(args)) return false;
+        self.inlineSubstitute(decl, args, target);
+        return true;
+    }
+
+    fn inlineSubstitute(self: *Compiler, decl: ast.FnDecl, args: []const *const ast.Expr, ufcs_target: ?*const ast.Expr) void {
+        const prev_subs = self.inline_subs;
+        const prev_sub_count = self.inline_sub_count;
+        defer {
+            self.inline_subs = prev_subs;
+            self.inline_sub_count = prev_sub_count;
+        }
+
+        var subs: [16]InlineSub = undefined;
+        var count: u8 = 0;
+
+        if (ufcs_target) |target| {
+            subs[count] = .{ .name = decl.params[0].name, .expr = target };
+            count += 1;
+        }
+
+        const start: usize = if (ufcs_target != null) 1 else 0;
+        for (start..decl.params.len) |i| {
+            subs[count] = .{ .name = decl.params[i].name, .expr = args[i - start] };
+            count += 1;
+        }
+
+        self.inline_subs = &subs;
+        self.inline_sub_count = count;
+        self.compileExpr(decl.body.expr);
+    }
+
+    fn findInlineFn(self: *Compiler, name: []const u8) ?ast.FnDecl {
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.inline_fns.get(name)) |decl| return decl;
+            c = cur.enclosing;
+        }
+        return null;
+    }
+
+    fn resolveInlineSub(self: *Compiler, name: []const u8) ?*const ast.Expr {
+        const subs = self.inline_subs orelse return null;
+        for (subs[0..self.inline_sub_count]) |sub| {
+            if (std.mem.eql(u8, sub.name, name)) return sub.expr;
+        }
+        return null;
     }
 
     fn compileGetExpr(self: *Compiler, expr: *const ast.Expr) void {
@@ -2174,6 +2249,16 @@ pub const Compiler = struct {
     // ---------------------------------------------------------------
 
     fn compileGetVar(self: *Compiler, name: []const u8) void {
+        if (self.resolveInlineSub(name)) |sub_expr| {
+            const prev_subs = self.inline_subs;
+            const prev_count = self.inline_sub_count;
+            self.inline_subs = null;
+            self.inline_sub_count = 0;
+            self.compileExpr(sub_expr);
+            self.inline_subs = prev_subs;
+            self.inline_sub_count = prev_count;
+            return;
+        }
         if (self.resolveLocal(name)) |slot| {
             self.emitOp(.get_local);
             self.emitByte(slot);
@@ -2714,6 +2799,29 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .set_global, .define_global, .print, .println => return false,
             .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .net_sendto, .net_recvfrom, .ffi_call => return false,
         }
+    }
+    return true;
+}
+
+fn isInlineable(expr: *const ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal, .float_literal, .string_literal, .bool_literal, .none_literal, .identifier => true,
+        .binary => |b| isInlineable(b.lhs) and isInlineable(b.rhs),
+        .unary => |u| isInlineable(u.operand),
+        else => false,
+    };
+}
+
+fn isSimpleArg(expr: *const ast.Expr) bool {
+    return switch (expr.kind) {
+        .identifier, .int_literal, .float_literal, .string_literal, .bool_literal, .none_literal => true,
+        else => false,
+    };
+}
+
+fn allSimpleArgs(args: []const *const ast.Expr) bool {
+    for (args) |arg| {
+        if (!isSimpleArg(arg)) return false;
     }
     return true;
 }

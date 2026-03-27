@@ -102,6 +102,18 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - works for recursive calls (pointer stable from pass 1, chunk filled in pass 2)
 - fn_table walks enclosing compiler chain so nested functions can reference top-level functions
 
+## function inlining
+
+- expression-body functions (`= expr`) with pure bodies (arithmetic, comparisons, literals, identifiers - no calls, no I/O) are inlined at call sites
+- uses expression substitution, not bytecode copying: compiler maps parameter names to argument AST nodes, then compiles the function body in the caller's context. resolveInlineSub() intercepts identifier lookups in compileGetVar to emit the argument expression instead
+- restricted to simple args (identifiers/literals) to avoid duplicating side-effectful expressions when params appear multiple times
+- inline_fns table populated during registerDecl (pass 1) for all expression-body functions passing isInlineable check
+- InlineSub stack (inline_subs/inline_sub_count) is saved/restored per inline to support nested inlining
+- self-referencing substitution prevented: compileGetVar clears inline_subs before compiling the substituted expression, so `f(x)` where param is also named `x` correctly resolves the outer `x`
+- also works for UFCS calls: `x.double()` inlines the same way, with the target as first param substitution
+- zero VM changes. no new opcodes. purely a compile-time transformation
+- 26% speedup on tight loops calling small pure helpers (4.55s vs 6.13s, 10M iterations)
+
 ## type inference and specialized opcodes
 
 - TypeHint enum: unknown, int_, float_, string_, bool_, struct_

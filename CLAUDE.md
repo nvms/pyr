@@ -279,12 +279,13 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - defer: scoped cleanup (like zig). `defer expr` and `defer { block }`. LIFO order. runs at scope exit - normal end, return, fail, or ? propagation. compile-time construct: compiler stores deferred AST nodes per scope depth, emits them at every exit point. no new opcodes. emitScopeDefers for normal scope exit, emitAllDefers for early returns. compileBlock's trailing expression path emits defers before return_
 - mutable references: `*mut T` parameter types declare mutation intent. `&mut x` required at call sites. sema enforces: field assignment on non-`*mut` params is compile error, `&mut` on immutable vars is error, unnecessary `&mut` to non-`*mut` params is error. pure compile-time - no new VM opcodes or value types. `&mut x` compiles to just `x` (already a pointer for heap types). FnType.mut_params bitmask (u64) tracks which params are `*mut`
 - type aliases: `type Name = TypeExpr` for named type aliases. `fn(T, T) -> T` syntax in type expressions for function types. `type` keyword parsed as top-level item. sema resolves aliases via symbol lookup, fn_type resolves to FnType. compiler and VM unchanged - pure type system feature
-- 259 tests, 36 validated examples, 10 benchmarks
+- function inlining: expression-body functions with pure arithmetic/comparison bodies are inlined at call sites via expression substitution. compiler maps parameter names to argument expressions, compiles body directly in caller context (no call frame, no return). restricted to simple args (identifiers/literals) so multi-use params are safe. works with UFCS calls. 26% speedup on tight loops calling small helpers. zero VM changes - purely a compiler optimization
+- 259 tests, 36 validated examples, 11 benchmarks
 - UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`, `"a-b-c".split("-").join("/")`
 - index_local/index_local_local opcodes: fused array indexing. index_local reads array from local slot, pops index from stack. index_local_local reads both array and index from local slots (used in for-in loops). eliminates stack pushes/pops for the common arr[idx] pattern. compiler detects identifier targets in index expressions
 - builtins: sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower. all work with UFCS: `arr.contains(x)`, `str.split(",")`, `"hello".to_upper()`
 - higher-order array operations: map(arr, fn), filter(arr, fn), reduce(arr, fn, init). implemented as helper functions with hand-built bytecode (defineHelperFn in compiler.zig) - not native functions, because natives can't call back into pyr. each emits bytecode that uses the `call` opcode to invoke the callback through normal VM dispatch. marked locals_only for fastLoop execution. work with closures, named functions, and UFCS chaining: `arr.filter(fn(x) x > 0).map(fn(x) x * 2)`
-- benchmarks: fib(35) 0.67s (python 0.86s), loop 10M 0.20s (python 0.22s), closure 10M 0.24s (python 0.32s), struct 10M 0.31s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.64s (python 0.62s), match 30M 2.62s (python 2.07s), arena 1M 0.27s (python 0.22s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.17s)
+- benchmarks: fib(35) 0.67s (python 0.86s), loop 10M 0.20s (python 0.22s), closure 10M 0.24s (python 0.32s), struct 10M 0.31s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.64s (python 0.62s), match 30M 2.62s (python 2.07s), arena 1M 0.27s (python 0.22s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.17s), inline 10M 1.19s (python 1.25s)
 
 **not yet implemented (parser level):**
 - anonymous struct literals: `.{ field: val }` inferred from context (zig-style). when the compiler knows the expected type from a function param, return type, or annotated binding, allow omitting the struct name. pure syntax sugar - desugars to `TypeName { field: val }` during compilation
@@ -297,9 +298,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. function inlining for small pure functions
-2. escape analysis: compiler warning when heap allocations (structs, arrays, strings) don't escape their scope and aren't inside an arena block. sema already tracks scopes and names - detect locals that are created, used locally, and never returned/passed/assigned to an outer field. conservative on function args (assume escape). primary target: loop bodies that allocate without an arena
-3. dogfooding: build real programs in pyr to find rough edges
+1. escape analysis: compiler warning when heap allocations (structs, arrays, strings) don't escape their scope and aren't inside an arena block. sema already tracks scopes and names - detect locals that are created, used locally, and never returned/passed/assigned to an outer field. conservative on function args (assume escape). primary target: loop bodies that allocate without an arena
+2. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes
 

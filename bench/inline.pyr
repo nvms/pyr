@@ -1,0 +1,12 @@
+fn double(x: int) -> int = x * 2
+fn add(a: int, b: int) -> int = a + b
+fn square(x: int) -> int = x * x
+
+fn main() {
+  mut sum = 0
+  for i in range(10000000) {
+    sum = sum + double(i)
+    sum = sum + add(i, 1)
+  }
+  println(sum)
+}
