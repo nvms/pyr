@@ -3,36 +3,46 @@ title: Arena Memory
 order: 17
 description: Arena blocks create a scoped memory region where all allocations are freed in bulk when the block exits. No garbage collector, no reference counting - just fast, deterministic cleanup.
 ---
-// `arena` blocks create a scoped memory region.
-// All allocations inside use the arena allocator.
-// Everything is freed in bulk when the block exits.
-struct Data {
-  value: int
+// Integers, floats, and booleans live on the stack.
+// Structs, strings, and arrays are heap-allocated.
+// Arenas manage the heap side - when the block exits,
+// all structs, strings, and arrays created inside are
+// freed in one shot. Stack values are unaffected.
+
+// Without arenas, a loop that allocates on every iteration
+// leaks memory until the program ends. Pyr has no garbage
+// collector, so nothing is reclaimed automatically.
+struct Request {
+  path: str
+  body: str
 }
 
 fn main() {
-  mut total = 0
-
-// Arena blocks are ideal for per-iteration allocations.
-// No individual frees, no GC pauses.
-  for i in range(1000) {
+// Imagine handling 10,000 HTTP requests. Each one
+// allocates a struct with strings. Without arenas,
+// all of that stays in memory forever.
+//
+// With an arena, everything allocated inside the block
+// is freed in bulk when the block exits. One fast free
+// per iteration instead of tracking thousands of objects.
+  for i in range(10000) {
     arena {
-      d = Data { value: i }
-      total += d.value
+      req = Request { path: "/users", body: "hello" }
+      println(req.path)
     }
   }
 
-  println(total)
+// This is the model for server memory in pyr:
+// one arena per request. Handle the request, build
+// the response, then free everything at once.
 
-// Arenas can nest. Inner arenas free first.
+// Arenas can nest. Each level frees independently.
   arena {
-    outer = Data { value: 1 }
-
+    outer = Request { path: "/a", body: "outer" }
     arena {
-      inner = Data { value: 2 }
-      println(inner.value)
+      inner = Request { path: "/b", body: "inner" }
+      println(inner.body)
     }
-
-    println(outer.value)
+    println(outer.body)
   }
 }
