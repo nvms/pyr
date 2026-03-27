@@ -234,7 +234,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - std/fs: read, write, append, exists, remove. file operations via std.fs.cwd()
   - std/os: env (environment variables), args (returns string array), exit
   - std/json: encode (any pyr value -> JSON string), decode (JSON string -> pyr value). encode handles int, float, str, bool, nil, array, struct, enum. decode returns int/float/str/bool/nil for primitives, ObjArray for arrays, ObjStruct (name "object") for objects. round-trip: decode(encode(v)) preserves structure for structs/arrays
-  - std/net: listen, accept, connect, read, write, close. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd + nonblock flag) value types. method-call syntax (`server.accept()`, `conn.read()`, `conn.write(data)`) and `net.connect(addr, port)` compile to net_accept/net_read/net_write/net_connect opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`, `net.read(conn)`, `net.write(conn, data)`) uses blocking native functions. ObjConn.ensureNonBlock() caches fcntl state - only sets O_NONBLOCK once per fd, eliminating redundant syscalls in hot loops
+  - std/net: listen, accept, connect, read, write, close, timeout. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd + nonblock flag) value types. method-call syntax (`server.accept()`, `conn.read()`, `conn.write(data)`) and `net.connect(addr, port)` compile to net_accept/net_read/net_write/net_connect opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`, `net.read(conn)`, `net.write(conn, data)`) uses blocking native functions. ObjConn.ensureNonBlock() caches fcntl state - only sets O_NONBLOCK once per fd, eliminating redundant syscalls in hot loops
   - std/http: parse_request, respond, respond_status, json_response, route, match_route. HTTP utility module - server loop written in pyr using std/net primitives. handlers are regular pyr functions. route/match_route pattern for declarative routing
 - type keywords (int, float, str, bool, byte) usable in expression position as conversion functions: `int(3.7)`, `float(5)`
 - assert and assert_eq builtins: assert(condition) exits on failure, assert_eq(a, b) exits with diff on mismatch
@@ -256,14 +256,15 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - 78 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, ffi_call
 - CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr version`
 - IoError: built-in enum type (Eof, Closed, Error(str), Timeout) registered in both compiler and sema. I/O operations return IoError variants instead of nil/false on failure. net_read returns Eof on clean close, Closed on reset, Error(msg) on other failures. net_write returns true on success, IoError on failure. fs.read returns IoError on failure. enum equality compares by type_name + variant_index + payloads (structural, not pointer identity). zero-payload variants (Eof, Closed, Timeout) usable as expressions for direct comparison: `if data == Eof`
-- 199 tests, 24 validated examples, 10 benchmarks
+- read/accept timeouts: `net.timeout(target, ms)` sets per-connection or per-listener timeout in milliseconds. -1 to disable. stored as timeout_ms on ObjListener/ObjConn. blocking path: poll() with timeout, returns IoError.Timeout on expiry. scheduler path: io_deadlines parallel array stores epoch-ms deadlines, pollAndWake computes min deadline as poll timeout, expires waiters past deadline. connections with timeout set are forced nonblocking so poll path is always reachable
+- 201 tests, 25 validated examples, 10 benchmarks
 - benchmarks: fib(35) 0.84s (python 0.84s), loop 10M 0.20s (python 0.20s), closure 10M 0.26s (python 0.31s), struct 10M 0.32s (python 0.20s), string 100K 0.009s (python 0.14s), array 10M 1.53s (python 0.59s), match 30M 4.32s (python 2.16s), arena 1M 0.50s (python 0.22s), channel 100K 0.03s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s)
 
 **not yet implemented (parser level):**
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** read/accept timeouts, UDP support, package manager / module resolution, error handling (?T option types, ?? operator)
+**next:** UDP support, package manager / module resolution, error handling (?T option types, ?? operator)
 
 ## roadmap
 
@@ -280,7 +281,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 11. ~~FFI - zero-cost zig/C interop~~ (extern blocks, dlopen/dlsym, trampoline dispatch for up to 6 args)
 12. ~~dynamic scheduler limits~~ - growable run queue, io poller, and await waiters (starts at 64, doubles on demand). tested to 100 concurrent connections
 13. ~~error values for I/O~~ - IoError built-in enum (Eof, Closed, Error(str), Timeout). I/O returns error enums instead of nil/false, distinguishes closed vs error vs eof
-14. read/accept timeouts - poll with configurable timeout, prevent hung clients from stalling scheduler
+14. ~~read/accept timeouts~~ - net.timeout(target, ms) with per-waiter deadlines in scheduler. prevents hung clients from stalling scheduler
 15. UDP support - datagram sockets round out the networking story
 16. package manager / module resolution
 

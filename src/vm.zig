@@ -83,6 +83,7 @@ pub const Scheduler = struct {
     io_cap: u32,
     io_write_data: [][]const u8,
     io_write_off: []usize,
+    io_deadlines: []i64,
 
     const IoOp = enum(u8) { accept, read, write, connect };
     const INIT_QUEUE_CAP = 64;
@@ -109,6 +110,7 @@ pub const Scheduler = struct {
             .io_cap = INIT_IO_CAP,
             .io_write_data = allocSlice([]const u8, alloc, INIT_IO_CAP),
             .io_write_off = allocSlice(usize, alloc, INIT_IO_CAP),
+            .io_deadlines = allocSlice(i64, alloc, INIT_IO_CAP),
         };
     }
 
@@ -158,25 +160,33 @@ pub const Scheduler = struct {
         self.io_tasks = self.alloc.realloc(self.io_tasks, new_cap) catch @panic("oom");
         self.io_write_data = self.alloc.realloc(self.io_write_data, new_cap) catch @panic("oom");
         self.io_write_off = self.alloc.realloc(self.io_write_off, new_cap) catch @panic("oom");
+        self.io_deadlines = self.alloc.realloc(self.io_deadlines, new_cap) catch @panic("oom");
         self.io_cap = new_cap;
     }
 
-    fn parkIo(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, op: IoOp) void {
+    fn parkIo(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, op: IoOp, timeout_ms: i32) void {
         if (self.io_count >= self.io_cap) self.growIo();
         self.io_fds[self.io_count] = fd;
         self.io_ops[self.io_count] = op;
         self.io_tasks[self.io_count] = task;
+        self.io_deadlines[self.io_count] = if (timeout_ms >= 0) nowMs() + timeout_ms else -1;
         self.io_count += 1;
     }
 
-    fn parkIoWrite(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, data: []const u8, offset: usize) void {
+    fn parkIoWrite(self: *Scheduler, task: *ObjTask, fd: std.posix.fd_t, data: []const u8, offset: usize, timeout_ms: i32) void {
         if (self.io_count >= self.io_cap) self.growIo();
         self.io_fds[self.io_count] = fd;
         self.io_ops[self.io_count] = .write;
         self.io_tasks[self.io_count] = task;
         self.io_write_data[self.io_count] = data;
         self.io_write_off[self.io_count] = offset;
+        self.io_deadlines[self.io_count] = if (timeout_ms >= 0) nowMs() + timeout_ms else -1;
         self.io_count += 1;
+    }
+
+    fn nowMs() i64 {
+        const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+        return @as(i64, ts.sec) * 1000 + @divTrunc(ts.nsec, 1_000_000);
     }
 
     fn removeIoWaiter(self: *Scheduler, idx: u32) void {
@@ -186,6 +196,7 @@ pub const Scheduler = struct {
         self.io_tasks[idx] = self.io_tasks[self.io_count];
         self.io_write_data[idx] = self.io_write_data[self.io_count];
         self.io_write_off[idx] = self.io_write_off[self.io_count];
+        self.io_deadlines[idx] = self.io_deadlines[self.io_count];
         self.io_tasks[self.io_count] = null;
     }
 
@@ -205,17 +216,42 @@ pub const Scheduler = struct {
         const pollfds = alloc.alloc(std.posix.pollfd, self.io_count) catch return;
         defer alloc.free(pollfds);
 
+        var min_deadline: i64 = -1;
         var i: u32 = 0;
         while (i < self.io_count) : (i += 1) {
             const events: i16 = if (self.io_ops[i] == .write or self.io_ops[i] == .connect) std.posix.POLL.OUT else std.posix.POLL.IN;
             pollfds[i] = .{ .fd = self.io_fds[i], .events = events, .revents = 0 };
+            if (self.io_deadlines[i] >= 0) {
+                if (min_deadline < 0 or self.io_deadlines[i] < min_deadline) {
+                    min_deadline = self.io_deadlines[i];
+                }
+            }
         }
 
-        _ = std.posix.poll(pollfds, -1) catch return;
+        var poll_timeout: i32 = -1;
+        if (min_deadline >= 0) {
+            const remaining = min_deadline - nowMs();
+            poll_timeout = if (remaining <= 0) 0 else @intCast(@min(remaining, std.math.maxInt(i32)));
+        }
 
+        _ = std.posix.poll(pollfds, poll_timeout) catch return;
+
+        const now = nowMs();
         var j: u32 = self.io_count;
         while (j > 0) {
             j -= 1;
+
+            if (self.io_deadlines[j] >= 0 and now >= self.io_deadlines[j]) {
+                const task = self.io_tasks[j].?;
+                const timeout_val = ObjEnum.create(alloc, "IoError", "Timeout", 3, &.{});
+                task.stack[task.sp] = timeout_val.toValue();
+                task.sp += 1;
+                task.state = .ready;
+                self.enqueue(task);
+                self.removeIoWaiter(j);
+                continue;
+            }
+
             if (pollfds[j].revents & (std.posix.POLL.IN | std.posix.POLL.OUT | std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) {
                 const task = self.io_tasks[j].?;
 
@@ -1721,7 +1757,9 @@ pub const VM = struct {
             self.runtimeError("accept on non-listener value", .{});
             return error.RuntimeError;
         }
-        const fd = target.asListener().fd;
+        const listener = target.asListener();
+        const fd = listener.fd;
+        const tmo = listener.timeout_ms;
         stdlib.setNonBlocking(fd);
 
         const client_fd = std.posix.accept(fd, null, null, 0) catch |err| {
@@ -1730,7 +1768,7 @@ pub const VM = struct {
                     if (self.sched.current_task) |ct| {
                         self.saveToTask(ct);
                         ct.state = .blocked_io;
-                        self.sched.parkIo(ct, fd, .accept);
+                        self.sched.parkIo(ct, fd, .accept, tmo);
 
                         if (self.scheduleNextOrPoll()) |next| {
                             self.switchTo(next);
@@ -1742,10 +1780,14 @@ pub const VM = struct {
                     }
                 }
                 var pollfds = [1]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
-                _ = std.posix.poll(&pollfds, -1) catch {
+                const poll_n = std.posix.poll(&pollfds, tmo) catch {
                     self.push(self.ioError("poll failed"));
                     return;
                 };
+                if (poll_n == 0) {
+                    self.push(self.ioTimeout());
+                    return;
+                }
                 const retry_fd = std.posix.accept(fd, null, null, 0) catch {
                     self.push(self.ioError("accept failed"));
                     return;
@@ -1773,7 +1815,8 @@ pub const VM = struct {
             return error.RuntimeError;
         }
         const conn_obj = target.asConn();
-        if (self.sched.active) conn_obj.ensureNonBlock();
+        const tmo = conn_obj.timeout_ms;
+        if (self.sched.active or tmo >= 0) conn_obj.ensureNonBlock();
         const fd = conn_obj.fd;
 
         var buf: [8192]u8 = undefined;
@@ -1783,7 +1826,7 @@ pub const VM = struct {
                     if (self.sched.current_task) |ct| {
                         self.saveToTask(ct);
                         ct.state = .blocked_io;
-                        self.sched.parkIo(ct, fd, .read);
+                        self.sched.parkIo(ct, fd, .read, tmo);
 
                         if (self.scheduleNextOrPoll()) |next| {
                             self.switchTo(next);
@@ -1795,10 +1838,14 @@ pub const VM = struct {
                     }
                 }
                 var pollfds = [1]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
-                _ = std.posix.poll(&pollfds, -1) catch {
+                const poll_n = std.posix.poll(&pollfds, tmo) catch {
                     self.push(self.ioError("poll failed"));
                     return;
                 };
+                if (poll_n == 0) {
+                    self.push(self.ioTimeout());
+                    return;
+                }
                 const retry_n = std.posix.read(fd, &buf) catch {
                     self.push(self.ioError("read failed"));
                     return;
@@ -1841,7 +1888,7 @@ pub const VM = struct {
             return;
         }
         const conn_obj = target.asConn();
-        if (self.sched.active) conn_obj.ensureNonBlock();
+        if (self.sched.active or conn_obj.timeout_ms >= 0) conn_obj.ensureNonBlock();
         const fd = conn_obj.fd;
         const data = data_val.asString().chars;
 
@@ -1852,7 +1899,7 @@ pub const VM = struct {
                     if (self.sched.current_task) |ct| {
                         self.saveToTask(ct);
                         ct.state = .blocked_io;
-                        self.sched.parkIoWrite(ct, fd, data, written);
+                        self.sched.parkIoWrite(ct, fd, data, written, conn_obj.timeout_ms);
 
                         if (self.scheduleNextOrPoll()) |next| {
                             self.switchTo(next);
@@ -1901,7 +1948,7 @@ pub const VM = struct {
                     if (self.sched.current_task) |ct| {
                         self.saveToTask(ct);
                         ct.state = .blocked_io;
-                        self.sched.parkIo(ct, fd, .connect);
+                        self.sched.parkIo(ct, fd, .connect, -1);
 
                         if (self.scheduleNextOrPoll()) |next| {
                             self.switchTo(next);
@@ -3211,6 +3258,38 @@ test "vm: method-call read returns Eof on close" {
         \\  data = conn.read()
         \\  assert_eq(data, Eof)
         \\  net.close(conn)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: read timeout returns IoError.Timeout" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19965)
+        \\  client = net.connect("127.0.0.1", 19965)
+        \\  conn = net.accept(server)
+        \\  net.timeout(conn, 50)
+        \\  data = conn.read()
+        \\  assert_eq(data, Timeout)
+        \\  net.close(client)
+        \\  net.close(conn)
+        \\  net.close(server)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: accept timeout returns IoError.Timeout" {
+    try testRun(
+        \\imp std/net as net
+        \\fn main() {
+        \\  server = net.listen("127.0.0.1", 19966)
+        \\  net.timeout(server, 50)
+        \\  result = server.accept()
+        \\  assert_eq(result, Timeout)
         \\  net.close(server)
         \\  println("ok")
         \\}

@@ -1,0 +1,35 @@
+imp std/net as net
+
+fn main() {
+  server = net.listen("127.0.0.1", 19940)
+
+  net.timeout(server, 100)
+  result = server.accept()
+  assert_eq(result, Timeout)
+  println("accept timed out")
+
+  client = net.connect("127.0.0.1", 19940)
+  conn = server.accept()
+
+  net.timeout(conn, 100)
+  data = conn.read()
+  assert_eq(data, Timeout)
+  println("read timed out")
+
+  net.write(client, "hello")
+  net.timeout(conn, 5000)
+  data2 = conn.read()
+  assert_eq(data2, "hello")
+  println("read with data: " + data2)
+
+  net.timeout(conn, -1)
+  net.write(client, "no timeout")
+  data3 = conn.read()
+  assert_eq(data3, "no timeout")
+  println("timeout cleared: " + data3)
+
+  net.close(client)
+  net.close(conn)
+  net.close(server)
+  println("done")
+}

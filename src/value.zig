@@ -529,10 +529,11 @@ pub const ObjChannel = struct {
 pub const ObjListener = struct {
     fd: std.posix.fd_t,
     port: u16,
+    timeout_ms: i32,
 
     pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t, port: u16) *ObjListener {
         const l = alloc.create(ObjListener) catch @panic("oom");
-        l.* = .{ .fd = fd, .port = port };
+        l.* = .{ .fd = fd, .port = port, .timeout_ms = -1 };
         return l;
     }
 
@@ -544,10 +545,11 @@ pub const ObjListener = struct {
 pub const ObjConn = struct {
     fd: std.posix.fd_t,
     nonblock: bool,
+    timeout_ms: i32,
 
     pub fn create(alloc: std.mem.Allocator, fd: std.posix.fd_t) *ObjConn {
         const c = alloc.create(ObjConn) catch @panic("oom");
-        c.* = .{ .fd = fd, .nonblock = false };
+        c.* = .{ .fd = fd, .nonblock = false, .timeout_ms = -1 };
         return c;
     }
 

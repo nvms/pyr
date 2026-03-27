@@ -522,6 +522,7 @@ const net_fns = [_]NativeDef{
     .{ .name = "read", .arity = 1, .func = &netRead },
     .{ .name = "write", .arity = 2, .func = &netWrite },
     .{ .name = "close", .arity = 1, .func = &netClose },
+    .{ .name = "timeout", .arity = 2, .func = &netTimeout },
 };
 
 pub fn parseAddr(s: []const u8) [4]u8 {
@@ -623,6 +624,16 @@ fn netClose(_: std.mem.Allocator, args: []const Value) Value {
         std.posix.close(args[0].asListener().fd);
     } else if (args[0].tag == .conn) {
         std.posix.close(args[0].asConn().fd);
+    }
+    return Value.initNil();
+}
+
+fn netTimeout(_: std.mem.Allocator, args: []const Value) Value {
+    const ms: i32 = if (args[1].tag == .int) @intCast(@as(i64, @max(-1, args[1].asInt()))) else -1;
+    if (args[0].tag == .listener) {
+        args[0].asListener().timeout_ms = ms;
+    } else if (args[0].tag == .conn) {
+        args[0].asConn().timeout_ms = ms;
     }
     return Value.initNil();
 }
