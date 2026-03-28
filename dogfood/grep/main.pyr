@@ -2,7 +2,7 @@ imp std/fs
 imp std/os
 imp std/io { println, eprintln }
 
-fn user_args() {
+fn user_args() -> []str {
   args = os.args()
   mut i = 0
   for arg in args {
@@ -29,7 +29,7 @@ struct Opts {
   invert: bool
 }
 
-fn parse_opts(args) -> Opts {
+fn parse_opts(args: []str) -> Opts {
   return Opts {
     ignore_case: has_flag(args, "-i"),
     line_numbers: has_flag(args, "-n"),
@@ -38,7 +38,7 @@ fn parse_opts(args) -> Opts {
   }
 }
 
-fn has_flag(args, flag: str) -> bool {
+fn has_flag(args: []str, flag: str) -> bool {
   for arg in args {
     if arg == flag {
       return true
@@ -47,7 +47,7 @@ fn has_flag(args, flag: str) -> bool {
   return false
 }
 
-fn positional_args(args) {
+fn positional_args(args: []str) -> []str {
   mut result = []
   for arg in args {
     if !starts_with(arg, "-") {
