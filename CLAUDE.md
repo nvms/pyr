@@ -280,7 +280,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - mutable references: `*mut T` parameter types declare mutation intent. `&mut x` required at call sites. sema enforces: field assignment on non-`*mut` params is compile error, `&mut` on immutable vars is error, unnecessary `&mut` to non-`*mut` params is error. pure compile-time - no new VM opcodes or value types. `&mut x` compiles to just `x` (already a pointer for heap types). FnType.mut_params bitmask (u64) tracks which params are `*mut`
 - type aliases: `type Name = TypeExpr` for named type aliases. `fn(T, T) -> T` syntax in type expressions for function types. `type` keyword parsed as top-level item. sema resolves aliases via symbol lookup, fn_type resolves to FnType. compiler and VM unchanged - pure type system feature
 - function inlining: expression-body functions with pure arithmetic/comparison bodies are inlined at call sites via expression substitution. compiler maps parameter names to argument expressions, compiles body directly in caller context (no call frame, no return). restricted to simple args (identifiers/literals) so multi-use params are safe. works with UFCS calls. 26% speedup on tight loops calling small helpers. zero VM changes - purely a compiler optimization
-- 259 tests, 36 validated examples, 11 benchmarks
+- ownership model: compile-time memory management. heap-allocated values (structs, arrays, strings) are automatically freed at scope exit. `own` keyword on function parameters for explicit ownership transfer. sema tracks ownership states (owned/borrowed/moved). use-after-move is a compile error. `free_local` opcode does deep recursive free of object graphs. `own_params` bitmask on FnType (same pattern as mut_params). `isHeapExpr()` in compiler detects struct literals, array literals, call returns, string interpolation. full spec in OWNERSHIP.md
+- 262 tests, 37 validated examples, 11 benchmarks
 - UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`, `"a-b-c".split("-").join("/")`
 - index_local/index_local_local opcodes: fused array indexing. index_local reads array from local slot, pops index from stack. index_local_local reads both array and index from local slots (used in for-in loops). eliminates stack pushes/pops for the common arr[idx] pattern. compiler detects identifier targets in index expressions
 - builtins: sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower. all work with UFCS: `arr.contains(x)`, `str.split(",")`, `"hello".to_upper()`
@@ -292,14 +293,16 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - raw/multiline strings
 - range expressions, tuple destructuring, deref postfix
 
-**next:** performance (function inlining for small pure functions, match dispatch optimization), dogfooding
+**next:** ownership refinements (liveness analysis, drop flags, borrow checking), dogfooding
 
 ## roadmap
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. escape analysis: compiler warning when heap allocations (structs, arrays, strings) don't escape their scope and aren't inside an arena block. sema already tracks scopes and names - detect locals that are created, used locally, and never returned/passed/assigned to an outer field. conservative on function args (assume escape). primary target: loop bodies that allocate without an arena
-2. dogfooding: build real programs in pyr to find rough edges
+1. ownership: liveness analysis - emit free_local after last use instead of scope exit. requires bytecode post-processing pass to find last get_local/get_local_field references per owned local and insert free_local at optimal points
+2. ownership: drop flags for conditional moves - handle values moved in one branch but not another. free_local_if opcode with hidden boolean flag per variable. compiler detects conditional move patterns (if/match) and emits flag-guarded frees
+3. ownership: sema warning for storing borrowed values in longer-lived structures (push to outer-scope array, assign to outer-scope struct field)
+4. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes
 
