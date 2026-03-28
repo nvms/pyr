@@ -1,0 +1,137 @@
+imp std/fs
+imp std/os
+imp std/io { println, eprintln }
+
+fn user_args() {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn usage() {
+  eprintln("usage: grep [-i] [-n] [-c] [-v] <pattern> <file> [file...]")
+  os.exit(1)
+}
+
+struct Opts {
+  ignore_case: bool
+  line_numbers: bool
+  count_only: bool
+  invert: bool
+}
+
+fn parse_opts(args) -> Opts {
+  return Opts {
+    ignore_case: has_flag(args, "-i"),
+    line_numbers: has_flag(args, "-n"),
+    count_only: has_flag(args, "-c"),
+    invert: has_flag(args, "-v")
+  }
+}
+
+fn has_flag(args, flag: str) -> bool {
+  for arg in args {
+    if arg == flag {
+      return true
+    }
+  }
+  return false
+}
+
+fn positional_args(args) {
+  mut result = []
+  for arg in args {
+    if !starts_with(arg, "-") {
+      push(result, arg)
+    }
+  }
+  return result
+}
+
+fn match_line(line: str, pattern: str, ignore_case: bool) -> bool {
+  if ignore_case {
+    return contains(to_lower(line), to_lower(pattern))
+  }
+  return contains(line, pattern)
+}
+
+fn grep_file(filename: str, pattern: str, opts: Opts, show_filename: bool) -> int {
+  content = fs.read(filename)
+  if content == false {
+    eprintln("grep: " + filename + ": no such file")
+    return 0
+  }
+
+  lines = split(content, "\n")
+  mut count = 0
+  mut line_num = 0
+
+  for line in lines {
+    line_num = line_num + 1
+    matched = match_line(line, pattern, opts.ignore_case)
+
+    if opts.invert {
+      matched = !matched
+    }
+
+    if matched {
+      count = count + 1
+      if !opts.count_only {
+        mut prefix = ""
+        if show_filename {
+          prefix = filename + ":"
+        }
+        if opts.line_numbers {
+          prefix = "{prefix}{line_num}:"
+        }
+        println(prefix + line)
+      }
+    }
+  }
+
+  if opts.count_only {
+    if show_filename {
+      println("{filename}:{count}")
+    } else {
+      println(count)
+    }
+  }
+
+  return count
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 2 {
+    usage()
+  }
+
+  opts = parse_opts(args)
+  pos = positional_args(args)
+
+  if len(pos) < 2 {
+    usage()
+  }
+
+  pattern = pos[0]
+  files = slice(pos, 1, len(pos))
+  show_filename = len(files) > 1
+
+  mut total = 0
+  for file in files {
+    total = total + grep_file(file, pattern, opts, show_filename)
+  }
+
+  if total == 0 {
+    os.exit(1)
+  }
+}
