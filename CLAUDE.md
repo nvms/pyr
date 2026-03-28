@@ -40,23 +40,24 @@ pyr is a bytecode VM language. source compiles to bytecode, bytecode runs on a s
 
 ```
 src/
-  main.zig         - CLI entry point (pyr run, pyr build, pyr init, pyr install, pyr add, pyr version)
-  lexer.zig        - tokenizer
-  token.zig        - token types
-  parser.zig       - recursive descent parser -> AST
-  ast.zig          - AST node definitions
-  sema.zig         - semantic analysis (scope, name resolution, type checking)
-  value.zig        - VM value representation + object types
-  chunk.zig        - bytecode format (opcodes + constant pool)
-  compiler.zig     - AST -> bytecode compiler
-  vm.zig           - bytecode interpreter (switch dispatch)
-  module.zig       - module loading + package-aware resolution
-  pkg.zig          - package manager (manifest parser, lock file, git ops, cache)
+  main.zig            - CLI entry point (pyr run, pyr build, pyr init, pyr install, pyr add, pyr version)
+  lexer.zig           - tokenizer
+  token.zig           - token types
+  parser.zig          - recursive descent parser -> AST
+  ast.zig             - AST node definitions
+  sema.zig            - semantic analysis (scope, name resolution, type checking)
+  value.zig           - VM value representation + object types
+  chunk.zig           - bytecode format (opcodes + constant pool)
+  compiler.zig        - AST -> bytecode compiler
+  vm.zig              - bytecode interpreter (switch dispatch)
+  module.zig          - module loading + package-aware resolution
+  pkg.zig             - package manager (manifest parser, lock file, git ops, cache)
+  bytecode_format.zig - bytecode serialization/deserialization + executable embedding
 ```
 
 ### CLI
 
-- `pyr build <file>` - compile to native binary
+- `pyr build <file> [-o name]` - compile to standalone native binary
 - `pyr run <file>` - compile and run
 - `pyr test [file]` - run tests
 - `pyr fmt <file>...` - format pyr source
@@ -275,7 +276,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - result types and error handling: `T!` for string errors, `T!(E)` for typed errors. `fail expr` creates error_val and returns. `or` catches both nil and error_val. `or |err| { body }` binds the error payload. `expr!` crash-unwraps (exits on nil or error). error_val is a new Value tag wrapping ObjError (heap-allocated, holds payload Value). `jump_if_error` opcode mirrors `jump_if_nil`. `make_error` wraps top-of-stack in error_val. `extract_error` replaces error_val with its payload (for `or |err|`). `unwrap_error` crashes with error info (for `!`). error propagation: `?` checks both nil and error_val, returns whichever on failure. typed errors auto-stringify when propagated into `T!` context via valueToString
 - 87 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, jump_if_nil, jump_if_error, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, net_sendto, net_recvfrom, ffi_call, make_error, unwrap_error, extract_error
 - package manager: git-based, go-style. `pyr.pkg` manifest (name, version, require block). `pyr.lock` lockfile with commit hashes. `~/.pyr/cache/` local cache mirroring git paths. `pyr init [name]` creates manifest, `pyr install` fetches all deps, `pyr add <url> [version]` adds dependency. resolution order: stdlib -> local file -> pyr.pkg dependencies. packages imported by their name field: `imp router { serve }`, `imp router`, `imp router as r`. package entry point is `src/main.pyr`. bare repo cache for efficient fetches, version tags resolved via git rev-parse. src/pkg.zig contains manifest parser, lock file, git ops, cache management. module.zig extended with package_map for fallback resolution
-- CLI: `pyr run <file>` executes on VM, `pyr build <file>` checks, `pyr init [name]`, `pyr install`, `pyr add <url> [version]`, `pyr version`
+- native compilation: `pyr build <file> [-o name]` produces a standalone binary. bytecode serialized to compact binary format (PYRC header, string table, function table, FFI descriptors), appended to the pyr runtime executable with a 16-byte trailer (PYREXE magic + offset + length). at startup, binary checks for embedded bytecode before parsing CLI args. native functions patched by qualified name (module.func for stdlib, bare name for builtins) to handle collisions across std modules. release binaries ~1.3MB. all 34 testable examples produce identical output as built binaries
+- CLI: `pyr run <file>` executes on VM, `pyr build <file> [-o name]` compiles to standalone binary, `pyr init [name]`, `pyr install`, `pyr add <url> [version]`, `pyr version`
 - IoError: built-in enum type (Eof, Closed, Error(str), Timeout) registered in both compiler and sema. I/O operations return IoError variants instead of nil/false on failure. net_read returns Eof on clean close, Closed on reset, Error(msg) on other failures. net_write returns true on success, IoError on failure. fs.read returns IoError on failure. enum equality compares by type_name + variant_index + payloads (structural, not pointer identity). zero-payload variants (Eof, Closed, Timeout) usable as expressions for direct comparison: `if data == Eof`
 - read/accept timeouts: `net.timeout(target, ms)` sets per-connection or per-listener timeout in milliseconds. -1 to disable. stored as timeout_ms on ObjListener/ObjConn. blocking path: poll() with timeout, returns IoError.Timeout on expiry. scheduler path: io_deadlines parallel array stores epoch-ms deadlines, pollAndWake computes min deadline as poll timeout, expires waiters past deadline. connections with timeout set are forced nonblocking so poll path is always reachable
 - while loop body compilation: uses inline beginScope/endScope instead of compileBlock to avoid emitting return_ for trailing expressions. compileBlock emits return_ for trailing expressions (correct for function bodies) but wrong for loop bodies where trailing expressions should be discarded
@@ -306,7 +308,6 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
 1. dogfooding: build real programs in pyr to find rough edges
-2. native compilation: `pyr build <file>` produces a standalone binary. embed the bytecode + VM runtime into a single executable. zphp (same author) already does this with a zig bytecode VM - use that as reference. the binary should be self-contained with no runtime dependencies
 
 ## implementation notes
 

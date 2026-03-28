@@ -239,3 +239,14 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - ptr values: new Value tag `.ptr` stores raw C pointers as u64. null pointers map to nil
 - dlopen/dlsym are declared as manual extern declarations (no @cImport, per learnings.md). library "c" resolves to dlopen(null) for libc access
 - build.zig must have link_libc = true on both exe and test modules for dlopen/dlsym to resolve
+
+## native compilation (bytecode_format.zig)
+
+- `pyr build <file>` serializes compiled bytecode to a binary format, appends it to the pyr runtime executable, produces a standalone binary
+- binary format: PYRC magic (4 bytes), format version (u16), string table (interned, deduplicated), function table (each with chunk: code bytes + tagged constants + line info), FFI descriptor table, root function index
+- constant tags: nil, bool_false, bool_true, int (i64), float (f64), string (string table index), function (function table index), native_fn (qualified name + arity)
+- native functions serialized by qualified name: stdlib natives use "module.name" format (e.g. "net.read", "fs.read") to disambiguate collisions. builtin natives (sqrt, len, etc.) use bare names. at deserialization, placeholder function pointers are patched via `patchNatives()` which looks up qualified names in the stdlib registry, then bare names in compiler builtin_natives
+- executable embedding: serialized bytecode appended after the pyr binary, followed by 16-byte trailer (PYREXE magic + u32 offset + u32 length). `detectEmbeddedBytecode()` reads the trailer from end-of-file at startup. if found, deserializes and runs immediately without CLI arg parsing
+- function serialization handles self-referencing constants (recursive functions): `collectFunction` assigns indices pre-order, deserialization pre-allocates all ObjFunctions before filling in chunks, so cross-references resolve correctly
+- the embedded binary contains the full VM runtime (vm.zig, stdlib, FFI) but no compiler (lexer, parser, sema, compiler). in practice the compiler code is still linked since it's the same binary, but it's not invoked
+- release binaries ~1.3MB
