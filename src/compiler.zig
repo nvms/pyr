@@ -731,9 +731,11 @@ pub const Compiler = struct {
 
     fn compileBlock(self: *Compiler, block: *const ast.Block) void {
         self.beginScope();
+        const scope_base = self.local_count;
 
-        for (block.stmts) |stmt| {
+        for (block.stmts, 0..) |stmt, stmt_idx| {
             self.compileStmt(stmt);
+            self.emitEarlyFrees(block, scope_base, stmt_idx);
         }
 
         if (block.trailing) |expr| {
@@ -743,6 +745,31 @@ pub const Compiler = struct {
         }
 
         self.endScope();
+    }
+
+    fn emitEarlyFrees(self: *Compiler, block: *const ast.Block, scope_base: u8, stmt_idx: usize) void {
+        var slot: u8 = scope_base;
+        while (slot < self.local_count) : (slot += 1) {
+            const local = &self.locals[slot];
+            if (!local.is_owned or local.depth != self.scope_depth) {
+                continue;
+            }
+            var used_later = false;
+            for (block.stmts[stmt_idx + 1 ..]) |future_stmt| {
+                if (stmtUsesName(future_stmt, local.name)) {
+                    used_later = true;
+                    break;
+                }
+            }
+            if (!used_later) {
+                if (block.trailing) |expr| {
+                    if (exprUsesName(expr, local.name)) continue;
+                }
+                self.emitOp(.free_local);
+                self.emitByte(slot);
+                local.is_owned = false;
+            }
+        }
     }
 
     fn compileStmt(self: *Compiler, stmt: ast.Stmt) void {
@@ -2778,6 +2805,106 @@ fn typeHintFromExprWith(type_expr: ?*const ast.TypeExpr, struct_defs: ?*const st
     return .unknown;
 }
 
+fn exprUsesName(expr: *const ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .identifier => |id| std.mem.eql(u8, id, name),
+        .binary => |b| exprUsesName(b.lhs, name) or exprUsesName(b.rhs, name),
+        .unary => |u| exprUsesName(u.operand, name),
+        .field_access => |fa| exprUsesName(fa.target, name),
+        .call => |c| {
+            if (exprUsesName(c.callee, name)) return true;
+            for (c.args) |arg| {
+                if (exprUsesName(arg, name)) return true;
+            }
+            return false;
+        },
+        .index => |idx| exprUsesName(idx.target, name) or exprUsesName(idx.idx, name),
+        .struct_literal => |sl| {
+            for (sl.fields) |f| {
+                if (exprUsesName(f.value, name)) return true;
+            }
+            return false;
+        },
+        .array_literal => |elems| {
+            for (elems) |e| {
+                if (exprUsesName(e, name)) return true;
+            }
+            return false;
+        },
+        .string_interp => |si| {
+            for (si.parts) |part| {
+                switch (part) {
+                    .literal => {},
+                    .expr => |e| if (exprUsesName(e, name)) return true,
+                }
+            }
+            return false;
+        },
+        .if_expr => |ie| {
+            if (exprUsesName(ie.condition, name)) return true;
+            if (blockUsesName(ie.then_block, name)) return true;
+            if (ie.else_branch) |eb| switch (eb) {
+                .block => |blk| if (blockUsesName(blk, name)) return true,
+                .else_if => |ei| if (exprUsesName(ei, name)) return true,
+            };
+            return false;
+        },
+        .match_expr => |me| {
+            if (exprUsesName(me.subject, name)) return true;
+            for (me.arms) |arm| {
+                if (exprUsesName(arm.body, name)) return true;
+            }
+            return false;
+        },
+        .or_expr => |oe| exprUsesName(oe.lhs, name) or exprUsesName(oe.rhs, name),
+        .try_unwrap => |inner| exprUsesName(inner, name),
+        .unwrap_crash => |inner| exprUsesName(inner, name),
+        .closure => |cl| {
+            switch (cl.body) {
+                .block => |blk| return blockUsesName(blk, name),
+                .expr => |e| return exprUsesName(e, name),
+            }
+        },
+        .spawn => |inner| exprUsesName(inner, name),
+        .block => |blk| blockUsesName(blk, name),
+        .pipeline => |pl| {
+            for (pl.stages) |stage| {
+                if (exprUsesName(stage, name)) return true;
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
+fn stmtUsesName(stmt: ast.Stmt, name: []const u8) bool {
+    return switch (stmt.kind) {
+        .binding => |b| exprUsesName(b.value, name),
+        .assign => |a| exprUsesName(a.target, name) or exprUsesName(a.value, name),
+        .compound_assign => |ca| exprUsesName(ca.target, name) or exprUsesName(ca.value, name),
+        .ret => |r| if (r.value) |v| exprUsesName(v, name) else false,
+        .fail => |f| exprUsesName(f.value, name),
+        .expr_stmt => |e| exprUsesName(e, name),
+        .for_loop => |fl| exprUsesName(fl.iterator, name) or blockUsesName(fl.body, name),
+        .while_loop => |wl| exprUsesName(wl.condition, name) or blockUsesName(wl.body, name),
+        .arena_block => |blk| blockUsesName(blk, name),
+        .defer_stmt => |d| switch (d.body) {
+            .expr => |e| exprUsesName(e, name),
+            .block => |blk| blockUsesName(blk, name),
+        },
+    };
+}
+
+fn blockUsesName(block: *const ast.Block, name: []const u8) bool {
+    for (block.stmts) |stmt| {
+        if (stmtUsesName(stmt, name)) return true;
+    }
+    if (block.trailing) |expr| {
+        if (exprUsesName(expr, name)) return true;
+    }
+    return false;
+}
+
 fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
     const code = c.code.items;
     var i: usize = 0;
@@ -2828,6 +2955,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             .push_arena, .pop_arena => {},
             .make_error, .unwrap_error, .extract_error => {},
             .free_local => i += 1,
+            .free_local_if => i += 2,
             .set_global, .define_global, .print, .println => return false,
             .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .net_sendto, .net_recvfrom, .ffi_call => return false,
         }

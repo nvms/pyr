@@ -1073,6 +1073,17 @@ pub const VM = struct {
                     self.stack[abs].deepFree(self.currentAlloc());
                     self.stack[abs] = Value.initNil();
                 },
+                .free_local_if => {
+                    const slot = self.readByte();
+                    const flag_slot = self.readByte();
+                    const frame_ = &self.frames[self.frame_count - 1];
+                    const flag = self.stack[frame_.slot_offset + flag_slot];
+                    if (flag.tag() == .int and flag.asInt() == 0) {
+                        const abs = frame_.slot_offset + slot;
+                        self.stack[abs].deepFree(self.currentAlloc());
+                        self.stack[abs] = Value.initNil();
+                    }
+                },
             }
         }
     }

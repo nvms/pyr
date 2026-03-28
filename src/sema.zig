@@ -545,6 +545,7 @@ pub const Sema = struct {
                 self.checkCallArity(call, expr.span);
                 self.checkMutParams(call, expr.span);
                 self.checkOwnParams(call, expr.span);
+                self.checkBorrowedStore(call, expr.span);
             },
             .index => |idx| {
                 self.analyzeExpr(idx.target);
@@ -753,6 +754,21 @@ pub const Sema = struct {
                     }
                 }
             }
+        }
+    }
+
+    fn checkBorrowedStore(self: *Sema, call: ast.Call, span: ast.Span) void {
+        if (call.callee.kind != .identifier) return;
+        const name = call.callee.kind.identifier;
+        if (!std.mem.eql(u8, name, "push")) return;
+        if (call.args.len != 2) return;
+
+        const val_arg = call.args[1];
+        if (val_arg.kind != .identifier) return;
+        const val_name = val_arg.kind.identifier;
+        const sym = self.resolve(val_name) orelse return;
+        if (sym.kind == .parameter and sym.ownership == .borrowed) {
+            self.emitError(span, "cannot store borrowed value '{s}' in array - it may outlive the borrow. use 'own {s}' in the parameter list to take ownership", .{ val_name, val_name });
         }
     }
 
@@ -1077,4 +1093,14 @@ test "sema: use after move" {
 test "sema: double move" {
     const result = testAnalyze("fn consume(own x: int) {}\nfn main() {\n  a = 5\n  consume(a)\n  consume(a)\n}");
     try expectError(result, "already moved");
+}
+
+test "sema: borrowed value push to array" {
+    const result = testAnalyze("struct U { x: int }\nfn f(arr, u: U) {\n  push(arr, u)\n}");
+    try expectError(result, "cannot store borrowed value");
+}
+
+test "sema: own value push to array ok" {
+    const result = testAnalyze("struct U { x: int }\nfn f(arr, own u: U) {\n  push(arr, u)\n}");
+    try expectNoErrors(result);
 }
