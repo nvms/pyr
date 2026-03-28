@@ -884,6 +884,14 @@ pub const Compiler = struct {
                 }
             }
             if (!used_later) {
+                for (block.stmts[0 .. stmt_idx + 1]) |past_stmt| {
+                    if (mayAliasCallResult(past_stmt, local.name, block.stmts[stmt_idx + 1 ..], block.trailing)) {
+                        used_later = true;
+                        break;
+                    }
+                }
+            }
+            if (!used_later) {
                 if (block.trailing) |expr| {
                     if (exprUsesName(expr, local.name)) continue;
                 }
@@ -3230,6 +3238,30 @@ fn exprUsesName(expr: *const ast.Expr, name: []const u8) bool {
         },
         else => false,
     };
+}
+
+fn mayAliasCallResult(current_stmt: ast.Stmt, name: []const u8, future_stmts: []const ast.Stmt, trailing: ?*const ast.Expr) bool {
+    if (current_stmt.kind != .binding) return false;
+    const b = current_stmt.kind.binding;
+    if (b.value.kind != .call) return false;
+    const call = b.value.kind.call;
+
+    var arg_matches = false;
+    for (call.args) |arg| {
+        if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) {
+            arg_matches = true;
+            break;
+        }
+    }
+    if (!arg_matches) return false;
+
+    for (future_stmts) |future_stmt| {
+        if (stmtUsesName(future_stmt, b.name)) return true;
+    }
+    if (trailing) |expr| {
+        if (exprUsesName(expr, b.name)) return true;
+    }
+    return false;
 }
 
 fn stmtUsesName(stmt: ast.Stmt, name: []const u8) bool {

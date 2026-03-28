@@ -202,13 +202,9 @@ fn main() {
     return nil
   }
 
-  if filter == "." {
-    output(data)
-  } else {
-    result = eval_filter(data, filter)
-    did_iterate = starts_with(filter, ".") && ends_with(filter, "[]")
-    if !did_iterate {
-      output(result)
-    }
+  result = eval_filter(data, filter)
+  did_iterate = starts_with(filter, ".") && ends_with(filter, "[]")
+  if !did_iterate {
+    output(result)
   }
 }
