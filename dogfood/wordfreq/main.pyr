@@ -1,0 +1,94 @@
+imp std/fs
+imp std/os
+imp std/io { println, eprintln }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn is_letter(c: str) -> bool {
+  c >= "a" && c <= "z" || c >= "A" && c <= "Z"
+}
+
+fn tokenize(text: str) -> []str {
+  normalized = text.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+  words = normalized.to_lower().split(" ")
+  mut cleaned = []
+  for w in words {
+    t = w.trim()
+    if len(t) == 0 { continue }
+    mut clean = ""
+    for i in range(len(t)) {
+      c = slice(t, i, i + 1)
+      if is_letter(c) {
+        clean += c
+      }
+    }
+    if len(clean) > 0 {
+      push(cleaned, clean)
+    }
+  }
+  cleaned
+}
+
+fn count_words(words) {
+  mut keys = []
+  mut counts = []
+  for word in words {
+    idx = keys.index_of(word)
+    if idx >= 0 {
+      counts[idx] = counts[idx] + 1
+    } else {
+      push(keys, word)
+      push(counts, 1)
+    }
+  }
+  mut pairs = []
+  for i in range(len(keys)) {
+    push(pairs, [keys[i], counts[i]])
+  }
+  pairs
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    eprintln("usage: wordfreq <file> [top_n]")
+    os.exit(1)
+  }
+
+  filename = args[0]
+  top_n = if len(args) > 1 { int(args[1]) } else { 10 }
+
+  if !fs.exists(filename) {
+    eprintln("wordfreq: {filename}: no such file")
+    os.exit(1)
+  }
+
+  content = fs.read(filename)
+  words = tokenize(content)
+  pairs = count_words(words)
+
+  sorted = pairs.sort_by(fn(a, b) a[1] > b[1])
+
+  limit = if top_n < len(sorted) { top_n } else { len(sorted) }
+
+  println("{len(words)} words, {len(pairs)} unique")
+  println("")
+  for i in range(limit) {
+    word = sorted[i][0]
+    count = sorted[i][1]
+    println("  {count} {word}")
+  }
+}

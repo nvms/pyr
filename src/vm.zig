@@ -24,9 +24,10 @@ pub const ConcatState = struct {
     slot: u8,
     frame: usize,
     active: bool,
+    owner_obj: ?*ObjString,
 
     pub fn init() ConcatState {
-        return .{ .buf = .{}, .slot = 0, .frame = 0, .active = false };
+        return .{ .buf = .{}, .slot = 0, .frame = 0, .active = false, .owner_obj = null };
     }
 };
 
@@ -2527,9 +2528,9 @@ pub const VM = struct {
 
         const rhs_chars = rhs.asString().chars;
 
-        if (cs.active and cs.slot == slot and cs.frame == self.frame_count) {
+        if (cs.active and cs.slot == slot and cs.frame == self.frame_count and cs.owner_obj == lhs.asString()) {
             cs.buf.appendSlice(self.alloc, rhs_chars) catch @panic("oom");
-            self.stack[abs_slot].asString().chars = cs.buf.items;
+            cs.owner_obj.?.chars = cs.buf.items;
             return;
         }
 
@@ -2544,13 +2545,20 @@ pub const VM = struct {
         cs.frame = self.frame_count;
         cs.active = true;
 
-        self.stack[abs_slot].asString().chars = cs.buf.items;
+        const new_obj = ObjString.create(self.alloc, cs.buf.items);
+        cs.owner_obj = new_obj;
+        self.stack[abs_slot] = new_obj.toValue();
     }
 
     fn concatFinalize(self: *VM) void {
         const cs = self.concat;
         if (!cs.active) return;
+        if (cs.owner_obj) |obj| {
+            const copy = self.alloc.dupe(u8, cs.buf.items) catch @panic("oom");
+            obj.chars = copy;
+        }
         cs.active = false;
+        cs.owner_obj = null;
     }
 
     fn push(self: *VM, val: Value) void {
