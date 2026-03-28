@@ -23,12 +23,16 @@ fn pp(val, indent: int) {
   if t == "object" {
     println("\{")
     k = keys(val)
+    mut vals = []
+    for i in range(len(k)) {
+      push(vals, getattr(val, k[i]))
+    }
     for i in range(len(k)) {
       print_indent(indent + 2)
       print("\"")
       print(k[i])
       print("\": ")
-      pp(getattr(val, k[i]), indent + 2)
+      pp(vals[i], indent + 2)
       if i < len(k) - 1 {
         println(",")
       } else {
@@ -198,8 +202,13 @@ fn main() {
     return nil
   }
 
-  result = eval_filter(data, filter)
-  if result != nil {
-    output(result)
+  if filter == "." {
+    output(data)
+  } else {
+    result = eval_filter(data, filter)
+    did_iterate = starts_with(filter, ".") && ends_with(filter, "[]")
+    if !did_iterate {
+      output(result)
+    }
   }
 }
