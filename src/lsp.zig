@@ -397,25 +397,31 @@ pub const Server = struct {
             const label = switch (hint.kind) {
                 .freed => blk: {
                     var tmp: [256]u8 = undefined;
-                    break :blk std.fmt.bufPrint(&tmp, " <- {s} freed", .{hint.name}) catch continue;
+                    break :blk std.fmt.bufPrint(&tmp, "{s} freed", .{hint.name}) catch continue;
                 },
                 .moved => blk: {
                     var tmp: [256]u8 = undefined;
-                    break :blk std.fmt.bufPrint(&tmp, " <- {s} moved (ownership transferred)", .{hint.name}) catch continue;
+                    break :blk std.fmt.bufPrint(&tmp, "{s} moved (ownership transferred)", .{hint.name}) catch continue;
                 },
                 .conditional_free => blk: {
                     var tmp: [256]u8 = undefined;
-                    break :blk std.fmt.bufPrint(&tmp, " <- {s} freed (if not moved)", .{hint.name}) catch continue;
+                    break :blk std.fmt.bufPrint(&tmp, "{s} freed (if not moved)", .{hint.name}) catch continue;
                 },
             };
 
             var escaped_buf: [512]u8 = undefined;
             const escaped = jsonEscape(label, &escaped_buf);
 
+            const kind_str = switch (hint.kind) {
+                .freed => "freed",
+                .moved => "moved",
+                .conditional_free => "conditional_free",
+            };
+
             var entry_buf: [1024]u8 = undefined;
             const entry = std.fmt.bufPrint(&entry_buf,
-                \\{{"position":{{"line":{d},"character":{d}}},"label":"{s}","kind":1,"paddingLeft":true}}
-            , .{ pos.line, pos.character, escaped }) catch continue;
+                \\{{"position":{{"line":{d},"character":{d}}},"label":"{s}","kind":1,"paddingLeft":true,"data":"{s}"}}
+            , .{ pos.line, pos.character, escaped, kind_str }) catch continue;
             buf.appendSlice(alloc, entry) catch return;
         }
 

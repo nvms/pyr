@@ -301,7 +301,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. dogfooding: build real programs in pyr to find rough edges
+1. clone builtin: deep copy of heap-allocated values (structs, arrays). needed because the ownership model enforces single ownership - without clone, users who need the same value in two places must restructure code or manually recreate. `clone(val)` returns a new owned copy. works with UFCS: `val.clone()`. the compiler marks the result as owned (same as struct literals and call returns)
+2. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes
 
