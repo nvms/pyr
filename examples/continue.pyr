@@ -1,0 +1,50 @@
+fn main() {
+  mut sum = 0
+  for i in range(10) {
+    if i == 3 || i == 7 { continue }
+    sum = sum + i
+  }
+  assert_eq(sum, 35)
+
+  mut evens = []
+  for x in [1, 2, 3, 4, 5, 6] {
+    if x % 2 != 0 { continue }
+    push(evens, x)
+  }
+  assert_eq(evens, [2, 4, 6])
+
+  mut count = 0
+  mut i = 0
+  while i < 10 {
+    i = i + 1
+    if i % 3 == 0 { continue }
+    count = count + 1
+  }
+  assert_eq(count, 7)
+
+  mut result = []
+  for i in range(5) {
+    if i == 0 { continue }
+    if i == 3 { break }
+    push(result, i)
+  }
+  assert_eq(result, [1, 2])
+
+  mut outer_sum = 0
+  for i in range(3) {
+    for j in range(3) {
+      if j == 1 { continue }
+      outer_sum = outer_sum + i * 10 + j
+    }
+  }
+  assert_eq(outer_sum, 66)
+
+  mut stepped = []
+  for i in range(0, 20, 3) {
+    if i > 10 { continue }
+    push(stepped, i)
+  }
+  assert_eq(stepped, [0, 3, 6, 9])
+
+  println("continue tests passed")
+}

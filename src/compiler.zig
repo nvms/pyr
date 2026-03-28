@@ -77,6 +77,8 @@ pub const Compiler = struct {
     loop_depth: u8 = 0,
     break_patches: [8][32]usize = undefined,
     break_counts: [8]u8 = .{0} ** 8,
+    continue_patches: [8][32]usize = undefined,
+    continue_counts: [8]u8 = .{0} ** 8,
     loop_local_counts: [8]u8 = .{0} ** 8,
 
     const InlineSub = struct {
@@ -1020,6 +1022,7 @@ pub const Compiler = struct {
                     self.emitOp(.pop);
                 }
                 self.endScope();
+                self.patchContinues();
                 self.emitLoop(loop_start);
                 self.patchJump(exit_jump);
                 self.emitOp(.pop);
@@ -1047,6 +1050,7 @@ pub const Compiler = struct {
                 self.defer_count += 1;
             },
             .break_stmt => self.emitBreak(),
+            .continue_stmt => self.emitContinue(),
             .expr_stmt => |expr| {
                 self.compileExpr(expr);
                 self.emitOp(.pop);
@@ -1140,6 +1144,7 @@ pub const Compiler = struct {
             self.emitOp(.pop);
         }
         self.endScope();
+        self.patchContinues();
 
         self.emitOp(.inc_local);
         self.emitByte(idx_slot);
@@ -1373,6 +1378,7 @@ pub const Compiler = struct {
             self.emitOp(.pop);
         }
         self.endScope();
+        self.patchContinues();
 
         self.locals[counter_idx].name = "$counter";
         if (args.step == null) {
@@ -2752,7 +2758,7 @@ pub const Compiler = struct {
         self.scope_depth -= 1;
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
             const local = self.locals[self.local_count - 1];
-            if (local.is_owned) {
+            if (local.is_owned and self.loop_depth == 0) {
                 if (local.drop_flag_slot) |flag_slot| {
                     self.emitOp(.free_local_if);
                     self.emitByte(self.local_count - 1);
@@ -2923,6 +2929,7 @@ pub const Compiler = struct {
     fn enterLoop(self: *Compiler) void {
         if (self.loop_depth < 8) {
             self.break_counts[self.loop_depth] = 0;
+            self.continue_counts[self.loop_depth] = 0;
             self.loop_local_counts[self.loop_depth] = self.local_count;
         }
         self.loop_depth += 1;
@@ -2935,6 +2942,32 @@ pub const Compiler = struct {
             for (0..count) |i| {
                 self.patchJump(self.break_patches[self.loop_depth][i]);
             }
+        }
+    }
+
+    fn patchContinues(self: *Compiler) void {
+        if (self.loop_depth == 0) return;
+        const depth = self.loop_depth - 1;
+        const count = self.continue_counts[depth];
+        for (0..count) |i| {
+            self.patchJump(self.continue_patches[depth][i]);
+        }
+        self.continue_counts[depth] = 0;
+    }
+
+    fn emitContinue(self: *Compiler) void {
+        if (self.loop_depth == 0) return;
+        const depth = self.loop_depth - 1;
+        const loop_locals = self.loop_local_counts[depth];
+        var count = self.local_count;
+        while (count > loop_locals) {
+            self.emitOp(.pop);
+            count -= 1;
+        }
+        const offset = self.emitJump(.jump);
+        if (self.continue_counts[depth] < 32) {
+            self.continue_patches[depth][self.continue_counts[depth]] = offset;
+            self.continue_counts[depth] += 1;
         }
     }
 
@@ -3282,26 +3315,57 @@ fn exprUsesName(expr: *const ast.Expr, name: []const u8) bool {
 }
 
 fn mayAliasCallResult(current_stmt: ast.Stmt, name: []const u8, future_stmts: []const ast.Stmt, trailing: ?*const ast.Expr) bool {
-    if (current_stmt.kind != .binding) return false;
-    const b = current_stmt.kind.binding;
-    if (b.value.kind != .call) return false;
-    const call = b.value.kind.call;
-
-    var arg_matches = false;
-    for (call.args) |arg| {
-        if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) {
-            arg_matches = true;
-            break;
+    if (current_stmt.kind == .binding) {
+        const b = current_stmt.kind.binding;
+        if (b.value.kind == .call) {
+            const call = b.value.kind.call;
+            var arg_matches = false;
+            for (call.args) |arg| {
+                if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) {
+                    arg_matches = true;
+                    break;
+                }
+            }
+            if (arg_matches) {
+                for (future_stmts) |future_stmt| {
+                    if (stmtUsesName(future_stmt, b.name)) return true;
+                }
+                if (trailing) |expr| {
+                    if (exprUsesName(expr, b.name)) return true;
+                }
+            }
         }
     }
-    if (!arg_matches) return false;
 
-    for (future_stmts) |future_stmt| {
-        if (stmtUsesName(future_stmt, b.name)) return true;
+    // push(arr, val) and similar: if name is an arg to a call in an expr_stmt,
+    // and another arg to that call is used later, the value may be stored
+    if (current_stmt.kind == .expr_stmt) {
+        const expr = current_stmt.kind.expr_stmt;
+        if (expr.kind == .call) {
+            const call = expr.kind.call;
+            var arg_matches = false;
+            for (call.args) |arg| {
+                if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) {
+                    arg_matches = true;
+                    break;
+                }
+            }
+            if (arg_matches) {
+                for (call.args) |arg| {
+                    if (arg.kind != .identifier) continue;
+                    const other = arg.kind.identifier;
+                    if (std.mem.eql(u8, other, name)) continue;
+                    for (future_stmts) |future_stmt| {
+                        if (stmtUsesName(future_stmt, other)) return true;
+                    }
+                    if (trailing) |texpr| {
+                        if (exprUsesName(texpr, other)) return true;
+                    }
+                }
+            }
+        }
     }
-    if (trailing) |expr| {
-        if (exprUsesName(expr, b.name)) return true;
-    }
+
     return false;
 }
 
@@ -3320,7 +3384,7 @@ fn stmtUsesName(stmt: ast.Stmt, name: []const u8) bool {
             .expr => |e| exprUsesName(e, name),
             .block => |blk| blockUsesName(blk, name),
         },
-        .break_stmt => false,
+        .break_stmt, .continue_stmt => false,
     };
 }
 

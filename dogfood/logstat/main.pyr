@@ -75,12 +75,12 @@ fn top_slowest(entries, n: int) -> []str {
     mut best_dur = -1
 
     for j in range(len(entries)) {
-      if !used.contains(j) {
-        dur = getattr(entries[j], "duration_ms")
-        if dur != nil && dur > best_dur {
-          best_dur = dur
-          best_idx = j
-        }
+      if used.contains(j) { continue }
+      dur = getattr(entries[j], "duration_ms")
+      if dur == nil { continue }
+      if dur > best_dur {
+        best_dur = dur
+        best_idx = j
       }
     }
 
@@ -97,14 +97,13 @@ fn parse_lines(lines) {
   mut parse_errors = 0
   for line in lines {
     trimmed = trim(line)
-    if len(trimmed) > 0 {
-      obj = json.decode(trimmed)
-      if obj != nil {
-        push(entries, obj)
-      } else {
-        parse_errors = parse_errors + 1
-      }
+    if len(trimmed) == 0 { continue }
+    obj = json.decode(trimmed)
+    if obj == nil {
+      parse_errors = parse_errors + 1
+      continue
     }
+    push(entries, obj)
   }
   entries
 }

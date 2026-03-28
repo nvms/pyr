@@ -117,6 +117,7 @@ pub const Stmt = struct {
         arena_block: *const Block,
         defer_stmt: Defer,
         break_stmt,
+        continue_stmt,
         expr_stmt: *const Expr,
     };
 };

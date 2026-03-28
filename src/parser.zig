@@ -481,6 +481,14 @@ pub const Parser = struct {
             };
         }
 
+        if (self.peek() == .kw_continue) {
+            _ = self.expect(.kw_continue) orelse return null;
+            return .{
+                .span = self.spanFrom(start),
+                .kind = .continue_stmt,
+            };
+        }
+
         if (self.peek() == .kw_defer) {
             _ = self.expect(.kw_defer) orelse return null;
             self.skipNewlines();
