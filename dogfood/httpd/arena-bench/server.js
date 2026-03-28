@@ -16,7 +16,7 @@ http.createServer((req, res) => {
   res.writeHead(200, {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(body),
-    'Connection': 'close',
+    'Connection': 'keep-alive',
   })
   res.end(body)
 }).listen(port, () => console.log(`node server on :${port}`))

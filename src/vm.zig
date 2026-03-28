@@ -86,11 +86,16 @@ pub const Scheduler = struct {
     io_write_data: [][]const u8,
     io_write_off: []usize,
     io_deadlines: []i64,
+    pollfds: []std.posix.pollfd,
+    free_tasks: []?*ObjTask,
+    free_task_count: u32,
+    free_task_cap: u32,
 
     const IoOp = enum(u8) { accept, read, write, connect, recvfrom };
     const INIT_QUEUE_CAP = 64;
     const INIT_IO_CAP = 64;
     const INIT_AWAIT_CAP = 16;
+    const INIT_FREE_CAP = 64;
 
     fn init(alloc: std.mem.Allocator) Scheduler {
         return .{
@@ -113,6 +118,10 @@ pub const Scheduler = struct {
             .io_write_data = allocSlice([]const u8, alloc, INIT_IO_CAP),
             .io_write_off = allocSlice(usize, alloc, INIT_IO_CAP),
             .io_deadlines = allocSlice(i64, alloc, INIT_IO_CAP),
+            .pollfds = alloc.alloc(std.posix.pollfd, INIT_IO_CAP) catch @panic("oom"),
+            .free_tasks = allocSlice(?*ObjTask, alloc, INIT_FREE_CAP),
+            .free_task_count = 0,
+            .free_task_cap = INIT_FREE_CAP,
         };
     }
 
@@ -163,6 +172,7 @@ pub const Scheduler = struct {
         self.io_write_data = self.alloc.realloc(self.io_write_data, new_cap) catch @panic("oom");
         self.io_write_off = self.alloc.realloc(self.io_write_off, new_cap) catch @panic("oom");
         self.io_deadlines = self.alloc.realloc(self.io_deadlines, new_cap) catch @panic("oom");
+        self.pollfds = self.alloc.realloc(self.pollfds, new_cap) catch @panic("oom");
         self.io_cap = new_cap;
     }
 
@@ -202,6 +212,43 @@ pub const Scheduler = struct {
         self.io_tasks[self.io_count] = null;
     }
 
+    fn recycleTask(self: *Scheduler, task: *ObjTask) void {
+        if (self.free_task_count >= self.free_task_cap) {
+            const new_cap = self.free_task_cap * 2;
+            const new_buf = self.alloc.alloc(?*ObjTask, new_cap) catch return;
+            @memset(new_buf, null);
+            @memcpy(new_buf[0..self.free_task_count], self.free_tasks[0..self.free_task_count]);
+            self.alloc.free(self.free_tasks);
+            self.free_tasks = new_buf;
+            self.free_task_cap = new_cap;
+        }
+        self.free_tasks[self.free_task_count] = task;
+        self.free_task_count += 1;
+    }
+
+    fn reclaimTask(self: *Scheduler, func: *ObjFunction, closure: ?*ObjClosure) ?*ObjTask {
+        if (self.free_task_count == 0) return null;
+        self.free_task_count -= 1;
+        const task = self.free_tasks[self.free_task_count].?;
+        self.free_tasks[self.free_task_count] = null;
+        task.stack[0] = if (closure) |cl| cl.toValue() else func.toValue();
+        task.frames[0] = .{
+            .function = func,
+            .ip = 0,
+            .slot_offset = 0,
+            .closure = closure,
+        };
+        task.frame_count = 1;
+        task.sp = 1;
+        task.state = .ready;
+        task.result = Value.initNil();
+        task.waiting_on = null;
+        task.pending_send = Value.initNil();
+        task.arena_stack.depth = 0;
+        task.concat.active = false;
+        return task;
+    }
+
     fn growAwaiters(self: *Scheduler) void {
         const new_cap = self.await_cap * 2;
         const new_buf = self.alloc.alloc(?*ObjTask, new_cap) catch @panic("oom");
@@ -213,10 +260,17 @@ pub const Scheduler = struct {
     }
 
     fn pollAndWake(self: *Scheduler, alloc: std.mem.Allocator) void {
+        self.pollAndWakeTimeout(alloc, -1);
+    }
+
+    fn quickPoll(self: *Scheduler, alloc: std.mem.Allocator) void {
+        self.pollAndWakeTimeout(alloc, 0);
+    }
+
+    fn pollAndWakeTimeout(self: *Scheduler, alloc: std.mem.Allocator, max_timeout: i32) void {
         if (self.io_count == 0) return;
 
-        const pollfds = alloc.alloc(std.posix.pollfd, self.io_count) catch return;
-        defer alloc.free(pollfds);
+        const pollfds = self.pollfds;
 
         var min_deadline: i64 = -1;
         var i: u32 = 0;
@@ -230,13 +284,14 @@ pub const Scheduler = struct {
             }
         }
 
-        var poll_timeout: i32 = -1;
+        var poll_timeout: i32 = max_timeout;
         if (min_deadline >= 0) {
             const remaining = min_deadline - nowMs();
-            poll_timeout = if (remaining <= 0) 0 else @intCast(@min(remaining, std.math.maxInt(i32)));
+            const deadline_timeout: i32 = if (remaining <= 0) 0 else @intCast(@min(remaining, std.math.maxInt(i32)));
+            poll_timeout = if (max_timeout < 0) deadline_timeout else @min(max_timeout, deadline_timeout);
         }
 
-        _ = std.posix.poll(pollfds, poll_timeout) catch return;
+        _ = std.posix.poll(pollfds[0..self.io_count], poll_timeout) catch return;
 
         const now = nowMs();
         var j: u32 = self.io_count;
@@ -551,16 +606,6 @@ pub const VM = struct {
                 .loop_ => {
                     const offset = self.readU16();
                     self.currentFrame().ip -= offset;
-                    if (self.sched.active and self.sched.queue_count > 0) {
-                        if (self.sched.current_task) |ct| {
-                            self.saveToTask(ct);
-                            ct.state = .ready;
-                            self.sched.enqueue(ct);
-                            if (self.sched.dequeue()) |next| {
-                                self.switchTo(next);
-                            }
-                        }
-                    }
                 },
 
                 .call => {
@@ -1873,7 +1918,7 @@ pub const VM = struct {
         };
 
         const closure = if (callee.tag() == .closure) callee.asClosure() else null;
-        const task = ObjTask.create(self.alloc, func, closure);
+        const task = self.sched.reclaimTask(func, closure) orelse ObjTask.create(self.alloc, func, closure);
         task.state = .ready;
         self.sched.enqueue(task);
 
@@ -1895,7 +1940,8 @@ pub const VM = struct {
             ct.state = .done;
             if (self.sp > 0) ct.result = self.stack[self.sp - 1];
 
-            self.wakeAwaiters(ct);
+            const had_waiters = self.wakeAwaiters(ct);
+            if (!had_waiters) sched.recycleTask(ct);
         }
 
         if (self.scheduleNextOrPoll()) |next| {
@@ -1908,8 +1954,9 @@ pub const VM = struct {
         return false;
     }
 
-    fn wakeAwaiters(self: *VM, finished: *ObjTask) void {
+    fn wakeAwaiters(self: *VM, finished: *ObjTask) bool {
         const sched = self.sched;
+        var woke_any = false;
         var i: u32 = 0;
         while (i < sched.await_waiter_count) {
             if (sched.await_waiters[i]) |waiter| {
@@ -1919,6 +1966,7 @@ pub const VM = struct {
                     waiter.state = .ready;
                     waiter.waiting_on = null;
                     sched.enqueue(waiter);
+                    woke_any = true;
 
                     sched.await_waiter_count -= 1;
                     sched.await_waiters[i] = sched.await_waiters[sched.await_waiter_count];
@@ -1928,6 +1976,7 @@ pub const VM = struct {
             }
             i += 1;
         }
+        return woke_any;
     }
 
     fn execChannelSend(self: *VM) Error!void {

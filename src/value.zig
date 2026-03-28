@@ -623,6 +623,14 @@ pub const ObjTask = struct {
         return t;
     }
 
+    pub fn destroy(self: *ObjTask, alloc: std.mem.Allocator) void {
+        alloc.free(self.stack);
+        alloc.free(self.frames);
+        alloc.destroy(self.arena_stack);
+        alloc.destroy(self.concat);
+        alloc.destroy(self);
+    }
+
     pub fn toValue(self: *ObjTask) Value {
         return Value.initTask(self);
     }

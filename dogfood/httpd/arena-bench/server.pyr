@@ -11,26 +11,26 @@ struct User {
 }
 
 fn handle(conn) {
-  raw = conn.read()
-  if raw == Eof || raw == Closed {
-    net.close(conn)
-    return nil
-  }
-
-  req = parse_request(raw)
-  if req == nil {
-    net.close(conn)
-    return nil
-  }
-
-  arena {
-    mut parts = []
-    for i in range(10) {
-      push(parts, "\{\"id\":{i},\"name\":\"user_{i}\",\"score\":{i * 17 + 42}\}")
+  while true {
+    raw = conn.read()
+    if raw == Eof || raw == Closed {
+      break
     }
-    body = "[" + join(parts, ",") + "]"
-    resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n{body}"
-    conn.write(resp)
+
+    req = parse_request(raw)
+    if req == nil {
+      break
+    }
+
+    arena {
+      mut parts = []
+      for i in range(10) {
+        push(parts, "\{\"id\":{i},\"name\":\"user_{i}\",\"score\":{i * 17 + 42}\}")
+      }
+      body = "[" + join(parts, ",") + "]"
+      resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: keep-alive\r\n\r\n{body}"
+      conn.write(resp)
+    }
   }
 
   net.close(conn)
