@@ -49,7 +49,7 @@ pub const Symbol = struct {
     ownership: Ownership = .none,
 
     pub const Kind = enum { variable, function, parameter, type_name, builtin };
-    pub const Ownership = enum { none, owned, borrowed, moved };
+    pub const Ownership = enum { none, owned, borrowed, moved, maybe_moved };
 };
 
 const t_void: Type = .void;
@@ -122,6 +122,7 @@ pub const Sema = struct {
     fn_return_type: ?*const Type,
     module_loader: ?*ModuleLoader,
     module_dir: []const u8,
+    cond_depth: u32 = 0,
 
     pub fn analyze(arena: std.mem.Allocator, tree: ast.Ast) Analysis {
         return analyzeModule(arena, tree, null, ".");
@@ -553,14 +554,17 @@ pub const Sema = struct {
             },
             .if_expr => |ie| {
                 self.analyzeExpr(ie.condition);
+                self.cond_depth += 1;
                 self.analyzeBlock(ie.then_block);
                 if (ie.else_branch) |eb| switch (eb) {
                     .block => |block| self.analyzeBlock(block),
                     .else_if => |ei| self.analyzeExpr(ei),
                 };
+                self.cond_depth -= 1;
             },
             .match_expr => |me| {
                 self.analyzeExpr(me.subject);
+                self.cond_depth += 1;
                 for (me.arms) |arm| {
                     self.pushScope();
                     self.bindPattern(arm.pattern);
@@ -568,6 +572,7 @@ pub const Sema = struct {
                     self.analyzeExpr(arm.body);
                     self.popScope();
                 }
+                self.cond_depth -= 1;
             },
             .block => |block| self.analyzeBlock(block),
             .closure => |cl| {
@@ -748,6 +753,8 @@ pub const Sema = struct {
                     if (self.resolvePtr(arg_name)) |arg_sym| {
                         if (arg_sym.ownership == .moved) {
                             self.emitError(span, "argument {d} to '{s}': value '{s}' was already moved", .{ i + 1, name, arg_name });
+                        } else if (self.cond_depth > 0) {
+                            arg_sym.ownership = .maybe_moved;
                         } else {
                             arg_sym.ownership = .moved;
                         }
@@ -1103,4 +1110,30 @@ test "sema: borrowed value push to array" {
 test "sema: own value push to array ok" {
     const result = testAnalyze("struct U { x: int }\nfn f(arr, own u: U) {\n  push(arr, u)\n}");
     try expectNoErrors(result);
+}
+
+test "sema: conditional move allowed (maybe_moved)" {
+    const result = testAnalyze(
+        \\fn consume(own x: int) {}
+        \\fn main() {
+        \\  a = 5
+        \\  if a > 3 {
+        \\    consume(a)
+        \\  }
+        \\  println(a)
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: unconditional move still errors" {
+    const result = testAnalyze(
+        \\fn consume(own x: int) {}
+        \\fn main() {
+        \\  a = 5
+        \\  consume(a)
+        \\  println(a)
+        \\}
+    );
+    try expectError(result, "use of moved value");
 }

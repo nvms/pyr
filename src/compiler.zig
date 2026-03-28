@@ -43,6 +43,7 @@ pub const Compiler = struct {
     enum_variants: std.StringHashMapUnmanaged(VariantInfo),
     fn_table: std.StringHashMapUnmanaged(*ObjFunction),
     fn_returns: std.StringHashMapUnmanaged(TypeHint),
+    fn_own_params: std.StringHashMapUnmanaged(u64) = .{},
     upvalues: [256]Upvalue,
     upvalue_count: u8,
     module_loader: ?*ModuleLoader,
@@ -56,6 +57,7 @@ pub const Compiler = struct {
     current_line: u32,
     deferred: [64]DeferEntry = undefined,
     defer_count: u8 = 0,
+    cond_depth: u32 = 0,
     inline_fns: std.StringHashMapUnmanaged(ast.FnDecl) = .{},
     inline_subs: ?*[16]InlineSub = null,
     inline_sub_count: u8 = 0,
@@ -75,6 +77,7 @@ pub const Compiler = struct {
         depth: u32,
         type_hint: TypeHint = .unknown,
         is_owned: bool = false,
+        drop_flag_slot: ?u8 = null,
     };
 
     pub const Upvalue = struct {
@@ -476,6 +479,13 @@ pub const Compiler = struct {
                 if (decl.body == .expr and isInlineable(decl.body.expr)) {
                     self.inline_fns.put(self.alloc, decl.name, decl) catch @panic("oom");
                 }
+                var own_mask: u64 = 0;
+                for (decl.params, 0..) |param, pi| {
+                    if (param.is_own) own_mask |= @as(u64, 1) << @intCast(pi);
+                }
+                if (own_mask != 0) {
+                    self.fn_own_params.put(self.alloc, decl.name, own_mask) catch @panic("oom");
+                }
             },
             .struct_decl => |decl| {
                 const names = self.alloc.alloc([]const u8, decl.fields.len) catch @panic("oom");
@@ -765,8 +775,14 @@ pub const Compiler = struct {
                 if (block.trailing) |expr| {
                     if (exprUsesName(expr, local.name)) continue;
                 }
-                self.emitOp(.free_local);
-                self.emitByte(slot);
+                if (local.drop_flag_slot) |flag_slot| {
+                    self.emitOp(.free_local_if);
+                    self.emitByte(slot);
+                    self.emitByte(flag_slot);
+                } else {
+                    self.emitOp(.free_local);
+                    self.emitByte(slot);
+                }
                 local.is_owned = false;
             }
         }
@@ -1728,6 +1744,44 @@ pub const Compiler = struct {
         }
         self.emitOp(.call);
         self.emitByte(@intCast(call.args.len));
+        self.emitDropFlags(call);
+    }
+
+    fn emitDropFlags(self: *Compiler, call: ast.Call) void {
+        if (self.cond_depth == 0) return;
+        if (call.callee.kind != .identifier) return;
+        const callee_name = call.callee.kind.identifier;
+
+        var own_mask: u64 = 0;
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.fn_own_params.get(callee_name)) |mask| {
+                own_mask = mask;
+                break;
+            }
+            c = cur.enclosing;
+        }
+        if (own_mask == 0) return;
+
+        for (call.args, 0..) |arg, i| {
+            if (i >= 64) break;
+            if ((own_mask & (@as(u64, 1) << @intCast(i))) == 0) continue;
+            if (arg.kind != .identifier) continue;
+            const arg_name = arg.kind.identifier;
+            const slot = self.resolveLocal(arg_name) orelse continue;
+            const local = &self.locals[slot];
+            if (!local.is_owned) continue;
+
+            if (local.drop_flag_slot == null) {
+                self.emitConstant(Value.initInt(0));
+                self.addLocal("$drop_flag");
+                local.drop_flag_slot = self.local_count - 1;
+            }
+            self.emitConstant(Value.initInt(1));
+            self.emitOp(.set_local);
+            self.emitByte(local.drop_flag_slot.?);
+            self.emitOp(.pop);
+        }
     }
 
     fn tryInlineCall(self: *Compiler, name: []const u8, args: []const *const ast.Expr) bool {
@@ -1803,6 +1857,7 @@ pub const Compiler = struct {
         const then_jump = self.emitJump(.jump_if_false);
         self.emitOp(.pop);
 
+        self.cond_depth += 1;
         self.compileBlockValue(ie.then_block);
 
         const else_jump = self.emitJump(.jump);
@@ -1815,6 +1870,7 @@ pub const Compiler = struct {
         } else {
             self.emitOp(.nil);
         }
+        self.cond_depth -= 1;
 
         self.patchJump(else_jump);
     }
@@ -2503,8 +2559,14 @@ pub const Compiler = struct {
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
             const local = self.locals[self.local_count - 1];
             if (local.is_owned) {
-                self.emitOp(.free_local);
-                self.emitByte(self.local_count - 1);
+                if (local.drop_flag_slot) |flag_slot| {
+                    self.emitOp(.free_local_if);
+                    self.emitByte(self.local_count - 1);
+                    self.emitByte(flag_slot);
+                } else {
+                    self.emitOp(.free_local);
+                    self.emitByte(self.local_count - 1);
+                }
             }
             self.emitOp(.pop);
             self.local_count -= 1;
