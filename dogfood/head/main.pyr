@@ -1,0 +1,69 @@
+imp std/fs
+imp std/os
+imp std/io { println, eprintln }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn parse_count(args: []str) -> int {
+  for arg in args {
+    if starts_with(arg, "-") && len(arg) > 1 && !starts_with(arg, "--") {
+      n = slice(arg, 1, len(arg))
+      return int(n)
+    }
+  }
+  return 10
+}
+
+fn head_file(filename: str, n: int) {
+  if !fs.exists(filename) {
+    eprintln("head: {filename}: no such file")
+    return nil
+  }
+  content = fs.read(filename)
+  lines = split(content, "\n")
+  limit = n
+  if len(lines) < limit {
+    limit = len(lines)
+  }
+  for i in range(limit) {
+    println(lines[i])
+  }
+}
+
+fn main() {
+  args = user_args()
+
+  mut files = []
+  for arg in args {
+    if !starts_with(arg, "-") {
+      push(files, arg)
+    }
+  }
+
+  if len(files) == 0 {
+    eprintln("usage: head [-N] <file> [file...]")
+    os.exit(1)
+  }
+
+  n = parse_count(args)
+
+  for i in range(len(files)) {
+    if len(files) > 1 {
+      println("==> {files[i]} <==")
+    }
+    head_file(files[i], n)
+  }
+}

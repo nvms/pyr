@@ -1,0 +1,64 @@
+imp std/fs
+imp std/os
+imp std/io { print, eprintln }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn has_flag(args: []str, flag: str) -> bool {
+  for arg in args {
+    if arg == flag { return true }
+  }
+  return false
+}
+
+fn cat_file(filename: str, number_lines: bool) {
+  if !fs.exists(filename) {
+    eprintln("cat: {filename}: no such file")
+    return nil
+  }
+
+  content = fs.read(filename)
+
+  if !number_lines {
+    print(content)
+    return nil
+  }
+
+  lines = split(content, "\n")
+  mut n = 1
+  for line in lines {
+    if n < len(lines) || len(line) > 0 {
+      print("{n}\t{line}\n")
+      n = n + 1
+    }
+  }
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    eprintln("usage: cat [-n] <file> [file...]")
+    os.exit(1)
+  }
+
+  number_lines = has_flag(args, "-n")
+
+  for arg in args {
+    if !starts_with(arg, "-") {
+      cat_file(arg, number_lines)
+    }
+  }
+}

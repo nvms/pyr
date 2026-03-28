@@ -274,6 +274,11 @@ pub const Compiler = struct {
         if (v.tag() == .int) return v;
         if (v.tag() == .float) return Value.initInt(@intFromFloat(v.asFloat()));
         if (v.tag() == .bool_) return Value.initInt(@intFromBool(v.asBool()));
+        if (v.tag() == .string) {
+            const chars = v.asString().chars;
+            const n = std.fmt.parseInt(i45, chars, 10) catch return Value.initInt(0);
+            return Value.initInt(n);
+        }
         return Value.initInt(0);
     }
 
@@ -281,6 +286,11 @@ pub const Compiler = struct {
         const v = args[0];
         if (v.tag() == .float) return v;
         if (v.tag() == .int) return Value.initFloat(@floatFromInt(v.asInt()));
+        if (v.tag() == .string) {
+            const chars = v.asString().chars;
+            const n = std.fmt.parseFloat(f64, chars) catch return Value.initFloat(0.0);
+            return Value.initFloat(n);
+        }
         return Value.initFloat(0.0);
     }
 

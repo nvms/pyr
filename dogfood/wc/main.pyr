@@ -1,0 +1,129 @@
+imp std/fs
+imp std/os
+imp std/io { println, eprintln }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+struct Counts {
+  lines: int
+  words: int
+  bytes: int
+}
+
+fn count(text: str) -> Counts {
+  mut lines = 0
+  mut words = 0
+  mut in_word = false
+
+  for i in range(len(text)) {
+    c = text[i]
+    if c == "\n" {
+      lines = lines + 1
+    }
+    if c == " " || c == "\n" || c == "\t" || c == "\r" {
+      in_word = false
+    } else {
+      if !in_word {
+        words = words + 1
+        in_word = true
+      }
+    }
+  }
+
+  return Counts {
+    lines: lines,
+    words: words,
+    bytes: len(text)
+  }
+}
+
+fn wc_file(filename: str, show_lines: bool, show_words: bool, show_bytes: bool) -> Counts {
+  if !fs.exists(filename) {
+    eprintln("wc: {filename}: no such file")
+    return Counts { lines: 0, words: 0, bytes: 0 }
+  }
+
+  content = fs.read(filename)
+  c = count(content)
+
+  mut parts = []
+  if show_lines { push(parts, "{c.lines}") }
+  if show_words { push(parts, "{c.words}") }
+  if show_bytes { push(parts, "{c.bytes}") }
+  println(join(parts, "\t") + "\t" + filename)
+
+  return c
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    eprintln("usage: wc [-l] [-w] [-c] <file> [file...]")
+    os.exit(1)
+  }
+
+  show_lines = has_flag(args, "-l")
+  show_words = has_flag(args, "-w")
+  show_bytes = has_flag(args, "-c")
+
+  if !show_lines && !show_words && !show_bytes {
+    show_lines = true
+    show_words = true
+    show_bytes = true
+  }
+
+  files = positional_args(args)
+  if len(files) == 0 {
+    eprintln("usage: wc [-l] [-w] [-c] <file> [file...]")
+    os.exit(1)
+  }
+
+  mut total_lines = 0
+  mut total_words = 0
+  mut total_bytes = 0
+
+  for file in files {
+    c = wc_file(file, show_lines, show_words, show_bytes)
+    total_lines = total_lines + c.lines
+    total_words = total_words + c.words
+    total_bytes = total_bytes + c.bytes
+  }
+
+  if len(files) > 1 {
+    mut parts = []
+    if show_lines { push(parts, "{total_lines}") }
+    if show_words { push(parts, "{total_words}") }
+    if show_bytes { push(parts, "{total_bytes}") }
+    println(join(parts, "\t") + "\ttotal")
+  }
+}
+
+fn has_flag(args: []str, flag: str) -> bool {
+  for arg in args {
+    if arg == flag { return true }
+  }
+  return false
+}
+
+fn positional_args(args: []str) -> []str {
+  mut result = []
+  for arg in args {
+    if !starts_with(arg, "-") {
+      push(result, arg)
+    }
+  }
+  return result
+}

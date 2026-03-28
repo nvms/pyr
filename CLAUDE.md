@@ -303,6 +303,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
 1. dogfooding: build real programs in pyr to find rough edges
+2. native compilation: `pyr build <file>` produces a standalone binary. embed the bytecode + VM runtime into a single executable. zphp (same author) already does this with a zig bytecode VM - use that as reference. the binary should be self-contained with no runtime dependencies
 
 ## implementation notes
 
