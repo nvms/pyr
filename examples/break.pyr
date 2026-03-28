@@ -1,0 +1,27 @@
+fn main() {
+  for i in range(10) {
+    if i == 5 {
+      break
+    }
+    println(i)
+  }
+
+  items = ["a", "b", "target", "c"]
+  for item in items {
+    if item == "target" {
+      break
+    }
+    println(item)
+  }
+
+  mut x = 0
+  while x < 100 {
+    if x > 2 {
+      break
+    }
+    println(x)
+    x = x + 1
+  }
+
+  println("done")
+}

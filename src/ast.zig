@@ -116,6 +116,7 @@ pub const Stmt = struct {
         while_loop: WhileLoop,
         arena_block: *const Block,
         defer_stmt: Defer,
+        break_stmt,
         expr_stmt: *const Expr,
     };
 };

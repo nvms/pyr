@@ -473,6 +473,14 @@ pub const Parser = struct {
             return self.parseWhileStmt(start);
         }
 
+        if (self.peek() == .kw_break) {
+            _ = self.expect(.kw_break) orelse return null;
+            return .{
+                .span = self.spanFrom(start),
+                .kind = .break_stmt,
+            };
+        }
+
         if (self.peek() == .kw_defer) {
             _ = self.expect(.kw_defer) orelse return null;
             self.skipNewlines();

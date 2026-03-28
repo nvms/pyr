@@ -479,6 +479,7 @@ pub const Sema = struct {
                     .block => |blk| self.analyzeBlock(blk),
                 }
             },
+            .break_stmt => {},
             .expr_stmt => |expr| self.analyzeExpr(expr),
         }
     }

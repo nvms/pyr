@@ -74,6 +74,10 @@ pub const Compiler = struct {
     inline_sub_count: u8 = 0,
     hints: ?*std.ArrayListUnmanaged(OwnershipHint) = null,
     current_span: ast.Span = .{ .start = 0, .end = 0 },
+    loop_depth: u8 = 0,
+    break_patches: [8][32]usize = undefined,
+    break_counts: [8]u8 = .{0} ** 8,
+    loop_local_counts: [8]u8 = .{0} ** 8,
 
     const InlineSub = struct {
         name: []const u8,
@@ -927,6 +931,7 @@ pub const Compiler = struct {
                 self.compileExpr(wl.condition);
                 const exit_jump = self.emitJump(.jump_if_false);
                 self.emitOp(.pop);
+                self.enterLoop();
                 self.beginScope();
                 for (wl.body.stmts) |s| self.compileStmt(s);
                 if (wl.body.trailing) |te| {
@@ -937,6 +942,7 @@ pub const Compiler = struct {
                 self.emitLoop(loop_start);
                 self.patchJump(exit_jump);
                 self.emitOp(.pop);
+                self.exitLoop();
             },
             .arena_block => |blk| {
                 self.emitOp(.push_arena);
@@ -951,6 +957,7 @@ pub const Compiler = struct {
                 };
                 self.defer_count += 1;
             },
+            .break_stmt => self.emitBreak(),
             .expr_stmt => |expr| {
                 self.compileExpr(expr);
                 self.emitOp(.pop);
@@ -1031,6 +1038,7 @@ pub const Compiler = struct {
         const exit_jump = self.emitJump(.jump_if_false);
         self.emitOp(.pop);
 
+        self.enterLoop();
         self.beginScope();
         self.emitOp(.index_local_local);
         self.emitByte(iter_slot);
@@ -1050,6 +1058,7 @@ pub const Compiler = struct {
         self.emitLoop(loop_start);
         self.patchJump(exit_jump);
         self.emitOp(.pop);
+        self.exitLoop();
 
         self.endScope();
     }
@@ -1265,6 +1274,7 @@ pub const Compiler = struct {
 
         self.locals[counter_idx].name = binding;
 
+        self.enterLoop();
         self.beginScope();
         for (body.stmts) |s| {
             self.compileStmt(s);
@@ -1292,6 +1302,7 @@ pub const Compiler = struct {
         self.emitLoop(loop_start);
         self.patchJump(exit_jump);
         self.emitOp(.pop);
+        self.exitLoop();
 
         self.endScope();
     }
@@ -2820,6 +2831,40 @@ pub const Compiler = struct {
         return &self.function.chunk;
     }
 
+    fn enterLoop(self: *Compiler) void {
+        if (self.loop_depth < 8) {
+            self.break_counts[self.loop_depth] = 0;
+            self.loop_local_counts[self.loop_depth] = self.local_count;
+        }
+        self.loop_depth += 1;
+    }
+
+    fn exitLoop(self: *Compiler) void {
+        if (self.loop_depth > 0) {
+            self.loop_depth -= 1;
+            const count = self.break_counts[self.loop_depth];
+            for (0..count) |i| {
+                self.patchJump(self.break_patches[self.loop_depth][i]);
+            }
+        }
+    }
+
+    fn emitBreak(self: *Compiler) void {
+        if (self.loop_depth == 0) return;
+        const depth = self.loop_depth - 1;
+        const loop_locals = self.loop_local_counts[depth];
+        var count = self.local_count;
+        while (count > loop_locals) {
+            count -= 1;
+            self.emitOp(.pop);
+        }
+        const offset = self.emitJump(.jump);
+        if (self.break_counts[depth] < 32) {
+            self.break_patches[depth][self.break_counts[depth]] = offset;
+            self.break_counts[depth] += 1;
+        }
+    }
+
     fn recordHint(self: *Compiler, kind: OwnershipHint.Kind, name: []const u8, offset: usize, target: []const u8) void {
         const h = self.hints orelse return;
         h.append(self.alloc, .{ .kind = kind, .name = name, .offset = offset, .target = target }) catch {};
@@ -3162,6 +3207,7 @@ fn stmtUsesName(stmt: ast.Stmt, name: []const u8) bool {
             .expr => |e| exprUsesName(e, name),
             .block => |blk| blockUsesName(blk, name),
         },
+        .break_stmt => false,
     };
 }
 
