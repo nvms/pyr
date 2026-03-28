@@ -281,6 +281,42 @@ pub const Value = struct {
         };
     }
 
+    pub fn deepClone(self: Value, alloc: std.mem.Allocator) Value {
+        switch (self.tag()) {
+            .struct_ => {
+                const s = self.asStruct();
+                const fv = s.fieldValues();
+                const cloned_fields = alloc.alloc(Value, s.field_count) catch @panic("oom");
+                for (0..s.field_count) |i| {
+                    cloned_fields[i] = fv[i].deepClone(alloc);
+                }
+                return ObjStruct.create(alloc, s.name, s.field_names, cloned_fields).toValue();
+            },
+            .array => {
+                const a = self.asArray();
+                const cloned_items = alloc.alloc(Value, a.items.len) catch @panic("oom");
+                for (a.items, 0..) |item, i| {
+                    cloned_items[i] = item.deepClone(alloc);
+                }
+                return ObjArray.create(alloc, cloned_items).toValue();
+            },
+            .enum_ => {
+                const e = self.asEnum();
+                const cloned_payloads = alloc.alloc(Value, e.payloads.len) catch @panic("oom");
+                for (e.payloads, 0..) |p, i| {
+                    cloned_payloads[i] = p.deepClone(alloc);
+                }
+                return ObjEnum.create(alloc, e.type_name, e.variant, e.variant_index, cloned_payloads).toValue();
+            },
+            .string => {
+                const s = self.asString();
+                const chars_copy = alloc.dupe(u8, s.chars) catch @panic("oom");
+                return ObjString.create(alloc, chars_copy).toValue();
+            },
+            else => return self,
+        }
+    }
+
     pub fn deepFree(self: Value, alloc: std.mem.Allocator) void {
         // shallow free: only frees the container, not its contents.
         // struct fields, array elements, and enum payloads may contain

@@ -207,6 +207,7 @@ pub const Compiler = struct {
         self.defineNativeFn("replace", 3, &nativeReplace);
         self.defineNativeFn("to_upper", 1, &nativeToUpper);
         self.defineNativeFn("to_lower", 1, &nativeToLower);
+        self.defineNativeFn("clone", 1, &nativeClone);
 
         self.defineHelperFn("map", 2, buildMapFunc);
         self.defineHelperFn("filter", 2, buildFilterFunc);
@@ -510,6 +511,10 @@ pub const Compiler = struct {
         const result = alloc.alloc(u8, chars.len) catch return Value.initNil();
         for (chars, 0..) |c, i| result[i] = std.ascii.toLower(c);
         return ObjString.create(alloc, result).toValue();
+    }
+
+    fn nativeClone(alloc: std.mem.Allocator, args: []const Value) Value {
+        return args[0].deepClone(alloc);
     }
 
     // ---------------------------------------------------------------

@@ -1,0 +1,26 @@
+struct User {
+  name: str
+  score: int
+}
+
+fn consume(own user: User) {
+  println(user.name)
+}
+
+fn main() {
+  user = User { name: "alice", score: 100 }
+
+  consume(clone(user))
+  println(user.score)
+
+  consume(user.clone())
+  println("done")
+
+  arr = [1, 2, 3]
+  copy = clone(arr)
+  push(copy, 4)
+  assert_eq(len(arr), 3)
+  assert_eq(len(copy), 4)
+  println(len(arr))
+  println(len(copy))
+}

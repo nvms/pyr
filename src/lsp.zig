@@ -999,6 +999,7 @@ fn builtinHover(name: []const u8) ?[]const u8 {
         .{ "replace", "```pyr\nreplace(string, old, new) -> str\n```\n\nReplace all occurrences of `old` with `new`." },
         .{ "to_upper", "```pyr\nto_upper(string) -> str\n```\n\nConvert a string to uppercase." },
         .{ "to_lower", "```pyr\nto_lower(string) -> str\n```\n\nConvert a string to lowercase." },
+        .{ "clone", "```pyr\nclone(value) -> value\n```\n\nDeep copy a heap-allocated value (struct, array, enum, string). The clone is independently owned. Works with UFCS: `val.clone()`." },
         .{ "map", "```pyr\nmap(array, fn(x) expr) -> array\n```\n\nApply a function to each element and return a new array." },
         .{ "filter", "```pyr\nfilter(array, fn(x) condition) -> array\n```\n\nReturn elements where the predicate returns true." },
         .{ "reduce", "```pyr\nreduce(array, initial, fn(acc, x) expr) -> value\n```\n\nReduce an array to a single value by applying a function to each element." },
