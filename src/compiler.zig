@@ -74,6 +74,7 @@ pub const Compiler = struct {
         name: []const u8,
         depth: u32,
         type_hint: TypeHint = .unknown,
+        is_owned: bool = false,
     };
 
     pub const Upvalue = struct {
@@ -687,6 +688,9 @@ pub const Compiler = struct {
 
         for (decl.params) |param| {
             sub.addLocalTyped(param.name, sub.resolveTypeHint(param.type_expr));
+            if (param.is_own) {
+                sub.locals[sub.local_count - 1].is_owned = true;
+            }
         }
 
         switch (decl.body) {
@@ -766,6 +770,9 @@ pub const Compiler = struct {
                         const hint = self.exprType(b.value);
                         self.compileExpr(b.value);
                         self.addLocalTyped(b.name, hint);
+                        if (isHeapExpr(b.value)) {
+                            self.locals[self.local_count - 1].is_owned = true;
+                        }
                     }
                 } else {
                     self.compileExpr(b.value);
@@ -2380,6 +2387,25 @@ pub const Compiler = struct {
         return self.upvalue_count - 1;
     }
 
+    fn isHeapExpr(expr: *const ast.Expr) bool {
+        return switch (expr.kind) {
+            .struct_literal => true,
+            .array_literal => true,
+            .call => true,
+            .string_interp => true,
+            .binary => |b| {
+                if (b.op == .plus) {
+                    return b.lhs.kind == .string_literal or
+                        b.lhs.kind == .string_interp or
+                        b.rhs.kind == .string_literal or
+                        b.rhs.kind == .string_interp;
+                }
+                return false;
+            },
+            else => false,
+        };
+    }
+
     fn addLocal(self: *Compiler, name: []const u8) void {
         self.addLocalTyped(name, .unknown);
     }
@@ -2448,6 +2474,11 @@ pub const Compiler = struct {
         self.popScopeDefers();
         self.scope_depth -= 1;
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
+            const local = self.locals[self.local_count - 1];
+            if (local.is_owned) {
+                self.emitOp(.free_local);
+                self.emitByte(self.local_count - 1);
+            }
             self.emitOp(.pop);
             self.local_count -= 1;
         }
@@ -2796,6 +2827,7 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .make_error, .unwrap_error, .extract_error => {},
+            .free_local => i += 1,
             .set_global, .define_global, .print, .println => return false,
             .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .net_sendto, .net_recvfrom, .ffi_call => return false,
         }

@@ -39,14 +39,17 @@ pub const FnType = struct {
     param_count: usize,
     return_type: *const Type,
     mut_params: u64 = 0,
+    own_params: u64 = 0,
 };
 
 pub const Symbol = struct {
     ty: *const Type,
     is_mut: bool,
     kind: Kind,
+    ownership: Ownership = .none,
 
     pub const Kind = enum { variable, function, parameter, type_name, builtin };
+    pub const Ownership = enum { none, owned, borrowed, moved };
 };
 
 const t_void: Type = .void;
@@ -92,6 +95,12 @@ pub const Scope = struct {
 
     fn lookupLocal(self: *const Scope, name: []const u8) ?Symbol {
         return self.symbols.get(name);
+    }
+
+    fn lookupPtr(self: *Scope, name: []const u8) ?*Symbol {
+        if (self.symbols.getPtr(name)) |ptr| return ptr;
+        if (self.parent) |p| return p.lookupPtr(name);
+        return null;
     }
 };
 
@@ -195,7 +204,11 @@ pub const Sema = struct {
             .fn_decl => |decl| {
                 const return_ty = if (decl.return_type) |rt| self.resolveType(rt) else &t_void;
                 var mut_params: u64 = 0;
+                var own_params: u64 = 0;
                 for (decl.params, 0..) |param, i| {
+                    if (param.is_own) {
+                        own_params |= @as(u64, 1) << @intCast(i);
+                    }
                     if (param.type_expr) |te| {
                         if (te.kind == .pointer and te.kind.pointer.is_mut) {
                             mut_params |= @as(u64, 1) << @intCast(i);
@@ -206,6 +219,7 @@ pub const Sema = struct {
                     .param_count = decl.params.len,
                     .return_type = return_ty,
                     .mut_params = mut_params,
+                    .own_params = own_params,
                 } });
                 self.define(decl.name, .{
                     .ty = fn_ty,
@@ -391,6 +405,7 @@ pub const Sema = struct {
                 .ty = ty,
                 .is_mut = is_mut_ptr,
                 .kind = .parameter,
+                .ownership = if (param.is_own) .owned else .borrowed,
             });
         }
 
@@ -498,7 +513,11 @@ pub const Sema = struct {
                 }
             },
             .identifier => |name| {
-                if (self.resolve(name) == null) {
+                if (self.resolve(name)) |sym| {
+                    if (sym.ownership == .moved) {
+                        self.emitError(expr.span, "use of moved value '{s}'", .{name});
+                    }
+                } else {
                     self.emitError(expr.span, "undefined name '{s}'", .{name});
                 }
             },
@@ -525,6 +544,7 @@ pub const Sema = struct {
                 for (call.args) |arg| self.analyzeExpr(arg);
                 self.checkCallArity(call, expr.span);
                 self.checkMutParams(call, expr.span);
+                self.checkOwnParams(call, expr.span);
             },
             .index => |idx| {
                 self.analyzeExpr(idx.target);
@@ -711,6 +731,31 @@ pub const Sema = struct {
         }
     }
 
+    fn checkOwnParams(self: *Sema, call: ast.Call, span: ast.Span) void {
+        if (call.callee.kind != .identifier) return;
+        const name = call.callee.kind.identifier;
+        const sym = self.resolve(name) orelse return;
+        if (sym.ty.* != .fn_) return;
+        const fn_ty = sym.ty.fn_;
+
+        for (call.args, 0..) |arg, i| {
+            if (i >= 64) break;
+            const needs_own = (fn_ty.own_params & (@as(u64, 1) << @intCast(i))) != 0;
+            if (needs_own) {
+                if (arg.kind == .identifier) {
+                    const arg_name = arg.kind.identifier;
+                    if (self.resolvePtr(arg_name)) |arg_sym| {
+                        if (arg_sym.ownership == .moved) {
+                            self.emitError(span, "argument {d} to '{s}': value '{s}' was already moved", .{ i + 1, name, arg_name });
+                        } else {
+                            arg_sym.ownership = .moved;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn checkLvalue(self: *Sema, expr: *const ast.Expr) void {
         switch (expr.kind) {
             .field_access => |fa| {
@@ -801,6 +846,10 @@ pub const Sema = struct {
 
     fn resolve(self: *Sema, name: []const u8) ?Symbol {
         return self.scope.lookup(name);
+    }
+
+    fn resolvePtr(self: *Sema, name: []const u8) ?*Symbol {
+        return self.scope.lookupPtr(name);
     }
 
     // ---------------------------------------------------------------

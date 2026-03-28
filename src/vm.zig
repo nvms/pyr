@@ -1066,6 +1066,13 @@ pub const VM = struct {
                     const offset = @as(u16, c[table_start + off_idx]) << 8 | c[table_start + off_idx + 1];
                     frame_.ip = base + offset;
                 },
+                .free_local => {
+                    const slot = self.readByte();
+                    const frame_ = &self.frames[self.frame_count - 1];
+                    const abs = frame_.slot_offset + slot;
+                    self.stack[abs].deepFree(self.currentAlloc());
+                    self.stack[abs] = Value.initNil();
+                },
             }
         }
     }

@@ -48,6 +48,7 @@ pub const Token = struct {
         kw_fail,
         kw_defer,
         kw_type,
+        kw_own,
 
         // types
         kw_int,
@@ -165,6 +166,7 @@ pub const Token = struct {
                 .kw_fail => "'fail'",
                 .kw_defer => "'defer'",
                 .kw_type => "'type'",
+                .kw_own => "'own'",
                 .kw_int => "'int'",
                 .kw_float => "'float'",
                 .kw_str => "'str'",
@@ -209,6 +211,7 @@ pub const keywords = std.StaticStringMap(Token.Tag).initComptime(.{
     .{ "fail", .kw_fail },
     .{ "defer", .kw_defer },
     .{ "type", .kw_type },
+    .{ "own", .kw_own },
     .{ "int", .kw_int },
     .{ "float", .kw_float },
     .{ "str", .kw_str },

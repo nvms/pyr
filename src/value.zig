@@ -281,6 +281,56 @@ pub const Value = struct {
         };
     }
 
+    pub fn deepFree(self: Value, alloc: std.mem.Allocator) void {
+        switch (self.tag()) {
+            .string => {
+                const s = self.asString();
+                if (s.chars.len > 0) alloc.free(s.chars);
+                alloc.destroy(s);
+            },
+            .struct_ => {
+                const s = self.asStruct();
+                const fv = s.fieldValues();
+                for (0..s.field_count) |i| {
+                    fv[i].deepFree(alloc);
+                }
+                const total = ObjStruct.header_slots + s.field_count;
+                const buf: [*]Value = @ptrCast(@alignCast(@as([*]u8, @ptrCast(s))));
+                alloc.free(buf[0..total]);
+            },
+            .array => {
+                const a = self.asArray();
+                for (a.items) |item| {
+                    item.deepFree(alloc);
+                }
+                if (a.capacity > 0) alloc.free(a.items.ptr[0..a.capacity]);
+                alloc.destroy(a);
+            },
+            .enum_ => {
+                const e = self.asEnum();
+                for (e.payloads) |p| {
+                    p.deepFree(alloc);
+                }
+                if (e.payloads.len > 0) alloc.free(e.payloads);
+                alloc.destroy(e);
+            },
+            .closure => {
+                const c = self.asClosure();
+                for (c.upvalues) |uv| {
+                    uv.deepFree(alloc);
+                }
+                if (c.upvalues.len > 0) alloc.free(c.upvalues);
+                alloc.destroy(c);
+            },
+            .error_val => {
+                const e = self.asError();
+                e.value.deepFree(alloc);
+                alloc.destroy(e);
+            },
+            else => {},
+        }
+    }
+
     pub fn dump(self: Value) void {
         switch (self.tag()) {
             .nil => std.debug.print("nil", .{}),
