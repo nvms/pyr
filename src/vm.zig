@@ -1684,6 +1684,17 @@ pub const VM = struct {
             });
             return;
         }
+        if (a.tag() == .string and b.tag() == .string) {
+            const ord = std.mem.order(u8, a.asString().chars, b.asString().chars);
+            self.stack[self.sp - 1] = Value.initBool(switch (op) {
+                .less => ord == .lt,
+                .greater => ord == .gt,
+                .less_equal => ord != .gt,
+                .greater_equal => ord != .lt,
+                else => false,
+            });
+            return;
+        }
         self.runtimeError("operands must be numbers", .{});
         return error.RuntimeError;
     }
@@ -1900,6 +1911,19 @@ pub const VM = struct {
                 .greater => af > bf,
                 .less_equal => af <= bf,
                 .greater_equal => af >= bf,
+                else => false,
+            };
+            self.push(Value.initBool(result));
+            return;
+        }
+
+        if (a.tag() == .string and b.tag() == .string) {
+            const ord = std.mem.order(u8, a.asString().chars, b.asString().chars);
+            const result = switch (op) {
+                .less => ord == .lt,
+                .greater => ord == .gt,
+                .less_equal => ord != .gt,
+                .greater_equal => ord != .lt,
                 else => false,
             };
             self.push(Value.initBool(result));

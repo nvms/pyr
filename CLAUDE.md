@@ -311,8 +311,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. string comparison operators: `<`, `>`, `<=`, `>=` only work on numbers. strings need lexicographic comparison support for sort_by closures like `fn(a, b) a < b` to work on string arrays
-2. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat
+1. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat
 
 ## implementation notes
 
