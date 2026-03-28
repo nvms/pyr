@@ -1,0 +1,20 @@
+{"level":"info","message":"server started","endpoint":"/health","duration_ms":2}
+{"level":"info","message":"user login","endpoint":"/api/login","duration_ms":45}
+{"level":"debug","message":"cache hit","endpoint":"/api/users","duration_ms":3}
+{"level":"info","message":"fetched users","endpoint":"/api/users","duration_ms":120}
+{"level":"warn","message":"slow query","endpoint":"/api/search","duration_ms":850}
+{"level":"error","message":"connection refused","endpoint":"/api/external","duration_ms":5000}
+{"level":"info","message":"page rendered","endpoint":"/dashboard","duration_ms":200}
+{"level":"debug","message":"cache miss","endpoint":"/api/users","duration_ms":5}
+{"level":"error","message":"timeout","endpoint":"/api/external","duration_ms":10000}
+{"level":"info","message":"file uploaded","endpoint":"/api/upload","duration_ms":340}
+{"level":"warn","message":"rate limited","endpoint":"/api/search","duration_ms":12}
+{"level":"info","message":"user logout","endpoint":"/api/login","duration_ms":15}
+{"level":"debug","message":"gc cycle","endpoint":"/health","duration_ms":1}
+{"level":"info","message":"report generated","endpoint":"/api/reports","duration_ms":1500}
+{"level":"error","message":"disk full","endpoint":"/api/upload","duration_ms":50}
+{"level":"info","message":"heartbeat","endpoint":"/health","duration_ms":1}
+{"level":"warn","message":"memory high","endpoint":"/health","duration_ms":3}
+{"level":"info","message":"batch processed","endpoint":"/api/batch","duration_ms":2200}
+{"level":"debug","message":"index rebuilt","endpoint":"/api/search","duration_ms":450}
+{"level":"info","message":"response sent","endpoint":"/dashboard","duration_ms":180}

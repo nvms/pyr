@@ -1767,6 +1767,12 @@ pub const VM = struct {
             const s2 = std.fmt.allocPrint(ca, "error({s})", .{inner_str}) catch return val;
             return ObjString.create(ca, s2).toValue();
         }
+        if (val.tag() == .array) {
+            return self.arrayToString(val.asArray());
+        }
+        if (val.tag() == .struct_) {
+            return self.structToString(val.asStruct());
+        }
         var buf: [64]u8 = undefined;
         const s = switch (val.tag()) {
             .int => std.fmt.bufPrint(&buf, "{d}", .{val.asInt()}) catch "?",
@@ -1778,6 +1784,48 @@ pub const VM = struct {
         const copy = ca.alloc(u8, s.len) catch @panic("oom");
         @memcpy(copy, s);
         return ObjString.create(ca, copy).toValue();
+    }
+
+    fn arrayToString(self: *VM, arr: *ObjArray) Value {
+        const ca = self.currentAlloc();
+        var out = std.ArrayListUnmanaged(u8){};
+        out.append(ca, '[') catch @panic("oom");
+        for (arr.items, 0..) |item, i| {
+            if (i > 0) out.appendSlice(ca, ", ") catch @panic("oom");
+            const s = self.valueToString(item);
+            if (item.tag() == .string) {
+                out.append(ca, '"') catch @panic("oom");
+                out.appendSlice(ca, s.asString().chars) catch @panic("oom");
+                out.append(ca, '"') catch @panic("oom");
+            } else {
+                out.appendSlice(ca, s.asString().chars) catch @panic("oom");
+            }
+        }
+        out.append(ca, ']') catch @panic("oom");
+        return ObjString.create(ca, out.items).toValue();
+    }
+
+    fn structToString(self: *VM, st: *ObjStruct) Value {
+        const ca = self.currentAlloc();
+        var out = std.ArrayListUnmanaged(u8){};
+        out.appendSlice(ca, st.name) catch @panic("oom");
+        out.appendSlice(ca, " { ") catch @panic("oom");
+        const fv = st.fieldValues();
+        for (st.field_names, 0..) |name, i| {
+            if (i > 0) out.appendSlice(ca, ", ") catch @panic("oom");
+            out.appendSlice(ca, name) catch @panic("oom");
+            out.appendSlice(ca, ": ") catch @panic("oom");
+            const s = self.valueToString(fv[i]);
+            if (fv[i].tag() == .string) {
+                out.append(ca, '"') catch @panic("oom");
+                out.appendSlice(ca, s.asString().chars) catch @panic("oom");
+                out.append(ca, '"') catch @panic("oom");
+            } else {
+                out.appendSlice(ca, s.asString().chars) catch @panic("oom");
+            }
+        }
+        out.appendSlice(ca, " }") catch @panic("oom");
+        return ObjString.create(ca, out.items).toValue();
     }
 
     fn binaryOp(self: *VM, op: OpCode) Error!void {

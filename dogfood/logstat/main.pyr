@@ -1,0 +1,168 @@
+imp std/fs
+imp std/os
+imp std/io { println, eprintln, print }
+imp std/json
+
+enum Level {
+  Debug
+  Info
+  Warn
+  Error
+  Unknown
+}
+
+fn parse_level(s: str) -> Level {
+  if s == "debug" { return Debug }
+  if s == "info" { return Info }
+  if s == "warn" { return Warn }
+  if s == "error" { return Error }
+  Unknown
+}
+
+fn level_name(l: Level) -> str {
+  match l {
+    Debug -> "debug"
+    Info -> "info"
+    Warn -> "warn"
+    Error -> "error"
+    Unknown -> "unknown"
+  }
+}
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn count_level(entries, level_str: str) -> int {
+  entries.filter(fn(e) getattr(e, "level") == level_str).len()
+}
+
+fn unique_values(entries, field: str) -> []str {
+  mut seen = []
+  for e in entries {
+    val = getattr(e, field)
+    if val != nil && !seen.contains(val) {
+      push(seen, val)
+    }
+  }
+  seen
+}
+
+fn avg_duration(entries, endpoint: str) -> int {
+  matching = entries.filter(fn(e) getattr(e, "endpoint") == endpoint)
+  if len(matching) == 0 { return 0 }
+  total = matching.reduce(fn(acc, e) acc + getattr(e, "duration_ms"), 0)
+  total / len(matching)
+}
+
+fn top_slowest(entries, n: int) -> []str {
+  mut result = []
+  mut used = []
+
+  for i in range(n) {
+    mut best_idx = -1
+    mut best_dur = -1
+
+    for j in range(len(entries)) {
+      if !used.contains(j) {
+        dur = getattr(entries[j], "duration_ms")
+        if dur != nil && dur > best_dur {
+          best_dur = dur
+          best_idx = j
+        }
+      }
+    }
+
+    if best_idx < 0 { break }
+    push(used, best_idx)
+    ep = getattr(entries[best_idx], "endpoint")
+    push(result, "{ep} {best_dur}ms")
+  }
+  result
+}
+
+fn parse_lines(lines) {
+  mut entries = []
+  mut parse_errors = 0
+  for line in lines {
+    trimmed = trim(line)
+    if len(trimmed) > 0 {
+      obj = json.decode(trimmed)
+      if obj != nil {
+        push(entries, obj)
+      } else {
+        parse_errors = parse_errors + 1
+      }
+    }
+  }
+  entries
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    eprintln("usage: logstat <file.jsonl>")
+    os.exit(1)
+  }
+
+  filename = args[0]
+  if !fs.exists(filename) {
+    eprintln("logstat: {filename}: no such file")
+    os.exit(1)
+  }
+
+  content = fs.read(filename)
+  lines = split(content, "\n")
+  entries = parse_lines(lines)
+
+  total = len(entries)
+  debug_count = count_level(entries, "debug")
+  info_count = count_level(entries, "info")
+  warn_count = count_level(entries, "warn")
+  error_count = count_level(entries, "error")
+
+  error_rate = if total > 0 { error_count * 100 / total } else { 0 }
+
+  endpoints = unique_values(entries, "endpoint")
+  mut ep_stats = []
+  for ep in endpoints {
+    avg = avg_duration(entries, ep)
+    count = entries.filter(fn(x) getattr(x, "endpoint") == ep).len()
+    push(ep_stats, "{ep}: {count} reqs, avg {avg}ms")
+  }
+
+  slowest = top_slowest(entries, 5)
+
+  println("log summary")
+  println("===========")
+  println("total entries: {total}")
+  println("")
+  println("by level:")
+  println("  debug: {debug_count}")
+  println("  info:  {info_count}")
+  println("  warn:  {warn_count}")
+  println("  error: {error_count}")
+  println("")
+  println("error rate: {error_rate}%")
+  println("")
+  println("endpoints:")
+  for stat in ep_stats {
+    println("  {stat}")
+  }
+  println("")
+  println("slowest requests:")
+  for s in slowest {
+    println("  {s}")
+  }
+}

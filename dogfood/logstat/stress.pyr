@@ -1,0 +1,51 @@
+imp std/io { println }
+imp std/json
+
+fn main() {
+  data = json.decode("[1, 2, 3, 4, 5]")
+  doubled = data.map(fn(x) x * 2)
+  println("{doubled}")
+
+  total = doubled.reduce(fn(acc, x) acc + x, 0)
+  println("sum: {total}")
+
+  big = data.filter(fn(x) x > 3)
+  println("big: {big}")
+
+  chained = [10, 20, 30, 40, 50]
+    .filter(fn(x) x > 15)
+    .map(fn(x) x / 10)
+  println("chained: {chained}")
+
+  names = ["alice", "bob", "carol"]
+  upper = names.map(fn(n) n.to_upper())
+  println("upper: {upper}")
+
+  joined = upper.join(", ")
+  println("joined: {joined}")
+
+  nums = [3, 1, 4, 1, 5, 9, 2, 6]
+  has_nine = nums.contains(9)
+  idx = nums.index_of(5)
+  println("has 9: {has_nine}, index of 5: {idx}")
+
+  sub = nums.slice(2, 5)
+  println("slice: {sub}")
+
+  nested = [[1, 2], [3, 4], [5, 6]]
+  flat_sum = nested.reduce(fn(acc, arr) acc + arr.reduce(fn(a, x) a + x, 0), 0)
+  println("nested sum: {flat_sum}")
+
+  mut count = 0
+  for n in nums {
+    if n > 3 {
+      count = count + 1
+    }
+  }
+  println("count > 3: {count}")
+
+  assert_eq(total, 30)
+  assert_eq(has_nine, true)
+  assert_eq(flat_sum, 21)
+  println("all stress tests passed")
+}
