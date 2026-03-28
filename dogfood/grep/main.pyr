@@ -65,11 +65,11 @@ fn match_line(line: str, pattern: str, ignore_case: bool) -> bool {
 }
 
 fn grep_file(filename: str, pattern: str, opts: Opts, show_filename: bool) -> int {
-  content = fs.read(filename)
-  if content == false {
-    eprintln("grep: " + filename + ": no such file")
+  if !fs.exists(filename) {
+    eprintln("grep: {filename}: no such file")
     return 0
   }
+  content = fs.read(filename)
 
   lines = split(content, "\n")
   mut count = 0
