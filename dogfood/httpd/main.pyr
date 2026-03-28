@@ -1,0 +1,102 @@
+imp std/net as net
+imp std/fs
+imp std/os
+imp std/io { println, eprintln, print }
+imp std/http { parse_request, respond, respond_status }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn content_type(path: str) -> str {
+  if ends_with(path, ".html") { return "text/html" }
+  if ends_with(path, ".css") { return "text/css" }
+  if ends_with(path, ".js") { return "application/javascript" }
+  if ends_with(path, ".json") { return "application/json" }
+  if ends_with(path, ".png") { return "image/png" }
+  if ends_with(path, ".jpg") || ends_with(path, ".jpeg") { return "image/jpeg" }
+  if ends_with(path, ".svg") { return "image/svg+xml" }
+  if ends_with(path, ".txt") { return "text/plain" }
+  return "application/octet-stream"
+}
+
+fn serve_file(conn, root_dir: str, url_path: str) {
+  mut file_path = root_dir + url_path
+  if ends_with(file_path, "/") {
+    file_path = file_path + "index.html"
+  }
+
+  if !fs.exists(file_path) {
+    resp = respond_status(404, "not found: {url_path}")
+    conn.write(resp)
+    return nil
+  }
+
+  body = fs.read(file_path)
+  ct = content_type(file_path)
+  header = "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+  conn.write(header)
+  conn.write(body)
+}
+
+fn handle_conn(conn, root_dir: str) {
+  raw = conn.read()
+  if raw == Eof || raw == Closed {
+    net.close(conn)
+    return nil
+  }
+
+  req = parse_request(raw)
+  if req == nil {
+    net.close(conn)
+    return nil
+  }
+
+  serve_file(conn, root_dir, req.path)
+  net.close(conn)
+}
+
+fn main() {
+  args = user_args()
+
+  mut root_dir = "."
+  mut port = 8080
+
+  if len(args) > 0 {
+    root_dir = args[0]
+  }
+  if len(args) > 1 {
+    port = int(args[1])
+  }
+
+  if !fs.exists(root_dir) {
+    eprintln("httpd: directory not found: {root_dir}")
+    os.exit(1)
+  }
+
+  server = net.listen("0.0.0.0", port)
+  println("serving {root_dir} on :{port}")
+
+  while true {
+    conn = server.accept()
+    if conn == Eof || conn == Closed {
+      break
+    }
+    spawn {
+      handle_conn(conn, root_dir)
+    }
+  }
+
+  net.close(server)
+}
