@@ -294,7 +294,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - builtins: sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower, clone. all work with UFCS: `arr.contains(x)`, `str.split(",")`, `"hello".to_upper()`, `user.clone()`
 - clone: deep copy of heap-allocated values via `Value.deepClone`. recursively copies structs (new allocation with cloned fields), arrays (new buffer with cloned elements), enums (new allocation with cloned payloads), strings (duped char data). stack values (int, float, bool, nil) returned as-is. the clone result is independently owned - enables passing to `own` params without losing the original
 - higher-order array operations: map(arr, fn), filter(arr, fn), reduce(arr, fn, init). implemented as helper functions with hand-built bytecode (defineHelperFn in compiler.zig) - not native functions, because natives can't call back into pyr. each emits bytecode that uses the `call` opcode to invoke the callback through normal VM dispatch. marked locals_only for fastLoop execution. work with closures, named functions, and UFCS chaining: `arr.filter(fn(x) x > 0).map(fn(x) x * 2)`
-- benchmarks: fib(35) 0.87s (python 0.88s), loop 10M 0.21s (python 0.21s), closure 10M 0.26s (python 0.39s), struct 10M 0.33s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.64s (python 0.61s), match 30M 2.62s (python 2.37s), arena 1M 0.27s (python 0.21s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s), inline 10M 0.92s (python 1.27s). httpd arena benchmark (c=100 keep-alive): pyr 121K req/sec p99 1.6ms, bun 147K p99 1.2ms, node 96K p99 1.9ms, python 19K p99 0.1ms
+- valueToString: arrays stringify as `[1, 2, 3]` with quoted strings, structs as `Name { field: val }`. used by string interpolation (`to_str` opcode) and `println`. strings inside arrays/structs are double-quoted in the output for clarity
+- benchmarks: fib(35) 0.68s (python 0.88s), loop 10M 0.22s (python 0.21s), closure 10M 0.27s (python 0.39s), struct 10M 0.34s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.66s (python 0.61s), match 30M 2.72s (python 2.37s), arena 1M 0.28s (python 0.21s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s), inline 10M 1.06s (python 1.27s). httpd arena benchmark (c=100 keep-alive): pyr 121K req/sec p99 1.6ms, bun 147K p99 1.2ms, node 96K p99 1.9ms, python 19K p99 0.1ms
 
 **not yet implemented (parser level):**
 - anonymous struct literals: `.{ field: val }` inferred from context (zig-style). when the compiler knows the expected type from a function param, return type, or annotated binding, allow omitting the struct name. pure syntax sugar - desugars to `TypeName { field: val }` during compilation
@@ -307,7 +308,10 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. dogfooding: build real programs in pyr to find rough edges
+1. `continue` keyword in loops: currently missing, forces awkward nested if/else restructuring. compile as a jump back to loop condition (like `break` but jumps to increment/condition instead of exit)
+2. escaped quotes in string interpolation: `"{getattr(e, \"field\")}"` fails because lexer doesn't handle `\"` inside interpolation expressions. need to track interpolation nesting in the lexer and allow escaped delimiters inside expression portions
+3. `sort` builtin: no way to sort arrays. need `sort(arr)` and `sort(arr, fn)` for custom comparators. the logstat dogfood had to implement O(n^2) selection sort manually
+4. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat
 
 ## implementation notes
 
