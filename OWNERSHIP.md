@@ -255,22 +255,38 @@ fn register(own item: Item) {
 
 ## LSP integration
 
-the compiler has full ownership information. the LSP surfaces this as:
+the compiler has full ownership information at compile time. the LSP should surface this as visual hints so developers can see the memory story of their code without running it.
 
-### inline hints (virtual text after last use)
+### 1. inline free hints (virtual text after last use)
+
+after the last use of an owned local, show a virtual text hint indicating the value will be freed:
 
 ```pyr
 fn handle(req: Request) -> Response {
   user = find_user(req.id)
   config = load_config()
-  body = json_encode(user)        // <- user freed
+  body = json_encode(user)        // <- `user` freed
   resp = Response { status: 200, body: body }
-                                  // <- config freed
+                                  // <- `config` freed
   return resp
 }
 ```
 
-### hover on function calls
+for conditional moves with drop flags, show conditional free:
+
+```pyr
+fn process(d: Data, flag: bool) {
+  if flag {
+    consume(d)                    // <- `d` moved (ownership transferred)
+  }
+}                                 // <- `d` freed (if not moved)
+```
+
+**implementation**: the compiler already computes free points via `emitEarlyFrees()` and `endScope()`. the LSP needs the source locations (line numbers) where `free_local` and `free_local_if` opcodes are emitted. the compiler can produce a side-channel map of `{local_slot, local_name, free_line, is_conditional}` entries alongside the bytecode.
+
+### 2. hover on function calls
+
+when hovering over a function call, show ownership effects:
 
 ```
 fn handle(req: Request) -> Response
@@ -279,7 +295,11 @@ fn handle(req: Request) -> Response
   returns: Response (ownership to caller)
 ```
 
-### hover on variables
+**implementation**: for each function, the compiler knows: which params are `own` vs borrowed (from `own_params` bitmask), which locals are created and owned (from `is_owned` on Local), where each is freed (from free point computation), and the return type. collect this into a function-level ownership summary.
+
+### 3. hover on variables
+
+when hovering over a variable, show its ownership status:
 
 ```
 user: User
@@ -287,6 +307,38 @@ user: User
   created: line 3 (returned from find_user)
   freed: line 6 (after last use)
 ```
+
+for conditionally moved values:
+
+```
+d: Data
+  owned by: process()
+  created: line 2
+  maybe moved: line 5 (consume, inside if)
+  freed: line 7 (if not moved, via drop flag)
+```
+
+**implementation**: the compiler's Local struct already has `is_owned`, `drop_flag_slot`, and the AST span (via statement positions). augment with the free point location.
+
+### 4. call site ownership transfer indicators
+
+at call sites where `own` params are used, show which values are being transferred:
+
+```pyr
+cache_put(cache, item)   // <- `item` moved (ownership transferred)
+```
+
+**implementation**: check `fn_own_params` for the callee, match against argument identifiers, show inline hint for each `own` argument.
+
+### implementation approach
+
+pyr does not have an LSP server yet. when building one:
+
+1. **ownership data**: add a compilation mode (or post-compilation pass) that produces an `OwnershipMap` struct containing: list of owned locals per function (name, slot, source span, free span, is_conditional), list of ownership transfers per call site (callee name, arg index, arg name, source span), function-level summaries (borrowed params, owned params, return ownership)
+
+2. **LSP protocol**: use `textDocument/inlayHint` for free point hints. use `textDocument/hover` for variable and function ownership summaries. use `textDocument/codeLens` for function-level ownership overview
+
+3. **the compiler already does the hard work**. the LSP just needs to read the compiler's analysis results and format them for the protocol. no new analysis needed - just plumbing
 
 ## implementation strategy
 

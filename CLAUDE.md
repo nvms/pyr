@@ -299,7 +299,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. dogfooding: build real programs in pyr to find rough edges
+1. LSP: ownership hints - build an LSP server that surfaces ownership information as inline hints (free points after last use, ownership transfers at call sites), hover info (variable ownership status, function ownership summary), and conditional move indicators. the compiler already computes all ownership data - the LSP just needs to read it. see OWNERSHIP.md "LSP integration" section for full spec including implementation approach, protocol mappings, and data structures needed
+2. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes
 
