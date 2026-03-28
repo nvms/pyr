@@ -366,7 +366,11 @@ pub const Value = struct {
                 for (s.field_names, 0..) |name, i| {
                     if (i > 0) std.debug.print(", ", .{});
                     std.debug.print("{s}: ", .{name});
-                    fv[i].dump();
+                    if (fv[i].tag() == .string) {
+                        std.debug.print("\"{s}\"", .{fv[i].asString().chars});
+                    } else {
+                        fv[i].dump();
+                    }
                 }
                 std.debug.print(" }}", .{});
             },
@@ -399,7 +403,11 @@ pub const Value = struct {
                 std.debug.print("[", .{});
                 for (arr.items, 0..) |item, i| {
                     if (i > 0) std.debug.print(", ", .{});
-                    item.dump();
+                    if (item.tag() == .string) {
+                        std.debug.print("\"{s}\"", .{item.asString().chars});
+                    } else {
+                        item.dump();
+                    }
                 }
                 std.debug.print("]", .{});
             },

@@ -217,10 +217,12 @@ pub const Compiler = struct {
         self.defineNativeFn("getattr", 2, &nativeGetattr);
         self.defineNativeFn("keys", 1, &nativeKeys);
         self.defineNativeFn("type_of", 1, &nativeTypeOf);
+        self.defineNativeFn("sort", 1, &nativeSort);
 
         self.defineHelperFn("map", 2, buildMapFunc);
         self.defineHelperFn("filter", 2, buildFilterFunc);
         self.defineHelperFn("reduce", 3, buildReduceFunc);
+        self.defineHelperFn("sort_by", 2, buildSortByFunc);
 
         self.registerBuiltinEnum("IoError", &.{
             .{ .name = "Eof", .payloads = 0 },
@@ -573,6 +575,39 @@ pub const Compiler = struct {
         };
     }
 
+    fn nativeSort(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .array) return Value.initNil();
+        const src = args[0].asArray().items;
+        if (src.len <= 1) {
+            const copy = alloc.alloc(Value, src.len) catch @panic("oom");
+            @memcpy(copy, src);
+            return ObjArray.create(alloc, copy).toValue();
+        }
+        const buf = alloc.alloc(Value, src.len) catch @panic("oom");
+        @memcpy(buf, src);
+        for (1..buf.len) |i| {
+            const key = buf[i];
+            var j: usize = i;
+            while (j > 0 and valueLess(buf[j - 1], key)) {
+                buf[j] = buf[j - 1];
+                j -= 1;
+            }
+            buf[j] = key;
+        }
+        return ObjArray.create(alloc, buf).toValue();
+    }
+
+    fn valueLess(b: Value, a: Value) bool {
+        if (a.tag() == .int and b.tag() == .int) return a.asInt() < b.asInt();
+        if (a.tag() == .float and b.tag() == .float) return a.asFloat() < b.asFloat();
+        if (a.tag() == .int and b.tag() == .float) return @as(f64, @floatFromInt(a.asInt())) < b.asFloat();
+        if (a.tag() == .float and b.tag() == .int) return a.asFloat() < @as(f64, @floatFromInt(b.asInt()));
+        if (a.tag() == .string and b.tag() == .string) {
+            return std.mem.order(u8, a.asString().chars, b.asString().chars) == .lt;
+        }
+        return false;
+    }
+
     pub const NativeEntry = struct {
         name: []const u8,
         func: *const fn (std.mem.Allocator, []const Value) Value,
@@ -604,6 +639,7 @@ pub const Compiler = struct {
         .{ .name = "getattr", .func = &nativeGetattr },
         .{ .name = "keys", .func = &nativeKeys },
         .{ .name = "type_of", .func = &nativeTypeOf },
+        .{ .name = "sort", .func = &nativeSort },
     };
 
     // ---------------------------------------------------------------
@@ -1338,6 +1374,206 @@ pub const Compiler = struct {
         emitLoopToChunk(alloc, ch, loop_start);
         patchJumpInChunk(ch, exit_hi);
         emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3);
+        emitToChunk(alloc, ch, .return_);
+        return func;
+    }
+
+    fn buildSortByFunc(alloc: std.mem.Allocator) *ObjFunction {
+        const func = ObjFunction.create(alloc, "sort_by", 2);
+        func.locals_only = true;
+        const ch = &func.chunk;
+        const len_const = ch.addConstant(alloc, ObjString.create(alloc, "len").toValue());
+        const one_const = ch.addConstant(alloc, Value.initInt(1));
+
+        // slot 3: result = empty array
+        emitToChunk(alloc, ch, .array_create);
+        emitByteToChunk(alloc, ch, 0);
+
+        // slot 4: n = len(arr)
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 1);
+        emitToChunk(alloc, ch, .get_field);
+        emitByteToChunk(alloc, ch, @intCast(len_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(len_const & 0xFF));
+
+        // slot 5: copy_idx = 0
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+
+        // copy loop: push each element from arr into result
+        const copy_start = ch.count();
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 5); // copy_idx
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 4); // n
+        emitToChunk(alloc, ch, .less_int);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const copy_exit = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+
+        emitToChunk(alloc, ch, .index_local_local);
+        emitByteToChunk(alloc, ch, 1); // arr
+        emitByteToChunk(alloc, ch, 5); // copy_idx
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        emitToChunk(alloc, ch, .array_push);
+        emitToChunk(alloc, ch, .inc_local);
+        emitByteToChunk(alloc, ch, 5); // copy_idx++
+        emitLoopToChunk(alloc, ch, copy_start);
+        patchJumpInChunk(ch, copy_exit);
+        emitToChunk(alloc, ch, .pop);
+
+        // reuse slot 5 as i (outer counter), reset to 0
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+        emitToChunk(alloc, ch, .set_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitToChunk(alloc, ch, .pop);
+
+        // slot 6: n-1 (outer limit)
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 4); // n
+        emitToChunk(alloc, ch, .constant);
+        emitByteToChunk(alloc, ch, @intCast(one_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(one_const & 0xFF));
+        emitToChunk(alloc, ch, .sub_int);
+
+        // slot 7: j (inner counter, will be reset each outer iteration)
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+
+        // outer loop: i < n-1
+        const outer_start = ch.count();
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 5); // i
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 6); // n-1
+        emitToChunk(alloc, ch, .less_int);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const outer_exit = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+
+        // j = 0
+        emitConstToChunk(alloc, ch, Value.initInt(0));
+        emitToChunk(alloc, ch, .set_local);
+        emitByteToChunk(alloc, ch, 7);
+        emitToChunk(alloc, ch, .pop);
+
+        // inner_limit = n-1-i (on stack, not a slot - compute each time)
+        // inner loop: j < n-1-i
+        const inner_start = ch.count();
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 7); // j
+        // compute n-1-i
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 6); // n-1
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 5); // i
+        emitToChunk(alloc, ch, .sub_int);
+        emitToChunk(alloc, ch, .less_int);
+        emitToChunk(alloc, ch, .jump_if_false);
+        const inner_exit = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+
+        // call cmp(result[j], result[j+1])
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 2); // cmp
+        emitToChunk(alloc, ch, .index_local_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        emitByteToChunk(alloc, ch, 7); // j
+        // result[j+1]: get j, add 1, index_get
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 7); // j
+        emitToChunk(alloc, ch, .constant);
+        emitByteToChunk(alloc, ch, @intCast(one_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(one_const & 0xFF));
+        emitToChunk(alloc, ch, .add_int);
+        emitToChunk(alloc, ch, .index_get);
+        emitToChunk(alloc, ch, .call);
+        emitByteToChunk(alloc, ch, 2);
+
+        // if cmp returned true, no swap needed - skip
+        emitToChunk(alloc, ch, .jump_if_false);
+        const no_swap = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+        emitToChunk(alloc, ch, .pop);
+        emitToChunk(alloc, ch, .jump);
+        const after_swap = ch.count();
+        emitByteToChunk(alloc, ch, 0);
+        emitByteToChunk(alloc, ch, 0);
+
+        // swap result[j] and result[j+1]
+        patchJumpInChunk(ch, no_swap);
+        emitToChunk(alloc, ch, .pop);
+
+        // temp = result[j] -> slot 8
+        emitToChunk(alloc, ch, .index_local_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        emitByteToChunk(alloc, ch, 7); // j
+
+        // result[j] = result[j+1]
+        // index_set wants: [value, array, index]
+        // push result[j+1] as value
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 7); // j
+        emitToChunk(alloc, ch, .constant);
+        emitByteToChunk(alloc, ch, @intCast(one_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(one_const & 0xFF));
+        emitToChunk(alloc, ch, .add_int);
+        emitToChunk(alloc, ch, .index_get); // result[j+1]
+        // push array and index
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 7); // j
+        emitToChunk(alloc, ch, .index_set); // result[j] = result[j+1], leaves result[j+1] val on stack
+        emitToChunk(alloc, ch, .pop);
+
+        // result[j+1] = temp (slot 8)
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 8); // temp
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 3); // result
+        // j+1
+        emitToChunk(alloc, ch, .get_local);
+        emitByteToChunk(alloc, ch, 7); // j
+        emitToChunk(alloc, ch, .constant);
+        emitByteToChunk(alloc, ch, @intCast(one_const >> 8));
+        emitByteToChunk(alloc, ch, @intCast(one_const & 0xFF));
+        emitToChunk(alloc, ch, .add_int);
+        emitToChunk(alloc, ch, .index_set); // result[j+1] = temp
+        emitToChunk(alloc, ch, .pop);
+
+        // pop temp from slot 8
+        emitToChunk(alloc, ch, .pop);
+
+        patchJumpInChunk(ch, after_swap);
+
+        // j++
+        emitToChunk(alloc, ch, .inc_local);
+        emitByteToChunk(alloc, ch, 7);
+        emitLoopToChunk(alloc, ch, inner_start);
+        patchJumpInChunk(ch, inner_exit);
+        emitToChunk(alloc, ch, .pop);
+
+        // i++
+        emitToChunk(alloc, ch, .inc_local);
+        emitByteToChunk(alloc, ch, 5);
+        emitLoopToChunk(alloc, ch, outer_start);
+        patchJumpInChunk(ch, outer_exit);
+        emitToChunk(alloc, ch, .pop);
+
+        // return result
         emitToChunk(alloc, ch, .get_local);
         emitByteToChunk(alloc, ch, 3);
         emitToChunk(alloc, ch, .return_);

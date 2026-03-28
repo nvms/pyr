@@ -115,7 +115,13 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
                 if (idx > 0) writeBytes(fd, ", ");
                 writeBytes(fd, name);
                 writeBytes(fd, ": ");
-                writeValueTo(alloc, fd, fv[idx]);
+                if (fv[idx].tag() == .string) {
+                    writeBytes(fd, "\"");
+                    writeBytes(fd, fv[idx].asString().chars);
+                    writeBytes(fd, "\"");
+                } else {
+                    writeValueTo(alloc, fd, fv[idx]);
+                }
             }
             writeBytes(fd, " }");
         },
@@ -152,7 +158,13 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
             writeBytes(fd, "[");
             for (arr.items, 0..) |item, idx| {
                 if (idx > 0) writeBytes(fd, ", ");
-                writeValueTo(alloc, fd, item);
+                if (item.tag() == .string) {
+                    writeBytes(fd, "\"");
+                    writeBytes(fd, item.asString().chars);
+                    writeBytes(fd, "\"");
+                } else {
+                    writeValueTo(alloc, fd, item);
+                }
             }
             writeBytes(fd, "]");
         },
