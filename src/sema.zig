@@ -1063,3 +1063,18 @@ test "sema: unnecessary &mut at call site" {
     const result = testAnalyze("struct P { x: int }\nfn f(p: P) -> int {\n  p.x\n}\nfn main() {\n  mut p = P { x: 0 }\n  f(&mut p)\n}");
     try expectError(result, "passed as &mut but parameter is not *mut");
 }
+
+test "sema: own parameter accepted" {
+    const result = testAnalyze("fn consume(own x: int) -> int {\n  return x\n}\nfn main() {\n  a = 5\n  consume(a)\n}");
+    try expectNoErrors(result);
+}
+
+test "sema: use after move" {
+    const result = testAnalyze("fn consume(own x: int) {}\nfn main() {\n  a = 5\n  consume(a)\n  println(a)\n}");
+    try expectError(result, "use of moved value 'a'");
+}
+
+test "sema: double move" {
+    const result = testAnalyze("fn consume(own x: int) {}\nfn main() {\n  a = 5\n  consume(a)\n  consume(a)\n}");
+    try expectError(result, "already moved");
+}

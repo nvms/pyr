@@ -1,0 +1,49 @@
+---
+title: Ownership
+order: 20
+description: Pyr tracks who owns heap-allocated values. Functions that return structs, arrays, or strings transfer ownership to the caller. The compiler frees owned values at scope exit and catches use-after-move errors at compile time.
+---
+// Heap-allocated values (structs, arrays, strings) are
+// automatically freed when their owning scope exits.
+// No garbage collector, no manual free.
+struct User {
+  name: str
+  score: int
+}
+
+fn make_user(name: str) -> User {
+  return User { name: name, score: 0 }
+}
+
+// `own` means this function takes ownership.
+// The caller can no longer use the value after passing it.
+fn consume(own user: User) -> str {
+  return user.name
+}
+
+// Without `own`, the parameter is borrowed.
+// The caller keeps ownership and can still use it.
+fn borrow(user: User) -> int {
+  return user.score
+}
+
+fn main() {
+  user = make_user("alice")
+
+// Borrowing - user is still ours after this call.
+  score = borrow(user)
+  println(score)
+
+// Ownership transfer - user moves to consume().
+// Using user after this line would be a compile error:
+//   error: use of moved value 'user'
+  name = consume(user)
+  println(name)
+
+// Loop allocations are freed each iteration.
+// No arena block needed - scope exit handles it.
+  for i in range(3) {
+    temp = User { name: "temp", score: i }
+    println(temp.score)
+  }
+}

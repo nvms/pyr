@@ -1,0 +1,33 @@
+struct User {
+  name: str
+  score: int
+}
+
+fn make_user(name: str, score: int) -> User {
+  return User { name: name, score: score }
+}
+
+fn consume(own user: User) -> str {
+  return user.name
+}
+
+fn borrow(user: User) -> int {
+  return user.score
+}
+
+fn main() {
+  user = make_user("alice", 100)
+  score = borrow(user)
+  println(score)
+
+  name = consume(user)
+  println(name)
+
+  items = [1, 2, 3]
+  println(len(items))
+
+  for i in range(5) {
+    temp = User { name: "temp", score: i }
+    println(temp.score)
+  }
+}
