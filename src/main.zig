@@ -7,11 +7,18 @@ const vm_mod = @import("vm.zig");
 const module = @import("module.zig");
 const pkg = @import("pkg.zig");
 const lsp = @import("lsp.zig");
+const bytecode_format = @import("bytecode_format.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    if (bytecode_format.detectEmbeddedBytecode(allocator)) |bc| {
+        defer allocator.free(bc);
+        runEmbedded(allocator, bc);
+        return;
+    }
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -34,7 +41,11 @@ pub fn main() !void {
             std.debug.print("error: pyr build requires a file argument\n", .{});
             std.process.exit(1);
         }
-        try buildFile(allocator, args[2]);
+        var output_name: ?[]const u8 = null;
+        if (args.len >= 5 and std.mem.eql(u8, args[3], "-o")) {
+            output_name = args[4];
+        }
+        try buildFile(allocator, args[2], output_name);
     } else if (std.mem.eql(u8, command, "version")) {
         std.debug.print("pyr 0.1.0\n", .{});
     } else if (std.mem.eql(u8, command, "init")) {
@@ -148,10 +159,60 @@ fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
     };
 }
 
-fn buildFile(allocator: std.mem.Allocator, path: []const u8) !void {
+fn buildFile(allocator: std.mem.Allocator, path: []const u8, output_name: ?[]const u8) !void {
     var result = try compile(allocator, path);
     defer result.arena.deinit();
-    std.debug.print("compiled {s}\n", .{path});
+
+    const bc = bytecode_format.serialize(result.arena.allocator(), result.func, result.ffi_descs) catch {
+        std.debug.print("error: bytecode serialization failed\n", .{});
+        std.process.exit(1);
+    };
+
+    const exe_path = std.fs.selfExePath(&self_exe_buf) catch {
+        std.debug.print("error: could not find pyr executable path\n", .{});
+        std.process.exit(1);
+    };
+
+    const out = output_name orelse stripExtension(path);
+    bytecode_format.appendToExecutable(allocator, exe_path, bc, out) catch |err| {
+        std.debug.print("error: could not write executable: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    _ = std.posix.write(1, "built ") catch {};
+    _ = std.posix.write(1, out) catch {};
+    _ = std.posix.write(1, "\n") catch {};
+}
+
+var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+fn stripExtension(path: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, path, '.')) |dot| {
+        if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| {
+            if (dot > slash) return path[slash + 1 .. dot];
+        }
+        return path[0..dot];
+    }
+    return path;
+}
+
+fn runEmbedded(allocator: std.mem.Allocator, bc: []const u8) void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const result = bytecode_format.deserialize(alloc, bc) catch {
+        std.debug.print("error: invalid embedded bytecode\n", .{});
+        std.process.exit(1);
+    };
+
+    bytecode_format.patchNatives(result.functions);
+
+    var vm = vm_mod.VM.init(alloc);
+    vm.setFfiDescs(result.ffi_descs);
+    vm.interpret(result.func) catch {
+        std.process.exit(1);
+    };
 }
 
 const LineLoc = struct { line: usize, col: usize };
@@ -233,7 +294,7 @@ fn printUsage() void {
         \\
         \\commands:
         \\  run <file>              run a .pyr file
-        \\  build <file>            check a .pyr file
+        \\  build <file> [-o name]  compile to standalone binary
         \\  init [name]             create pyr.pkg
         \\  install                 fetch all dependencies
         \\  add <url> [version]     add a dependency
@@ -253,4 +314,5 @@ test {
     _ = @import("stdlib.zig");
     _ = @import("pkg.zig");
     _ = @import("lsp.zig");
+    _ = @import("bytecode_format.zig");
 }

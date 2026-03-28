@@ -57,6 +57,33 @@ const modules = [_]StdModule{
     .{ .name = "tls", .functions = &tls.fns },
 };
 
+pub fn qualifyNative(buf: []u8, func_ptr: *const fn (std.mem.Allocator, []const Value) Value) ?[]const u8 {
+    for (&modules) |*m| {
+        for (m.functions) |def| {
+            if (def.func == func_ptr) {
+                return std.fmt.bufPrint(buf, "{s}.{s}", .{ m.name, def.name }) catch null;
+            }
+        }
+    }
+    return null;
+}
+
+pub fn findNativeByQualified(qualified: []const u8) ?*const fn (std.mem.Allocator, []const Value) Value {
+    if (std.mem.indexOfScalar(u8, qualified, '.')) |dot| {
+        const mod_name = qualified[0..dot];
+        const fn_name = qualified[dot + 1 ..];
+        for (&modules) |*m| {
+            if (std.mem.eql(u8, m.name, mod_name)) {
+                for (m.functions) |def| {
+                    if (std.mem.eql(u8, def.name, fn_name)) return def.func;
+                }
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
 pub fn writeBytes(fd: std.posix.fd_t, bytes: []const u8) void {
     var written: usize = 0;
     while (written < bytes.len) {

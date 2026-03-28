@@ -571,6 +571,39 @@ pub const Compiler = struct {
         };
     }
 
+    pub const NativeEntry = struct {
+        name: []const u8,
+        func: *const fn (std.mem.Allocator, []const Value) Value,
+    };
+
+    pub const builtin_natives = [_]NativeEntry{
+        .{ .name = "sqrt", .func = &nativeSqrt },
+        .{ .name = "abs", .func = &nativeAbs },
+        .{ .name = "int", .func = &nativeInt },
+        .{ .name = "float", .func = &nativeFloat },
+        .{ .name = "len", .func = &nativeLen },
+        .{ .name = "push", .func = &nativePush },
+        .{ .name = "assert", .func = &nativeAssert },
+        .{ .name = "assert_eq", .func = &nativeAssertEq },
+        .{ .name = "contains", .func = &nativeContains },
+        .{ .name = "index_of", .func = &nativeIndexOf },
+        .{ .name = "slice", .func = &nativeSlice },
+        .{ .name = "join", .func = &nativeJoin },
+        .{ .name = "reverse", .func = &nativeReverse },
+        .{ .name = "pop", .func = &nativePop },
+        .{ .name = "split", .func = &nativeSplit },
+        .{ .name = "trim", .func = &nativeTrim },
+        .{ .name = "starts_with", .func = &nativeStartsWith },
+        .{ .name = "ends_with", .func = &nativeEndsWith },
+        .{ .name = "replace", .func = &nativeReplace },
+        .{ .name = "to_upper", .func = &nativeToUpper },
+        .{ .name = "to_lower", .func = &nativeToLower },
+        .{ .name = "clone", .func = &nativeClone },
+        .{ .name = "getattr", .func = &nativeGetattr },
+        .{ .name = "keys", .func = &nativeKeys },
+        .{ .name = "type_of", .func = &nativeTypeOf },
+    };
+
     // ---------------------------------------------------------------
     // declaration registration (first pass)
     // ---------------------------------------------------------------
