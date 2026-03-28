@@ -12,9 +12,19 @@ const Module = @import("module.zig").Module;
 const stdlib = @import("stdlib.zig");
 const ffi = @import("ffi.zig");
 
+pub const OwnershipHint = struct {
+    kind: Kind,
+    name: []const u8,
+    offset: usize,
+    target: []const u8,
+
+    pub const Kind = enum { freed, moved, conditional_free };
+};
+
 pub const CompileResult = struct {
     func: *ObjFunction,
     ffi_descs: []ffi.FfiDesc,
+    hints: []const OwnershipHint = &.{},
 };
 
 const VariantInfo = struct {
@@ -62,6 +72,8 @@ pub const Compiler = struct {
     inline_fns: std.StringHashMapUnmanaged(ast.FnDecl) = .{},
     inline_subs: ?*[16]InlineSub = null,
     inline_sub_count: u8 = 0,
+    hints: ?*std.ArrayListUnmanaged(OwnershipHint) = null,
+    current_span: ast.Span = .{ .start = 0, .end = 0 },
 
     const InlineSub = struct {
         name: []const u8,
@@ -88,6 +100,42 @@ pub const Compiler = struct {
 
     pub fn compile(alloc: std.mem.Allocator, tree: ast.Ast) ?CompileResult {
         return compileModule(alloc, tree, null, ".");
+    }
+
+    pub fn compileForHints(alloc: std.mem.Allocator, tree: ast.Ast) ?[]const OwnershipHint {
+        var hints: std.ArrayListUnmanaged(OwnershipHint) = .{};
+        const script = ObjFunction.create(alloc, "", 0);
+        script.source = tree.source;
+        var compiler = Compiler{
+            .alloc = alloc,
+            .enclosing = null,
+            .function = script,
+            .locals = undefined,
+            .local_count = 0,
+            .scope_depth = 0,
+            .struct_defs = .{},
+            .enum_variants = .{},
+            .fn_table = .{},
+            .fn_returns = .{},
+            .upvalues = undefined,
+            .upvalue_count = 0,
+            .module_loader = null,
+            .module_dir = ".",
+            .module_namespaces = .{},
+            .std_modules = .{},
+            .native_fns = .{},
+            .ffi_descs = .{},
+            .ffi_funcs = .{},
+            .source = tree.source,
+            .current_line = 1,
+            .hints = &hints,
+        };
+
+        compiler.defineNatives();
+        for (tree.items) |item| compiler.registerDecl(item);
+        for (tree.items) |item| compiler.compileItem(item);
+
+        return hints.toOwnedSlice(alloc) catch &.{};
     }
 
     pub fn compileModule(alloc: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) ?CompileResult {
@@ -694,6 +742,7 @@ pub const Compiler = struct {
             .ffi_funcs = .{},
             .source = self.source,
             .current_line = self.current_line,
+            .hints = self.hints,
         };
         sub.addLocal("");
 
@@ -783,9 +832,11 @@ pub const Compiler = struct {
                     self.emitOp(.free_local_if);
                     self.emitByte(slot);
                     self.emitByte(flag_slot);
+                    self.recordHint(.conditional_free, local.name, self.current_span.end, "");
                 } else {
                     self.emitOp(.free_local);
                     self.emitByte(slot);
+                    self.recordHint(.freed, local.name, self.current_span.end, "");
                 }
                 local.is_owned = false;
             }
@@ -1755,6 +1806,7 @@ pub const Compiler = struct {
         self.emitOp(.call);
         self.emitByte(@intCast(call.args.len));
         self.emitDropFlags(call);
+        self.recordTransferHints(call);
     }
 
     fn needsDropFlag(self: *Compiler, name: []const u8) bool {
@@ -2215,6 +2267,7 @@ pub const Compiler = struct {
             .ffi_funcs = .{},
             .source = self.source,
             .current_line = self.current_line,
+            .hints = self.hints,
         };
         sub.addLocal("");
 
@@ -2277,6 +2330,7 @@ pub const Compiler = struct {
             .ffi_funcs = .{},
             .source = self.source,
             .current_line = self.current_line,
+            .hints = self.hints,
         };
         sub.addLocal("");
 
@@ -2588,9 +2642,11 @@ pub const Compiler = struct {
                     self.emitOp(.free_local_if);
                     self.emitByte(self.local_count - 1);
                     self.emitByte(flag_slot);
+                    self.recordHint(.conditional_free, local.name, self.current_span.end, "");
                 } else {
                     self.emitOp(.free_local);
                     self.emitByte(self.local_count - 1);
+                    self.recordHint(.freed, local.name, self.current_span.end, "");
                 }
             }
             self.emitOp(.pop);
@@ -2749,6 +2805,35 @@ pub const Compiler = struct {
         return &self.function.chunk;
     }
 
+    fn recordHint(self: *Compiler, kind: OwnershipHint.Kind, name: []const u8, offset: usize, target: []const u8) void {
+        const h = self.hints orelse return;
+        h.append(self.alloc, .{ .kind = kind, .name = name, .offset = offset, .target = target }) catch {};
+    }
+
+    fn recordTransferHints(self: *Compiler, call: ast.Call) void {
+        if (self.hints == null) return;
+        if (call.callee.kind != .identifier) return;
+        const callee_name = call.callee.kind.identifier;
+
+        var own_mask: u64 = 0;
+        var c: ?*Compiler = self;
+        while (c) |cur| {
+            if (cur.fn_own_params.get(callee_name)) |mask| {
+                own_mask = mask;
+                break;
+            }
+            c = cur.enclosing;
+        }
+        if (own_mask == 0) return;
+
+        for (call.args, 0..) |arg, i| {
+            if (i >= 64) break;
+            if ((own_mask & (@as(u64, 1) << @intCast(i))) == 0) continue;
+            if (arg.kind != .identifier) continue;
+            self.recordHint(.moved, arg.kind.identifier, self.current_span.end, callee_name);
+        }
+    }
+
     fn lineFromOffset(self: *const Compiler, offset: usize) u32 {
         var line: u32 = 1;
         const end = @min(offset, self.source.len);
@@ -2760,6 +2845,7 @@ pub const Compiler = struct {
 
     fn setSpan(self: *Compiler, span: ast.Span) void {
         self.current_line = self.lineFromOffset(span.start);
+        self.current_span = span;
     }
 
     fn emitByte(self: *Compiler, byte: u8) void {
@@ -2968,6 +3054,9 @@ fn blockHasOwnCallOf(block: *const ast.Block, name: []const u8, fn_own: std.Stri
             else => {},
         }
     }
+    if (block.trailing) |trailing| {
+        if (exprHasOwnCallOf(trailing, name, fn_own)) return true;
+    }
     return false;
 }
 
@@ -3150,4 +3239,104 @@ fn allSimpleArgs(args: []const *const ast.Expr) bool {
         if (!isSimpleArg(arg)) return false;
     }
     return true;
+}
+
+test "compileForHints: owned local freed after last use" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const source =
+        \\struct User {
+        \\  name: str
+        \\}
+        \\fn main() {
+        \\  u = User { name: "alice" }
+        \\  println(u.name)
+        \\}
+    ;
+    const tokens = @import("parser.zig").tokenize(alloc, source);
+    var p = @import("parser.zig").Parser.init(tokens, source, alloc);
+    const tree = p.parse();
+    const hints = Compiler.compileForHints(alloc, tree) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+
+    try std.testing.expect(hints.len > 0);
+    try std.testing.expectEqual(OwnershipHint.Kind.freed, hints[0].kind);
+    try std.testing.expectEqualStrings("u", hints[0].name);
+}
+
+test "compileForHints: ownership transfer recorded" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const source =
+        \\struct Data {
+        \\  val: int
+        \\}
+        \\fn consume(own d: Data) {
+        \\  println(d.val)
+        \\}
+        \\fn main() {
+        \\  d = Data { val: 42 }
+        \\  consume(d)
+        \\}
+    ;
+    const tokens = @import("parser.zig").tokenize(alloc, source);
+    var p = @import("parser.zig").Parser.init(tokens, source, alloc);
+    const tree = p.parse();
+    const hints = Compiler.compileForHints(alloc, tree) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+
+    var has_moved = false;
+    for (hints) |h| {
+        if (h.kind == .moved) {
+            has_moved = true;
+            try std.testing.expectEqualStrings("d", h.name);
+            try std.testing.expectEqualStrings("consume", h.target);
+        }
+    }
+    try std.testing.expect(has_moved);
+}
+
+test "compileForHints: conditional move has conditional_free" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const source =
+        \\struct Data {
+        \\  val: int
+        \\}
+        \\fn consume(own d: Data) {
+        \\  println(d.val)
+        \\}
+        \\fn main() {
+        \\  d = Data { val: 42 }
+        \\  if d.val > 10 {
+        \\    consume(d)
+        \\  }
+        \\  println(0)
+        \\}
+    ;
+    const tokens = @import("parser.zig").tokenize(alloc, source);
+    var p = @import("parser.zig").Parser.init(tokens, source, alloc);
+    const tree = p.parse();
+    const hints = Compiler.compileForHints(alloc, tree) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+
+    var has_moved = false;
+    var has_cond_free = false;
+    for (hints) |h| {
+        if (std.mem.eql(u8, h.name, "d")) {
+            if (h.kind == .moved) has_moved = true;
+            if (h.kind == .conditional_free) has_cond_free = true;
+        }
+    }
+    try std.testing.expect(has_moved);
+    try std.testing.expect(has_cond_free);
 }

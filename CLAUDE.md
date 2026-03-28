@@ -60,6 +60,7 @@ src/
 - `pyr run <file>` - compile and run
 - `pyr test [file]` - run tests
 - `pyr fmt <file>...` - format pyr source
+- `pyr lsp` - language server (stdio transport)
 
 ### compiler error quality
 
@@ -281,7 +282,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 - type aliases: `type Name = TypeExpr` for named type aliases. `fn(T, T) -> T` syntax in type expressions for function types. `type` keyword parsed as top-level item. sema resolves aliases via symbol lookup, fn_type resolves to FnType. compiler and VM unchanged - pure type system feature
 - function inlining: expression-body functions with pure arithmetic/comparison bodies are inlined at call sites via expression substitution. compiler maps parameter names to argument expressions, compiles body directly in caller context (no call frame, no return). restricted to simple args (identifiers/literals) so multi-use params are safe. works with UFCS calls. 26% speedup on tight loops calling small helpers. zero VM changes - purely a compiler optimization
 - ownership model: compile-time memory management. heap-allocated values (structs, arrays, strings) are automatically freed when no longer used. `own` keyword on function parameters for explicit ownership transfer. sema tracks ownership states (owned/borrowed/moved/maybe_moved). use-after-move is a compile error. conditional moves (inside if/match) use `maybe_moved` state with runtime drop flags. `free_local` opcode with shallow free (frees container, not contents - contents may be constant pool values). `free_local_if` opcode for conditional free (checks drop flag, only frees if not moved). liveness analysis via AST pre-scan: `emitEarlyFrees()` checks remaining statements for name references, emits free after last use instead of waiting for scope exit. borrow-store detection: sema catches `push(arr, borrowed_param)` and suggests `own`. drop flags: compiler allocates hidden `$drop_flag` locals (initialized to 0), sets to 1 on conditional move via `emitDropFlags()`, `free_local_if` checks flag at free point. `own_params` bitmask on FnType (same pattern as mut_params). `fn_own_params` hashmap on Compiler for codegen access. `isHeapExpr()` in compiler detects struct literals, array literals, call returns, string interpolation. `cond_depth` tracked in both sema and compiler for conditional move detection. full spec in OWNERSHIP.md
-- 269 tests, 37 validated examples, 11 benchmarks
+- LSP server (`pyr lsp`): language server protocol over stdio. document sync (open/change/close/save), diagnostics (parser + sema errors), hover (function signatures, keyword docs, builtin docs, type inference, ownership info), go-to-definition, find references, inlay hints (ownership: free points after last use, ownership transfers at call sites, conditional frees with drop flags). `textDocument/inlayHint` compiles the file via `Compiler.compileForHints()` which runs the full compilation pipeline with a side-channel `OwnershipHint` collector - records freed/moved/conditional_free events with source byte offsets. hover enriched with ownership summaries for functions (own vs borrowed params) and variables (owned/moved/conditional status with free point line numbers). deduplication: when a variable has both moved and freed hints, only the moved hint is shown (moved implies the callee owns it). `inlayHintProvider: true` in capabilities
+- 300 tests, 37 validated examples, 11 benchmarks
 - UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`, `"a-b-c".split("-").join("/")`
 - index_local/index_local_local opcodes: fused array indexing. index_local reads array from local slot, pops index from stack. index_local_local reads both array and index from local slots (used in for-in loops). eliminates stack pushes/pops for the common arr[idx] pattern. compiler detects identifier targets in index expressions
 - builtins: sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower. all work with UFCS: `arr.contains(x)`, `str.split(",")`, `"hello".to_upper()`
@@ -299,8 +301,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. LSP: ownership hints - build an LSP server that surfaces ownership information as inline hints (free points after last use, ownership transfers at call sites), hover info (variable ownership status, function ownership summary), and conditional move indicators. the compiler already computes all ownership data - the LSP just needs to read it. see OWNERSHIP.md "LSP integration" section for full spec including implementation approach, protocol mappings, and data structures needed
-2. dogfooding: build real programs in pyr to find rough edges
+1. dogfooding: build real programs in pyr to find rough edges
 
 ## implementation notes
 
@@ -311,6 +312,7 @@ critical invariants to always keep in mind:
 - fastLoop return_ must clean up the stack BEFORE checking exit condition
 - new specialized opcodes go in run() only unless proven safe in fastLoop (float ops in fastLoop caused 7x regression)
 - NaN boxing: Value.tag is a method (`.tag()`), not a field. Value.bits is the raw u64. integers are 45-bit signed (sign-extended). pointers are 45-bit (32TB). never access `.data` - use the typed accessors (asInt, asFloat, asString, etc)
+- blockHasOwnCallOf must check block.trailing (not just stmts) for own-param calls. single-expression if bodies like `if cond { consume(d) }` store the call as trailing, not as a stmt. missing this causes drop flags to not be allocated
 
 ## design principles
 
