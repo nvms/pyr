@@ -309,9 +309,8 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. escaped quotes in string interpolation: `"{getattr(e, \"field\")}"` fails because lexer doesn't handle `\"` inside interpolation expressions. need to track interpolation nesting in the lexer and allow escaped delimiters inside expression portions
-2. `sort` builtin: no way to sort arrays. need `sort(arr)` and `sort(arr, fn)` for custom comparators. the logstat dogfood had to implement O(n^2) selection sort manually
-3. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat
+1. `sort` builtin: no way to sort arrays. need `sort(arr)` and `sort(arr, fn)` for custom comparators. the logstat dogfood had to implement O(n^2) selection sort manually
+2. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat
 
 ## implementation notes
 

@@ -69,6 +69,7 @@ deep implementation notes for working on the compiler, VM, and runtime. read thi
 - compiler emits each part: literals as string constants, expressions followed by `to_str` opcode. parts are concatenated with generic `add` opcode
 - `to_str` opcode converts stack top to ObjString: strings pass through, ints/floats use `bufPrint`, bools become "true"/"false", nil becomes "nil"
 - plain strings without `{` still lex as `string` token (no overhead for non-interpolated strings)
+- inner strings inside interpolation expressions work naturally: `"value: {getattr(obj, "field")}"`. the lexer's interp_depth counter correctly tracks nesting, so `"field"` is lexed as a complete string without ending the outer interpolation. `}` inside inner strings is also safe. to include literal `{` or `}` in inner strings, use `\{` and `\}`. do NOT use `\"` to "escape" quotes inside interpolation - backslash has no meaning in code mode, only inside string literals
 
 ## module system
 
