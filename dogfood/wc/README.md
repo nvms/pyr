@@ -5,7 +5,7 @@ count lines, words, and bytes in files.
 ## usage
 
 ```
-pyr run dogfood/wc/main.pyr -- [flags] <file> [file...]
+pyr run main.pyr [flags] <file> [file...]
 ```
 
 ## flags

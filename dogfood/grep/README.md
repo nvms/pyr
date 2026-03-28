@@ -5,7 +5,7 @@ search files for a pattern, print matching lines.
 ## usage
 
 ```
-pyr run dogfood/grep/main.pyr -- [flags] <pattern> <file> [file...]
+pyr run main.pyr [flags] <pattern> <file> [file...]
 ```
 
 ## flags
@@ -18,7 +18,7 @@ pyr run dogfood/grep/main.pyr -- [flags] <pattern> <file> [file...]
 ## examples
 
 ```
-pyr run dogfood/grep/main.pyr -- "fn main" src/*.zig
-pyr run dogfood/grep/main.pyr -- -n -i "error" src/compiler.zig
-pyr run dogfood/grep/main.pyr -- -c "test" src/vm.zig
+pyr run main.pyr "fn main" ../../src/main.zig
+pyr run main.pyr -n -i "error" ../../src/compiler.zig
+pyr run main.pyr -c "test" ../../src/vm.zig
 ```

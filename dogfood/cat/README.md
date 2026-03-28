@@ -5,7 +5,7 @@ concatenate and print files.
 ## usage
 
 ```
-pyr run dogfood/cat/main.pyr -- [flags] <file> [file...]
+pyr run main.pyr [flags] <file> [file...]
 ```
 
 ## flags

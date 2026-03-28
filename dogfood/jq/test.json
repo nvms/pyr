@@ -1,0 +1,51 @@
+{
+  "company": "Acme Corp",
+  "founded": 1995,
+  "active": true,
+  "ceo": null,
+  "departments": [
+    {
+      "name": "Engineering",
+      "headcount": 42,
+      "lead": {
+        "name": "Dana Chen",
+        "title": "VP Engineering",
+        "reports": 12
+      },
+      "projects": [
+        {"name": "Atlas", "status": "active", "priority": 1},
+        {"name": "Beacon", "status": "completed", "priority": 3},
+        {"name": "Cipher", "status": "active", "priority": 2}
+      ]
+    },
+    {
+      "name": "Design",
+      "headcount": 18,
+      "lead": {
+        "name": "Marcus Webb",
+        "title": "Head of Design",
+        "reports": 6
+      },
+      "projects": [
+        {"name": "Rebrand", "status": "active", "priority": 1},
+        {"name": "Mobile App", "status": "planning", "priority": 2}
+      ]
+    },
+    {
+      "name": "Operations",
+      "headcount": 25,
+      "lead": {
+        "name": "Priya Kapoor",
+        "title": "COO",
+        "reports": 8
+      },
+      "projects": []
+    }
+  ],
+  "locations": ["Portland", "Austin", "Berlin"],
+  "metadata": {
+    "version": 3,
+    "generated": "2026-03-28",
+    "schema": "company-v3"
+  }
+}
