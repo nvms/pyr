@@ -212,6 +212,9 @@ pub const Compiler = struct {
         self.defineNativeFn("to_upper", 1, &nativeToUpper);
         self.defineNativeFn("to_lower", 1, &nativeToLower);
         self.defineNativeFn("clone", 1, &nativeClone);
+        self.defineNativeFn("getattr", 2, &nativeGetattr);
+        self.defineNativeFn("keys", 1, &nativeKeys);
+        self.defineNativeFn("type_of", 1, &nativeTypeOf);
 
         self.defineHelperFn("map", 2, buildMapFunc);
         self.defineHelperFn("filter", 2, buildFilterFunc);
@@ -529,6 +532,43 @@ pub const Compiler = struct {
 
     fn nativeClone(alloc: std.mem.Allocator, args: []const Value) Value {
         return args[0].deepClone(alloc);
+    }
+
+    fn nativeGetattr(_: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() != .struct_ or args[1].tag() != .string) return Value.initNil();
+        const s = args[0].asStruct();
+        return s.getField(args[1].asString().chars) orelse Value.initNil();
+    }
+
+    fn nativeKeys(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() == .array) {
+            const arr = args[0].asArray();
+            const items = alloc.alloc(Value, arr.items.len) catch return Value.initNil();
+            for (0..arr.items.len) |i| {
+                items[i] = Value.initInt(@intCast(i));
+            }
+            return ObjArray.create(alloc, items).toValue();
+        }
+        if (args[0].tag() != .struct_) return Value.initNil();
+        const s = args[0].asStruct();
+        const items = alloc.alloc(Value, s.field_count) catch return Value.initNil();
+        for (s.field_names, 0..) |name, i| {
+            items[i] = ObjString.create(alloc, name).toValue();
+        }
+        return ObjArray.create(alloc, items).toValue();
+    }
+
+    fn nativeTypeOf(_: std.mem.Allocator, args: []const Value) Value {
+        return switch (args[0].tag()) {
+            .nil => Value.initString(ObjString.create(std.heap.page_allocator, "null")),
+            .bool_ => Value.initString(ObjString.create(std.heap.page_allocator, "boolean")),
+            .int => Value.initString(ObjString.create(std.heap.page_allocator, "number")),
+            .float => Value.initString(ObjString.create(std.heap.page_allocator, "number")),
+            .string => Value.initString(ObjString.create(std.heap.page_allocator, "string")),
+            .array => Value.initString(ObjString.create(std.heap.page_allocator, "array")),
+            .struct_ => Value.initString(ObjString.create(std.heap.page_allocator, "object")),
+            else => Value.initString(ObjString.create(std.heap.page_allocator, "unknown")),
+        };
     }
 
     // ---------------------------------------------------------------

@@ -1,0 +1,197 @@
+imp std/json
+imp std/fs
+imp std/os
+imp std/io { println, eprintln, print }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn pp(val, indent: int) {
+  t = type_of(val)
+  if t == "object" {
+    println("\{")
+    k = keys(val)
+    for i in range(len(k)) {
+      print_indent(indent + 2)
+      print("\"")
+      print(k[i])
+      print("\": ")
+      pp(getattr(val, k[i]), indent + 2)
+      if i < len(k) - 1 {
+        println(",")
+      } else {
+        println("")
+      }
+    }
+    print_indent(indent)
+    print("\}")
+  } else if t == "array" {
+    println("[")
+    for i in range(len(val)) {
+      print_indent(indent + 2)
+      pp(val[i], indent + 2)
+      if i < len(val) - 1 {
+        println(",")
+      } else {
+        println("")
+      }
+    }
+    print_indent(indent)
+    print("]")
+  } else if t == "string" {
+    print("\"")
+    print(val)
+    print("\"")
+  } else if t == "null" {
+    print("null")
+  } else {
+    print("{val}")
+  }
+}
+
+fn print_indent(n: int) {
+  for i in range(n) {
+    print(" ")
+  }
+}
+
+fn output(val) {
+  t = type_of(val)
+  if t == "object" || t == "array" {
+    pp(val, 0)
+    println("")
+  } else if t == "string" {
+    println("\"{val}\"")
+  } else if t == "null" {
+    println("null")
+  } else {
+    println("{val}")
+  }
+}
+
+fn eval_filter(val, filter: str) {
+  if filter == "." { return val }
+  if filter == "keys" { return keys(val) }
+  if filter == "length" { return eval_length(val) }
+  if filter == "type" { return type_of(val) }
+
+  if starts_with(filter, ".") {
+    return eval_path(val, slice(filter, 1, len(filter)))
+  }
+
+  return val
+}
+
+fn eval_length(val) {
+  t = type_of(val)
+  if t == "array" { return len(val) }
+  if t == "object" { return len(keys(val)) }
+  if t == "string" { return len(val) }
+  return 0
+}
+
+fn eval_path(val, path: str) {
+  if len(path) == 0 { return val }
+
+  if starts_with(path, "[") {
+    end = index_of(path, "]")
+    if end < 0 { return nil }
+    idx = int(slice(path, 1, end))
+    if type_of(val) != "array" || idx >= len(val) { return nil }
+    rest = slice(path, end + 1, len(path))
+    if len(rest) > 0 && starts_with(rest, ".") {
+      return eval_path(val[idx], slice(rest, 1, len(rest)))
+    }
+    return val[idx]
+  }
+
+  dot = index_of(path, ".")
+  bracket = index_of(path, "[")
+
+  mut field = path
+  mut rest = ""
+
+  if dot >= 0 && (bracket < 0 || dot < bracket) {
+    field = slice(path, 0, dot)
+    rest = slice(path, dot + 1, len(path))
+  } else if bracket >= 0 {
+    field = slice(path, 0, bracket)
+    rest = slice(path, bracket, len(path))
+  }
+
+  result = getattr(val, field)
+  if result == nil { return nil }
+  if len(rest) > 0 {
+    return eval_path(result, rest)
+  }
+  return result
+}
+
+fn iterate(val) {
+  if type_of(val) == "array" {
+    for item in val {
+      output(item)
+    }
+  } else if type_of(val) == "object" {
+    k = keys(val)
+    for key in k {
+      output(getattr(val, key))
+    }
+  }
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    eprintln("usage: jq <filter> [file]")
+    os.exit(1)
+  }
+
+  filter = args[0]
+
+  if len(args) < 2 {
+    eprintln("jq: pass a file argument")
+    os.exit(1)
+  }
+
+  filename = args[1]
+  if !fs.exists(filename) {
+    eprintln("jq: {filename}: no such file")
+    os.exit(1)
+  }
+
+  data = json.decode(fs.read(filename))
+
+  if filter == ".[]" {
+    iterate(data)
+    return nil
+  }
+
+  if contains(filter, " | ") {
+    parts = split(filter, " | ")
+    mut current = data
+    for part in parts {
+      if part == ".[]" {
+        iterate(current)
+        return nil
+      }
+      current = eval_filter(current, part)
+    }
+    output(current)
+    return nil
+  }
+
+  output(eval_filter(data, filter))
+}
