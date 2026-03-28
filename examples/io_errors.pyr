@@ -22,7 +22,7 @@ fn main() {
     _ -> println("match: data")
   }
 
-  bad = net.connect("127.0.0.1", 19999)
+  bad = net.connect("127.0.0.1", 19921)
   match bad {
     Error(msg) -> println("connect error: " + msg)
     _ -> println("unexpected success")

@@ -19,3 +19,4 @@ jobs:
           version: 0.15.1
       - run: zig build
       - run: zig build test
+      - run: SKIP_NET=1 make examples

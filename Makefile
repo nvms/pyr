@@ -12,6 +12,9 @@ examples: build ## Run and validate example programs
 	for f in examples/*.pyr; do \
 		name=$$(basename $$f .pyr); \
 		if [ "$$name" = "mathlib" ] || [ "$$name" = "tls_server" ]; then continue; fi; \
+		if [ -n "$$SKIP_NET" ]; then \
+			case "$$name" in io_errors|tls|udp|timeouts|async_server|stdlib_net|http_server|stdlib_http) continue;; esac; \
+		fi; \
 		total=$$((total + 1)); \
 		expected="examples/$$name.expected"; \
 		if [ -f "$$expected" ]; then \
