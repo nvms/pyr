@@ -58,6 +58,7 @@ pub const Compiler = struct {
     deferred: [64]DeferEntry = undefined,
     defer_count: u8 = 0,
     cond_depth: u32 = 0,
+    current_block: ?*const ast.Block = null,
     inline_fns: std.StringHashMapUnmanaged(ast.FnDecl) = .{},
     inline_subs: ?*[16]InlineSub = null,
     inline_sub_count: u8 = 0,
@@ -742,6 +743,9 @@ pub const Compiler = struct {
     fn compileBlock(self: *Compiler, block: *const ast.Block) void {
         self.beginScope();
         const scope_base = self.local_count;
+        const prev_block = self.current_block;
+        self.current_block = block;
+        defer self.current_block = prev_block;
 
         for (block.stmts, 0..) |stmt, stmt_idx| {
             self.compileStmt(stmt);
@@ -815,6 +819,12 @@ pub const Compiler = struct {
                         self.addLocalTyped(b.name, hint);
                         if (isHeapExpr(b.value)) {
                             self.locals[self.local_count - 1].is_owned = true;
+                        }
+                        if (self.needsDropFlag(b.name)) {
+                            const owned_slot = self.local_count - 1;
+                            self.emitConstant(Value.initInt(0));
+                            self.addLocal("$drop_flag");
+                            self.locals[owned_slot].drop_flag_slot = self.local_count - 1;
                         }
                     }
                 } else {
@@ -1747,6 +1757,26 @@ pub const Compiler = struct {
         self.emitDropFlags(call);
     }
 
+    fn needsDropFlag(self: *Compiler, name: []const u8) bool {
+        var fn_own = self.fn_own_params;
+        var c: ?*Compiler = self.enclosing;
+        while (c) |cur| {
+            var it = cur.fn_own_params.iterator();
+            while (it.next()) |entry| {
+                fn_own.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
+            }
+            c = cur.enclosing;
+        }
+        if (fn_own.count() == 0) return false;
+
+        if (self.current_block) |block| {
+            for (block.stmts) |stmt| {
+                if (stmtHasOwnCallInCond(stmt, name, fn_own)) return true;
+            }
+        }
+        return false;
+    }
+
     fn emitDropFlags(self: *Compiler, call: ast.Call) void {
         if (self.cond_depth == 0) return;
         if (call.callee.kind != .identifier) return;
@@ -1770,17 +1800,12 @@ pub const Compiler = struct {
             const arg_name = arg.kind.identifier;
             const slot = self.resolveLocal(arg_name) orelse continue;
             const local = &self.locals[slot];
-            if (!local.is_owned) continue;
-
-            if (local.drop_flag_slot == null) {
-                self.emitConstant(Value.initInt(0));
-                self.addLocal("$drop_flag");
-                local.drop_flag_slot = self.local_count - 1;
+            if (local.drop_flag_slot) |flag_slot| {
+                self.emitConstant(Value.initInt(1));
+                self.emitOp(.set_local);
+                self.emitByte(flag_slot);
+                self.emitOp(.pop);
             }
-            self.emitConstant(Value.initInt(1));
-            self.emitOp(.set_local);
-            self.emitByte(local.drop_flag_slot.?);
-            self.emitOp(.pop);
         }
     }
 
@@ -2865,6 +2890,85 @@ fn typeHintFromExprWith(type_expr: ?*const ast.TypeExpr, struct_defs: ?*const st
         if (sd.contains(name)) return .struct_;
     }
     return .unknown;
+}
+
+fn exprHasOwnCallOf(expr: *const ast.Expr, name: []const u8, fn_own: std.StringHashMapUnmanaged(u64)) bool {
+    switch (expr.kind) {
+        .call => |c| {
+            if (c.callee.kind == .identifier) {
+                const callee_name = c.callee.kind.identifier;
+                if (fn_own.get(callee_name)) |mask| {
+                    for (c.args, 0..) |arg, i| {
+                        if (i >= 64) break;
+                        if ((mask & (@as(u64, 1) << @intCast(i))) == 0) continue;
+                        if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) return true;
+                    }
+                }
+            }
+            for (c.args) |arg| {
+                if (exprHasOwnCallOf(arg, name, fn_own)) return true;
+            }
+            return exprHasOwnCallOf(c.callee, name, fn_own);
+        },
+        .binary => |b| return exprHasOwnCallOf(b.lhs, name, fn_own) or exprHasOwnCallOf(b.rhs, name, fn_own),
+        .if_expr => |ie| {
+            if (blockHasOwnCallOf(ie.then_block, name, fn_own)) return true;
+            if (ie.else_branch) |eb| switch (eb) {
+                .block => |blk| if (blockHasOwnCallOf(blk, name, fn_own)) return true,
+                .else_if => |ei| if (exprHasOwnCallOf(ei, name, fn_own)) return true,
+            };
+            return false;
+        },
+        .match_expr => |me| {
+            for (me.arms) |arm| {
+                if (exprHasOwnCallOf(arm.body, name, fn_own)) return true;
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+fn stmtHasOwnCallInCond(stmt: ast.Stmt, name: []const u8, fn_own: std.StringHashMapUnmanaged(u64)) bool {
+    return switch (stmt.kind) {
+        .expr_stmt => |e| switch (e.kind) {
+            .if_expr => |ie| {
+                if (blockHasOwnCallOf(ie.then_block, name, fn_own)) return true;
+                if (ie.else_branch) |eb| switch (eb) {
+                    .block => |blk| if (blockHasOwnCallOf(blk, name, fn_own)) return true,
+                    .else_if => |ei| if (exprHasOwnCallOf(ei, name, fn_own)) return true,
+                };
+                return false;
+            },
+            .match_expr => |me| {
+                for (me.arms) |arm| {
+                    if (exprHasOwnCallOf(arm.body, name, fn_own)) return true;
+                }
+                return false;
+            },
+            else => false,
+        },
+        .for_loop => |fl| blockHasOwnCallOf(fl.body, name, fn_own),
+        .while_loop => |wl| blockHasOwnCallOf(wl.body, name, fn_own),
+        else => false,
+    };
+}
+
+fn blockHasOwnCallOf(block: *const ast.Block, name: []const u8, fn_own: std.StringHashMapUnmanaged(u64)) bool {
+    for (block.stmts) |stmt| {
+        if (stmtHasOwnCallInCond(stmt, name, fn_own)) return true;
+        switch (stmt.kind) {
+            .expr_stmt => |e| if (exprHasOwnCallOf(e, name, fn_own)) return true,
+            .binding => |b| if (exprHasOwnCallOf(b.value, name, fn_own)) return true,
+            .assign => |a| if (exprHasOwnCallOf(a.value, name, fn_own)) return true,
+            .compound_assign => |ca| if (exprHasOwnCallOf(ca.value, name, fn_own)) return true,
+            .ret => |r| if (r.value) |v| {
+                if (exprHasOwnCallOf(v, name, fn_own)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn exprUsesName(expr: *const ast.Expr, name: []const u8) bool {

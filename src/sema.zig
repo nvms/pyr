@@ -1137,3 +1137,157 @@ test "sema: unconditional move still errors" {
     );
     try expectError(result, "use of moved value");
 }
+
+test "sema: move in field access" {
+    const result = testAnalyze(
+        \\struct P { x: int }
+        \\fn consume(own p: P) {}
+        \\fn main() {
+        \\  p = P { x: 1 }
+        \\  consume(p)
+        \\  println(p.x)
+        \\}
+    );
+    try expectError(result, "use of moved value");
+}
+
+test "sema: move in nested call" {
+    const result = testAnalyze(
+        \\fn consume(own x: int) -> int { return x }
+        \\fn main() {
+        \\  a = 5
+        \\  consume(a)
+        \\  println(consume(a))
+        \\}
+    );
+    try expectError(result, "use of moved value");
+}
+
+test "sema: borrow after borrow ok" {
+    const result = testAnalyze(
+        \\fn read(x: int) -> int { return x }
+        \\fn main() {
+        \\  a = 5
+        \\  read(a)
+        \\  read(a)
+        \\  read(a)
+        \\  println(a)
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: own param does not affect other params" {
+    const result = testAnalyze(
+        \\fn take_first(own a: int, b: int) {}
+        \\fn main() {
+        \\  x = 1
+        \\  y = 2
+        \\  take_first(x, y)
+        \\  println(y)
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: own param moves only the own arg" {
+    const result = testAnalyze(
+        \\fn take_first(own a: int, b: int) {}
+        \\fn main() {
+        \\  x = 1
+        \\  y = 2
+        \\  take_first(x, y)
+        \\  println(x)
+        \\}
+    );
+    try expectError(result, "use of moved value 'x'");
+}
+
+test "sema: multiple own params" {
+    const result = testAnalyze(
+        \\fn consume_both(own a: int, own b: int) {}
+        \\fn main() {
+        \\  x = 1
+        \\  y = 2
+        \\  consume_both(x, y)
+        \\  println(x)
+        \\}
+    );
+    try expectError(result, "use of moved value 'x'");
+}
+
+test "sema: multiple own params second arg" {
+    const result = testAnalyze(
+        \\fn consume_both(own a: int, own b: int) {}
+        \\fn main() {
+        \\  x = 1
+        \\  y = 2
+        \\  consume_both(x, y)
+        \\  println(y)
+        \\}
+    );
+    try expectError(result, "use of moved value 'y'");
+}
+
+test "sema: conditional move in match" {
+    const result = testAnalyze(
+        \\fn consume(own x: int) {}
+        \\fn main() {
+        \\  a = 5
+        \\  match a {
+        \\    5 -> consume(a)
+        \\    _ -> println(0)
+        \\  }
+        \\  println(a)
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: conditional move in nested if" {
+    const result = testAnalyze(
+        \\fn consume(own x: int) {}
+        \\fn main() {
+        \\  a = 5
+        \\  if a > 0 {
+        \\    if a > 3 {
+        \\      consume(a)
+        \\    }
+        \\  }
+        \\  println(a)
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: borrowed struct push is error" {
+    const result = testAnalyze(
+        \\struct Item { v: int }
+        \\fn add(list, item: Item) {
+        \\  push(list, item)
+        \\}
+    );
+    try expectError(result, "cannot store borrowed value 'item'");
+}
+
+test "sema: own struct push is ok" {
+    const result = testAnalyze(
+        \\struct Item { v: int }
+        \\fn add(list, own item: Item) {
+        \\  push(list, item)
+        \\}
+    );
+    try expectNoErrors(result);
+}
+
+test "sema: local variable push is ok" {
+    const result = testAnalyze(
+        \\struct Item { v: int }
+        \\fn main() {
+        \\  list = []
+        \\  item = Item { v: 1 }
+        \\  push(list, item)
+        \\}
+    );
+    try expectNoErrors(result);
+}

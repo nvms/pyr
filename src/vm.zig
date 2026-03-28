@@ -4492,3 +4492,271 @@ test "vm: inline fn type" {
 test "vm: type alias for primitive" {
     try testRun("type ID = int\nfn show(id: ID) { println(id) }\nfn main() { show(42) }");
 }
+
+// ownership model tests
+
+test "vm: own param basic transfer" {
+    try testRun(
+        \\fn consume(own x: int) -> int { return x + 1 }
+        \\fn main() {
+        \\  a = 5
+        \\  b = consume(a)
+        \\  assert_eq(b, 6)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: borrow does not consume" {
+    try testRun(
+        \\fn read(x: int) -> int { return x * 2 }
+        \\fn main() {
+        \\  a = 5
+        \\  assert_eq(read(a), 10)
+        \\  assert_eq(read(a), 10)
+        \\  assert_eq(a, 5)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: own struct transfer" {
+    try testRun(
+        \\struct Point {
+        \\  x: int
+        \\  y: int
+        \\}
+        \\fn consume(own p: Point) -> int { return p.x + p.y }
+        \\fn main() {
+        \\  p = Point { x: 3, y: 4 }
+        \\  assert_eq(consume(p), 7)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: borrow struct preserves access" {
+    try testRun(
+        \\struct Point {
+        \\  x: int
+        \\  y: int
+        \\}
+        \\fn sum(p: Point) -> int { return p.x + p.y }
+        \\fn main() {
+        \\  p = Point { x: 10, y: 20 }
+        \\  assert_eq(sum(p), 30)
+        \\  assert_eq(sum(p), 30)
+        \\  assert_eq(p.x, 10)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: loop struct create and free" {
+    try testRun(
+        \\struct Data { value: int }
+        \\fn read(d: Data) -> int { return d.value }
+        \\fn main() {
+        \\  mut total = 0
+        \\  for i in range(10000) {
+        \\    d = Data { value: i }
+        \\    total += read(d)
+        \\  }
+        \\  assert_eq(total, 49995000)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: loop array create and free" {
+    try testRun(
+        \\fn main() {
+        \\  mut total = 0
+        \\  for i in range(1000) {
+        \\    arr = [i, i + 1, i + 2]
+        \\    total += len(arr)
+        \\  }
+        \\  assert_eq(total, 3000)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: own transfer chain" {
+    try testRun(
+        \\fn step1(own x: int) -> int { return x + 1 }
+        \\fn step2(own x: int) -> int { return x * 2 }
+        \\fn main() {
+        \\  a = 5
+        \\  b = step1(a)
+        \\  c = step2(b)
+        \\  assert_eq(c, 12)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: conditional move branch taken" {
+    try testRun(
+        \\fn consume(own x: int) -> int { return x + 1 }
+        \\fn main() {
+        \\  a = 5
+        \\  mut result = 0
+        \\  if a > 3 {
+        \\    result = consume(a)
+        \\  }
+        \\  assert_eq(result, 6)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: conditional move branch not taken" {
+    try testRun(
+        \\fn consume(own x: int) -> int { return x + 1 }
+        \\fn main() {
+        \\  a = 5
+        \\  mut result = 0
+        \\  if a > 100 {
+        \\    result = consume(a)
+        \\  }
+        \\  assert_eq(result, 0)
+        \\  assert_eq(a, 5)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: conditional move struct in loop" {
+    try testRun(
+        \\struct Data { value: int }
+        \\fn consume(own d: Data) -> int { return d.value }
+        \\fn main() {
+        \\  mut total = 0
+        \\  for i in range(10) {
+        \\    d = Data { value: i }
+        \\    if i > 5 {
+        \\      total += consume(d)
+        \\    }
+        \\  }
+        \\  assert_eq(total, 30)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: multiple borrows same value" {
+    try testRun(
+        \\struct Point {
+        \\  x: int
+        \\  y: int
+        \\}
+        \\fn get_x(p: Point) -> int { return p.x }
+        \\fn get_y(p: Point) -> int { return p.y }
+        \\fn main() {
+        \\  p = Point { x: 10, y: 20 }
+        \\  assert_eq(get_x(p) + get_y(p), 30)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: own with multiple params" {
+    try testRun(
+        \\fn take_both(own a: int, own b: int) -> int { return a + b }
+        \\fn main() {
+        \\  x = 3
+        \\  y = 7
+        \\  assert_eq(take_both(x, y), 10)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: nested function returns ownership" {
+    try testRun(
+        \\struct User {
+        \\  name: str
+        \\  age: int
+        \\}
+        \\fn make(name: str, age: int) -> User {
+        \\  return User { name: name, age: age }
+        \\}
+        \\fn get_age(u: User) -> int { return u.age }
+        \\fn main() {
+        \\  u = make("alice", 30)
+        \\  assert_eq(get_age(u), 30)
+        \\  assert_eq(u.name, "alice")
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: early free does not affect later reads" {
+    try testRun(
+        \\struct A { v: int }
+        \\struct B { v: int }
+        \\fn read_a(a: A) -> int { return a.v }
+        \\fn read_b(b: B) -> int { return b.v }
+        \\fn main() {
+        \\  a = A { v: 10 }
+        \\  b = B { v: 20 }
+        \\  x = read_a(a)
+        \\  y = read_b(b)
+        \\  assert_eq(x + y, 30)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: own in push to array" {
+    try testRun(
+        \\struct Item { v: int }
+        \\fn add(list, own item: Item) {
+        \\  push(list, item)
+        \\}
+        \\fn main() {
+        \\  list = []
+        \\  add(list, Item { v: 1 })
+        \\  add(list, Item { v: 2 })
+        \\  add(list, Item { v: 3 })
+        \\  assert_eq(len(list), 3)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: struct field mutation with borrow" {
+    try testRun(
+        \\struct Counter { count: int }
+        \\fn increment(c: *mut Counter) {
+        \\  c.count = c.count + 1
+        \\}
+        \\fn main() {
+        \\  mut c = Counter { count: 0 }
+        \\  increment(&mut c)
+        \\  increment(&mut c)
+        \\  increment(&mut c)
+        \\  assert_eq(c.count, 3)
+        \\  println("ok")
+        \\}
+    );
+}
+
+test "vm: stress loop alloc free 100k" {
+    try testRun(
+        \\struct Node {
+        \\  value: int
+        \\  label: str
+        \\}
+        \\fn process(n: Node) -> int { return n.value }
+        \\fn main() {
+        \\  mut total = 0
+        \\  for i in range(100000) {
+        \\    n = Node { value: i, label: "x" }
+        \\    total += process(n)
+        \\  }
+        \\  println(total)
+        \\}
+    );
+}
