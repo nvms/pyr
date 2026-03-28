@@ -179,6 +179,8 @@ the user can say "handoff" at any point during a session. this triggers an immed
 
 you may also initiate a handoff on your own if you've been working on a long feature and reach a natural stopping point with a clear next step. same workflow.
 
+**handoff documents are local-only. never commit, never push, never force-add.** they are short-lived internal documents for session continuity. `.handoff/` is in `.gitignore`. if git rejects the add, that's correct behavior - do not use `-f` to override it.
+
 older handoff documents should be cleaned up. if the work described in a handoff has been completed, delete the file. the `.handoff/` directory should only contain active handoffs.
 
 ## user commands
@@ -233,7 +235,7 @@ pyr is a bytecode VM language. examples run end-to-end: struct creation, field a
   - for-in compiles to hidden `$iter` + `$idx` locals, index-based loop with len check and index_get per iteration
 - NaN-boxed values: Value is a single u64 (8 bytes, down from 16). doubles stored as raw IEEE 754 bits. non-double types encoded in the quiet NaN space: QNAN base (0x7FFC000000000000) + 5-bit type tag (bits 49-45) + 45-bit payload. tag() method returns Tag enum, isFloat detected by (bits & QNAN) != QNAN. integers sign-extended from 45 bits (range +/- 17.6 trillion). pointers stored in 45-bit payload (32TB address space). floats canonicalized to 0x7FF8... if they collide with QNAN pattern. halved memory for stack, arrays, channels, struct fields - major performance win for data-heavy workloads
 - value types: nil, bool, int (i45 signed), float (f64), string (*ObjString), function (*ObjFunction), struct_ (*ObjStruct), enum_ (*ObjEnum), native_fn (*ObjNativeFn), closure (*ObjClosure), array (*ObjArray), task (*ObjTask), channel (*ObjChannel), listener (*ObjListener), conn (*ObjConn), dgram (*ObjDgram), tls_conn (*ObjTlsConn), ssl_ctx (*ObjSslCtx), ssl_conn (*ObjSslConn), ptr (raw C pointer for FFI), error_val (*ObjError - wraps any Value as error payload)
-- arena memory model: `arena { ... }` blocks create child arena allocators. all allocations inside use the child arena. freed in bulk on block exit. ArenaStack side struct (heap-allocated, avoids LLVM perturbation) holds up to 16 nested arenas. push_arena/pop_arena opcodes. VM.currentAlloc() routes allocations to active arena
+- arena memory model: `arena { ... }` blocks create child arena allocators. all allocations inside use the child arena. freed in bulk on block exit. ArenaStack side struct (heap-allocated, avoids LLVM perturbation) holds up to 16 nested arenas. push_arena/pop_arena opcodes. VM.currentAlloc() routes allocations to active arena. each task gets its own ArenaStack and ConcatState (saved/restored on context switch) - shared arena state across tasks caused use-after-free under concurrent spawns. arena blocks compile with inline beginScope/endScope (not compileBlock) to avoid emitting return_ for trailing expressions, which would skip pop_arena and leak resources
 - concat_local opcode: compile-time detection of `s = s + expr` pattern. compiler emits concat_local instead of get_local+add+set_local. VM maintains a growable ConcatState buffer (heap-allocated, avoids LLVM perturbation). amortized O(1) append instead of O(n) realloc per iteration. also handles `s += expr` compound assignment
 - type-specialized opcodes: add_int, sub_int, mul_int, div_int, mod_int, less_int, greater_int, add_float, sub_float, mul_float, div_float, less_float, greater_float - skip tag checks entirely when compiler can prove operand types. int ops in fastLoop, float ops in run() only (fastLoop size limit)
 - inline struct field storage: ObjStruct and field values allocated as single contiguous block, eliminating one pointer deref per field access
@@ -316,6 +318,7 @@ critical invariants to always keep in mind:
 - new specialized opcodes go in run() only unless proven safe in fastLoop (float ops in fastLoop caused 7x regression)
 - NaN boxing: Value.tag is a method (`.tag()`), not a field. Value.bits is the raw u64. integers are 45-bit signed (sign-extended). pointers are 45-bit (32TB). never access `.data` - use the typed accessors (asInt, asFloat, asString, etc)
 - blockHasOwnCallOf must check block.trailing (not just stmts) for own-param calls. single-expression if bodies like `if cond { consume(d) }` store the call as trailing, not as a stmt. missing this causes drop flags to not be allocated
+- arena blocks and while loop bodies must NOT use compileBlock() - it emits return_ for trailing expressions, causing early return that skips cleanup (pop_arena, net.close, etc). use inline beginScope/endScope + pop trailing expression instead
 
 ## design principles
 

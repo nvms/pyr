@@ -581,14 +581,22 @@ pub const ObjTask = struct {
     result: Value,
     waiting_on: ?*ObjTask,
     pending_send: Value,
+    arena_stack: *ArenaStack,
+    concat: *ConcatState,
 
     const CallFrame = @import("vm.zig").VM.CallFrame;
+    const ArenaStack = @import("vm.zig").ArenaStack;
+    const ConcatState = @import("vm.zig").ConcatState;
 
     pub fn create(alloc: std.mem.Allocator, func: *ObjFunction, closure: ?*ObjClosure) *ObjTask {
         const stack_size: usize = 256;
         const max_frames: usize = 64;
         const stack = alloc.alloc(Value, stack_size) catch @panic("oom");
         const frames = alloc.alloc(CallFrame, max_frames) catch @panic("oom");
+        const as = alloc.create(ArenaStack) catch @panic("oom");
+        as.* = ArenaStack.init(alloc);
+        const cs = alloc.create(ConcatState) catch @panic("oom");
+        cs.* = ConcatState.init();
         const t = alloc.create(ObjTask) catch @panic("oom");
 
         stack[0] = if (closure) |cl| cl.toValue() else func.toValue();
@@ -609,6 +617,8 @@ pub const ObjTask = struct {
             .result = Value.initNil(),
             .waiting_on = null,
             .pending_send = Value.initNil(),
+            .arena_stack = as,
+            .concat = cs,
         };
         return t;
     }

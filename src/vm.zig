@@ -25,7 +25,7 @@ pub const ConcatState = struct {
     frame: usize,
     active: bool,
 
-    fn init() ConcatState {
+    pub fn init() ConcatState {
         return .{ .buf = .{}, .slot = 0, .frame = 0, .active = false };
     }
 };
@@ -35,7 +35,7 @@ pub const ArenaStack = struct {
     depth: u8,
     root_alloc: std.mem.Allocator,
 
-    fn init(root: std.mem.Allocator) ArenaStack {
+    pub fn init(root: std.mem.Allocator) ArenaStack {
         var as: ArenaStack = .{
             .arenas = .{null} ** 16,
             .depth = 0,
@@ -1826,6 +1826,8 @@ pub const VM = struct {
         @memcpy(task.stack[0..self.sp], self.stack[0..self.sp]);
         task.frame_count = self.frame_count;
         task.sp = self.sp;
+        task.arena_stack = self.arena_stack;
+        task.concat = self.concat;
     }
 
     fn restoreFromTask(self: *VM, task: *ObjTask) void {
@@ -1833,6 +1835,8 @@ pub const VM = struct {
         @memcpy(self.stack[0..task.sp], task.stack[0..task.sp]);
         self.frame_count = task.frame_count;
         self.sp = task.sp;
+        self.arena_stack = task.arena_stack;
+        self.concat = task.concat;
     }
 
     fn switchTo(self: *VM, next: *ObjTask) void {

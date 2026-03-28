@@ -994,7 +994,15 @@ pub const Compiler = struct {
             },
             .arena_block => |blk| {
                 self.emitOp(.push_arena);
-                self.compileBlock(blk);
+                self.beginScope();
+                for (blk.stmts) |s| {
+                    self.compileStmt(s);
+                }
+                if (blk.trailing) |expr| {
+                    self.compileExpr(expr);
+                    self.emitOp(.pop);
+                }
+                self.endScope();
                 self.emitOp(.pop_arena);
             },
             .defer_stmt => |d| {
