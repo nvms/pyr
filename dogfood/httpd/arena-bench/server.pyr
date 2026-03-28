@@ -1,0 +1,58 @@
+imp std/net as net
+imp std/http { parse_request }
+imp std/io { println }
+imp std/os
+
+struct User {
+  id: int
+  name: str
+  email: str
+  score: int
+}
+
+fn handle(conn) {
+  raw = conn.read()
+  if raw == Eof || raw == Closed {
+    net.close(conn)
+    return nil
+  }
+
+  req = parse_request(raw)
+  if req == nil {
+    net.close(conn)
+    return nil
+  }
+
+  arena {
+    mut parts = []
+    for i in range(10) {
+      push(parts, "\{\"id\":{i},\"name\":\"user_{i}\",\"score\":{i * 17 + 42}\}")
+    }
+    body = "[" + join(parts, ",") + "]"
+    resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n{body}"
+    conn.write(resp)
+  }
+
+  net.close(conn)
+}
+
+fn main() {
+  port = 9980
+  args = os.args()
+  if len(args) > 3 {
+    port = int(args[3])
+  }
+
+  server = net.listen("0.0.0.0", port)
+  println("pyr arena server on :{port}")
+
+  while true {
+    conn = server.accept()
+    if conn == Eof || conn == Closed {
+      break
+    }
+    spawn {
+      handle(conn)
+    }
+  }
+}

@@ -551,6 +551,16 @@ pub const VM = struct {
                 .loop_ => {
                     const offset = self.readU16();
                     self.currentFrame().ip -= offset;
+                    if (self.sched.active and self.sched.queue_count > 0) {
+                        if (self.sched.current_task) |ct| {
+                            self.saveToTask(ct);
+                            ct.state = .ready;
+                            self.sched.enqueue(ct);
+                            if (self.sched.dequeue()) |next| {
+                                self.switchTo(next);
+                            }
+                        }
+                    }
                 },
 
                 .call => {
