@@ -105,6 +105,11 @@ fn eval_length(val) {
 fn eval_path(val, path: str) {
   if len(path) == 0 { return val }
 
+  if starts_with(path, "[]") {
+    iterate(val)
+    return nil
+  }
+
   if starts_with(path, "[") {
     end = index_of(path, "]")
     if end < 0 { return nil }
@@ -193,5 +198,8 @@ fn main() {
     return nil
   }
 
-  output(eval_filter(data, filter))
+  result = eval_filter(data, filter)
+  if result != nil {
+    output(result)
+  }
 }
