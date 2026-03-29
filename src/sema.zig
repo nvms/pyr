@@ -39,17 +39,14 @@ pub const FnType = struct {
     param_count: usize,
     return_type: *const Type,
     mut_params: u64 = 0,
-    own_params: u64 = 0,
 };
 
 pub const Symbol = struct {
     ty: *const Type,
     is_mut: bool,
     kind: Kind,
-    ownership: Ownership = .none,
 
     pub const Kind = enum { variable, function, parameter, type_name, builtin };
-    pub const Ownership = enum { none, owned, borrowed, moved, maybe_moved };
 };
 
 const t_void: Type = .void;
@@ -211,11 +208,7 @@ pub const Sema = struct {
             .fn_decl => |decl| {
                 const return_ty = if (decl.return_type) |rt| self.resolveType(rt) else &t_void;
                 var mut_params: u64 = 0;
-                var own_params: u64 = 0;
                 for (decl.params, 0..) |param, i| {
-                    if (param.is_own) {
-                        own_params |= @as(u64, 1) << @intCast(i);
-                    }
                     if (param.type_expr) |te| {
                         if (te.kind == .pointer and te.kind.pointer.is_mut) {
                             mut_params |= @as(u64, 1) << @intCast(i);
@@ -226,7 +219,6 @@ pub const Sema = struct {
                     .param_count = decl.params.len,
                     .return_type = return_ty,
                     .mut_params = mut_params,
-                    .own_params = own_params,
                 } });
                 self.define(decl.name, .{
                     .ty = fn_ty,
@@ -412,7 +404,6 @@ pub const Sema = struct {
                 .ty = ty,
                 .is_mut = is_mut_ptr,
                 .kind = .parameter,
-                .ownership = if (param.is_own) .owned else .borrowed,
             });
         }
 
@@ -521,11 +512,7 @@ pub const Sema = struct {
                 }
             },
             .identifier => |name| {
-                if (self.resolve(name)) |sym| {
-                    if (sym.ownership == .moved) {
-                        self.emitError(expr.span, "use of moved value '{s}'", .{name});
-                    }
-                } else {
+                if (self.resolve(name) == null) {
                     self.emitError(expr.span, "undefined name '{s}'", .{name});
                 }
             },
@@ -552,8 +539,6 @@ pub const Sema = struct {
                 for (call.args) |arg| self.analyzeExpr(arg);
                 self.checkCallArity(call, expr.span);
                 self.checkMutParams(call, expr.span);
-                self.checkOwnParams(call, expr.span);
-                self.checkBorrowedStore(call, expr.span);
             },
             .index => |idx| {
                 self.analyzeExpr(idx.target);
@@ -741,48 +726,6 @@ pub const Sema = struct {
                     self.emitError(span, "argument {d} to '{s}' passed as &mut but parameter is not *mut", .{ i + 1, name });
                 }
             }
-        }
-    }
-
-    fn checkOwnParams(self: *Sema, call: ast.Call, span: ast.Span) void {
-        if (call.callee.kind != .identifier) return;
-        const name = call.callee.kind.identifier;
-        const sym = self.resolve(name) orelse return;
-        if (sym.ty.* != .fn_) return;
-        const fn_ty = sym.ty.fn_;
-
-        for (call.args, 0..) |arg, i| {
-            if (i >= 64) break;
-            const needs_own = (fn_ty.own_params & (@as(u64, 1) << @intCast(i))) != 0;
-            if (needs_own) {
-                if (arg.kind == .identifier) {
-                    const arg_name = arg.kind.identifier;
-                    if (self.resolvePtr(arg_name)) |arg_sym| {
-                        if (arg_sym.ownership == .moved) {
-                            self.emitError(span, "argument {d} to '{s}': value '{s}' was already moved", .{ i + 1, name, arg_name });
-                        } else if (self.cond_depth > 0) {
-                            arg_sym.ownership = .maybe_moved;
-                        } else {
-                            arg_sym.ownership = .moved;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn checkBorrowedStore(self: *Sema, call: ast.Call, span: ast.Span) void {
-        if (call.callee.kind != .identifier) return;
-        const name = call.callee.kind.identifier;
-        if (!std.mem.eql(u8, name, "push")) return;
-        if (call.args.len != 2) return;
-
-        const val_arg = call.args[1];
-        if (val_arg.kind != .identifier) return;
-        const val_name = val_arg.kind.identifier;
-        const sym = self.resolve(val_name) orelse return;
-        if (sym.kind == .parameter and sym.ownership == .borrowed) {
-            self.emitError(span, "cannot store borrowed value '{s}' in array - it may outlive the borrow. use 'own {s}' in the parameter list to take ownership", .{ val_name, val_name });
         }
     }
 
@@ -1092,199 +1035,6 @@ test "sema: missing &mut at call site" {
 test "sema: unnecessary &mut at call site" {
     const result = testAnalyze("struct P { x: int }\nfn f(p: P) -> int {\n  p.x\n}\nfn main() {\n  mut p = P { x: 0 }\n  f(&mut p)\n}");
     try expectError(result, "passed as &mut but parameter is not *mut");
-}
-
-test "sema: own parameter accepted" {
-    const result = testAnalyze("fn consume(own x: int) -> int {\n  return x\n}\nfn main() {\n  a = 5\n  consume(a)\n}");
-    try expectNoErrors(result);
-}
-
-test "sema: use after move" {
-    const result = testAnalyze("fn consume(own x: int) {}\nfn main() {\n  a = 5\n  consume(a)\n  println(a)\n}");
-    try expectError(result, "use of moved value 'a'");
-}
-
-test "sema: double move" {
-    const result = testAnalyze("fn consume(own x: int) {}\nfn main() {\n  a = 5\n  consume(a)\n  consume(a)\n}");
-    try expectError(result, "already moved");
-}
-
-test "sema: borrowed value push to array" {
-    const result = testAnalyze("struct U { x: int }\nfn f(arr, u: U) {\n  push(arr, u)\n}");
-    try expectError(result, "cannot store borrowed value");
-}
-
-test "sema: own value push to array ok" {
-    const result = testAnalyze("struct U { x: int }\nfn f(arr, own u: U) {\n  push(arr, u)\n}");
-    try expectNoErrors(result);
-}
-
-test "sema: conditional move allowed (maybe_moved)" {
-    const result = testAnalyze(
-        \\fn consume(own x: int) {}
-        \\fn main() {
-        \\  a = 5
-        \\  if a > 3 {
-        \\    consume(a)
-        \\  }
-        \\  println(a)
-        \\}
-    );
-    try expectNoErrors(result);
-}
-
-test "sema: unconditional move still errors" {
-    const result = testAnalyze(
-        \\fn consume(own x: int) {}
-        \\fn main() {
-        \\  a = 5
-        \\  consume(a)
-        \\  println(a)
-        \\}
-    );
-    try expectError(result, "use of moved value");
-}
-
-test "sema: move in field access" {
-    const result = testAnalyze(
-        \\struct P { x: int }
-        \\fn consume(own p: P) {}
-        \\fn main() {
-        \\  p = P { x: 1 }
-        \\  consume(p)
-        \\  println(p.x)
-        \\}
-    );
-    try expectError(result, "use of moved value");
-}
-
-test "sema: move in nested call" {
-    const result = testAnalyze(
-        \\fn consume(own x: int) -> int { return x }
-        \\fn main() {
-        \\  a = 5
-        \\  consume(a)
-        \\  println(consume(a))
-        \\}
-    );
-    try expectError(result, "use of moved value");
-}
-
-test "sema: borrow after borrow ok" {
-    const result = testAnalyze(
-        \\fn read(x: int) -> int { return x }
-        \\fn main() {
-        \\  a = 5
-        \\  read(a)
-        \\  read(a)
-        \\  read(a)
-        \\  println(a)
-        \\}
-    );
-    try expectNoErrors(result);
-}
-
-test "sema: own param does not affect other params" {
-    const result = testAnalyze(
-        \\fn take_first(own a: int, b: int) {}
-        \\fn main() {
-        \\  x = 1
-        \\  y = 2
-        \\  take_first(x, y)
-        \\  println(y)
-        \\}
-    );
-    try expectNoErrors(result);
-}
-
-test "sema: own param moves only the own arg" {
-    const result = testAnalyze(
-        \\fn take_first(own a: int, b: int) {}
-        \\fn main() {
-        \\  x = 1
-        \\  y = 2
-        \\  take_first(x, y)
-        \\  println(x)
-        \\}
-    );
-    try expectError(result, "use of moved value 'x'");
-}
-
-test "sema: multiple own params" {
-    const result = testAnalyze(
-        \\fn consume_both(own a: int, own b: int) {}
-        \\fn main() {
-        \\  x = 1
-        \\  y = 2
-        \\  consume_both(x, y)
-        \\  println(x)
-        \\}
-    );
-    try expectError(result, "use of moved value 'x'");
-}
-
-test "sema: multiple own params second arg" {
-    const result = testAnalyze(
-        \\fn consume_both(own a: int, own b: int) {}
-        \\fn main() {
-        \\  x = 1
-        \\  y = 2
-        \\  consume_both(x, y)
-        \\  println(y)
-        \\}
-    );
-    try expectError(result, "use of moved value 'y'");
-}
-
-test "sema: conditional move in match" {
-    const result = testAnalyze(
-        \\fn consume(own x: int) {}
-        \\fn main() {
-        \\  a = 5
-        \\  match a {
-        \\    5 -> consume(a)
-        \\    _ -> println(0)
-        \\  }
-        \\  println(a)
-        \\}
-    );
-    try expectNoErrors(result);
-}
-
-test "sema: conditional move in nested if" {
-    const result = testAnalyze(
-        \\fn consume(own x: int) {}
-        \\fn main() {
-        \\  a = 5
-        \\  if a > 0 {
-        \\    if a > 3 {
-        \\      consume(a)
-        \\    }
-        \\  }
-        \\  println(a)
-        \\}
-    );
-    try expectNoErrors(result);
-}
-
-test "sema: borrowed struct push is error" {
-    const result = testAnalyze(
-        \\struct Item { v: int }
-        \\fn add(list, item: Item) {
-        \\  push(list, item)
-        \\}
-    );
-    try expectError(result, "cannot store borrowed value 'item'");
-}
-
-test "sema: own struct push is ok" {
-    const result = testAnalyze(
-        \\struct Item { v: int }
-        \\fn add(list, own item: Item) {
-        \\  push(list, item)
-        \\}
-    );
-    try expectNoErrors(result);
 }
 
 test "sema: local variable push is ok" {

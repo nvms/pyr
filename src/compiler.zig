@@ -53,7 +53,6 @@ pub const Compiler = struct {
     enum_variants: std.StringHashMapUnmanaged(VariantInfo),
     fn_table: std.StringHashMapUnmanaged(*ObjFunction),
     fn_returns: std.StringHashMapUnmanaged(TypeHint),
-    fn_own_params: std.StringHashMapUnmanaged(u64) = .{},
     upvalues: [256]Upvalue,
     upvalue_count: u8,
     module_loader: ?*ModuleLoader,
@@ -67,7 +66,6 @@ pub const Compiler = struct {
     current_line: u32,
     deferred: [64]DeferEntry = undefined,
     defer_count: u8 = 0,
-    cond_depth: u32 = 0,
     current_block: ?*const ast.Block = null,
     inline_fns: std.StringHashMapUnmanaged(ast.FnDecl) = .{},
     inline_subs: ?*[16]InlineSub = null,
@@ -95,8 +93,6 @@ pub const Compiler = struct {
         name: []const u8,
         depth: u32,
         type_hint: TypeHint = .unknown,
-        is_owned: bool = false,
-        drop_flag_slot: ?u8 = null,
     };
 
     pub const Upvalue = struct {
@@ -658,13 +654,6 @@ pub const Compiler = struct {
                 if (decl.body == .expr and isInlineable(decl.body.expr)) {
                     self.inline_fns.put(self.alloc, decl.name, decl) catch @panic("oom");
                 }
-                var own_mask: u64 = 0;
-                for (decl.params, 0..) |param, pi| {
-                    if (param.is_own) own_mask |= @as(u64, 1) << @intCast(pi);
-                }
-                if (own_mask != 0) {
-                    self.fn_own_params.put(self.alloc, decl.name, own_mask) catch @panic("oom");
-                }
             },
             .struct_decl => |decl| {
                 const names = self.alloc.alloc([]const u8, decl.fields.len) catch @panic("oom");
@@ -878,9 +867,6 @@ pub const Compiler = struct {
 
         for (decl.params) |param| {
             sub.addLocalTyped(param.name, sub.resolveTypeHint(param.type_expr));
-            if (param.is_own) {
-                sub.locals[sub.local_count - 1].is_owned = true;
-            }
         }
 
         switch (decl.body) {
@@ -921,14 +907,12 @@ pub const Compiler = struct {
 
     fn compileBlock(self: *Compiler, block: *const ast.Block) void {
         self.beginScope();
-        const scope_base = self.local_count;
         const prev_block = self.current_block;
         self.current_block = block;
         defer self.current_block = prev_block;
 
-        for (block.stmts, 0..) |stmt, stmt_idx| {
+        for (block.stmts) |stmt| {
             self.compileStmt(stmt);
-            self.emitEarlyFrees(block, scope_base, stmt_idx);
         }
 
         if (block.trailing) |expr| {
@@ -938,47 +922,6 @@ pub const Compiler = struct {
         }
 
         self.endScope();
-    }
-
-    fn emitEarlyFrees(self: *Compiler, block: *const ast.Block, scope_base: u8, stmt_idx: usize) void {
-        var slot: u8 = scope_base;
-        while (slot < self.local_count) : (slot += 1) {
-            const local = &self.locals[slot];
-            if (!local.is_owned or local.depth != self.scope_depth) {
-                continue;
-            }
-            var used_later = false;
-            for (block.stmts[stmt_idx + 1 ..]) |future_stmt| {
-                if (stmtUsesName(future_stmt, local.name)) {
-                    used_later = true;
-                    break;
-                }
-            }
-            if (!used_later) {
-                for (block.stmts[0 .. stmt_idx + 1]) |past_stmt| {
-                    if (mayAliasCallResult(past_stmt, local.name, block.stmts[stmt_idx + 1 ..], block.trailing)) {
-                        used_later = true;
-                        break;
-                    }
-                }
-            }
-            if (!used_later) {
-                if (block.trailing) |expr| {
-                    if (exprUsesName(expr, local.name)) continue;
-                }
-                if (local.drop_flag_slot) |flag_slot| {
-                    self.emitOp(.free_local_if);
-                    self.emitByte(slot);
-                    self.emitByte(flag_slot);
-                    self.recordHint(.conditional_free, local.name, self.current_span.end, "");
-                } else {
-                    self.emitOp(.free_local);
-                    self.emitByte(slot);
-                    self.recordHint(.freed, local.name, self.current_span.end, "");
-                }
-                local.is_owned = false;
-            }
-        }
     }
 
     fn compileStmt(self: *Compiler, stmt: ast.Stmt) void {
@@ -1006,15 +949,6 @@ pub const Compiler = struct {
                         const hint = self.exprType(b.value);
                         self.compileExpr(b.value);
                         self.addLocalTyped(b.name, hint);
-                        if (isHeapExpr(b.value)) {
-                            self.locals[self.local_count - 1].is_owned = true;
-                        }
-                        if (self.needsDropFlag(b.name)) {
-                            const owned_slot = self.local_count - 1;
-                            self.emitConstant(Value.initInt(0));
-                            self.addLocal("$drop_flag");
-                            self.locals[owned_slot].drop_flag_slot = self.local_count - 1;
-                        }
                     }
                 } else {
                     self.compileExpr(b.value);
@@ -2162,60 +2096,6 @@ pub const Compiler = struct {
         }
         self.emitOp(.call);
         self.emitByte(@intCast(call.args.len));
-        self.emitDropFlags(call);
-        self.recordTransferHints(call);
-    }
-
-    fn needsDropFlag(self: *Compiler, name: []const u8) bool {
-        var fn_own = self.fn_own_params;
-        var c: ?*Compiler = self.enclosing;
-        while (c) |cur| {
-            var it = cur.fn_own_params.iterator();
-            while (it.next()) |entry| {
-                fn_own.put(self.alloc, entry.key_ptr.*, entry.value_ptr.*) catch {};
-            }
-            c = cur.enclosing;
-        }
-        if (fn_own.count() == 0) return false;
-
-        if (self.current_block) |block| {
-            for (block.stmts) |stmt| {
-                if (stmtHasOwnCallInCond(stmt, name, fn_own)) return true;
-            }
-        }
-        return false;
-    }
-
-    fn emitDropFlags(self: *Compiler, call: ast.Call) void {
-        if (self.cond_depth == 0) return;
-        if (call.callee.kind != .identifier) return;
-        const callee_name = call.callee.kind.identifier;
-
-        var own_mask: u64 = 0;
-        var c: ?*Compiler = self;
-        while (c) |cur| {
-            if (cur.fn_own_params.get(callee_name)) |mask| {
-                own_mask = mask;
-                break;
-            }
-            c = cur.enclosing;
-        }
-        if (own_mask == 0) return;
-
-        for (call.args, 0..) |arg, i| {
-            if (i >= 64) break;
-            if ((own_mask & (@as(u64, 1) << @intCast(i))) == 0) continue;
-            if (arg.kind != .identifier) continue;
-            const arg_name = arg.kind.identifier;
-            const slot = self.resolveLocal(arg_name) orelse continue;
-            const local = &self.locals[slot];
-            if (local.drop_flag_slot) |flag_slot| {
-                self.emitConstant(Value.initInt(1));
-                self.emitOp(.set_local);
-                self.emitByte(flag_slot);
-                self.emitOp(.pop);
-            }
-        }
     }
 
     fn tryInlineCall(self: *Compiler, name: []const u8, args: []const *const ast.Expr) bool {
@@ -2291,7 +2171,6 @@ pub const Compiler = struct {
         const then_jump = self.emitJump(.jump_if_false);
         self.emitOp(.pop);
 
-        self.cond_depth += 1;
         self.compileBlockValue(ie.then_block);
 
         const else_jump = self.emitJump(.jump);
@@ -2304,7 +2183,6 @@ pub const Compiler = struct {
         } else {
             self.emitOp(.nil);
         }
-        self.cond_depth -= 1;
 
         self.patchJump(else_jump);
     }
@@ -2906,24 +2784,6 @@ pub const Compiler = struct {
         return self.upvalue_count - 1;
     }
 
-    fn isHeapExpr(expr: *const ast.Expr) bool {
-        return switch (expr.kind) {
-            .struct_literal => true,
-            .array_literal => true,
-            .call => true,
-            .string_interp => true,
-            .binary => |b| {
-                if (b.op == .plus) {
-                    return b.lhs.kind == .string_literal or
-                        b.lhs.kind == .string_interp or
-                        b.rhs.kind == .string_literal or
-                        b.rhs.kind == .string_interp;
-                }
-                return false;
-            },
-            else => false,
-        };
-    }
 
     fn addLocal(self: *Compiler, name: []const u8) void {
         self.addLocalTyped(name, .unknown);
@@ -2993,19 +2853,6 @@ pub const Compiler = struct {
         self.popScopeDefers();
         self.scope_depth -= 1;
         while (self.local_count > 0 and self.locals[self.local_count - 1].depth > self.scope_depth) {
-            const local = self.locals[self.local_count - 1];
-            if (local.is_owned and self.loop_depth == 0) {
-                if (local.drop_flag_slot) |flag_slot| {
-                    self.emitOp(.free_local_if);
-                    self.emitByte(self.local_count - 1);
-                    self.emitByte(flag_slot);
-                    self.recordHint(.conditional_free, local.name, self.current_span.end, "");
-                } else {
-                    self.emitOp(.free_local);
-                    self.emitByte(self.local_count - 1);
-                    self.recordHint(.freed, local.name, self.current_span.end, "");
-                }
-            }
             self.emitOp(.pop);
             self.local_count -= 1;
         }
@@ -3223,35 +3070,6 @@ pub const Compiler = struct {
         }
     }
 
-    fn recordHint(self: *Compiler, kind: OwnershipHint.Kind, name: []const u8, offset: usize, target: []const u8) void {
-        const h = self.hints orelse return;
-        h.append(self.alloc, .{ .kind = kind, .name = name, .offset = offset, .target = target }) catch {};
-    }
-
-    fn recordTransferHints(self: *Compiler, call: ast.Call) void {
-        if (self.hints == null) return;
-        if (call.callee.kind != .identifier) return;
-        const callee_name = call.callee.kind.identifier;
-
-        var own_mask: u64 = 0;
-        var c: ?*Compiler = self;
-        while (c) |cur| {
-            if (cur.fn_own_params.get(callee_name)) |mask| {
-                own_mask = mask;
-                break;
-            }
-            c = cur.enclosing;
-        }
-        if (own_mask == 0) return;
-
-        for (call.args, 0..) |arg, i| {
-            if (i >= 64) break;
-            if ((own_mask & (@as(u64, 1) << @intCast(i))) == 0) continue;
-            if (arg.kind != .identifier) continue;
-            self.recordHint(.moved, arg.kind.identifier, self.current_span.end, callee_name);
-        }
-    }
-
     fn lineFromOffset(self: *const Compiler, offset: usize) u32 {
         var line: u32 = 1;
         const end = @min(offset, self.source.len);
@@ -3396,88 +3214,6 @@ fn typeHintFromExprWith(type_expr: ?*const ast.TypeExpr, struct_defs: ?*const st
     return .unknown;
 }
 
-fn exprHasOwnCallOf(expr: *const ast.Expr, name: []const u8, fn_own: std.StringHashMapUnmanaged(u64)) bool {
-    switch (expr.kind) {
-        .call => |c| {
-            if (c.callee.kind == .identifier) {
-                const callee_name = c.callee.kind.identifier;
-                if (fn_own.get(callee_name)) |mask| {
-                    for (c.args, 0..) |arg, i| {
-                        if (i >= 64) break;
-                        if ((mask & (@as(u64, 1) << @intCast(i))) == 0) continue;
-                        if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) return true;
-                    }
-                }
-            }
-            for (c.args) |arg| {
-                if (exprHasOwnCallOf(arg, name, fn_own)) return true;
-            }
-            return exprHasOwnCallOf(c.callee, name, fn_own);
-        },
-        .binary => |b| return exprHasOwnCallOf(b.lhs, name, fn_own) or exprHasOwnCallOf(b.rhs, name, fn_own),
-        .if_expr => |ie| {
-            if (blockHasOwnCallOf(ie.then_block, name, fn_own)) return true;
-            if (ie.else_branch) |eb| switch (eb) {
-                .block => |blk| if (blockHasOwnCallOf(blk, name, fn_own)) return true,
-                .else_if => |ei| if (exprHasOwnCallOf(ei, name, fn_own)) return true,
-            };
-            return false;
-        },
-        .match_expr => |me| {
-            for (me.arms) |arm| {
-                if (exprHasOwnCallOf(arm.body, name, fn_own)) return true;
-            }
-            return false;
-        },
-        else => return false,
-    }
-}
-
-fn stmtHasOwnCallInCond(stmt: ast.Stmt, name: []const u8, fn_own: std.StringHashMapUnmanaged(u64)) bool {
-    return switch (stmt.kind) {
-        .expr_stmt => |e| switch (e.kind) {
-            .if_expr => |ie| {
-                if (blockHasOwnCallOf(ie.then_block, name, fn_own)) return true;
-                if (ie.else_branch) |eb| switch (eb) {
-                    .block => |blk| if (blockHasOwnCallOf(blk, name, fn_own)) return true,
-                    .else_if => |ei| if (exprHasOwnCallOf(ei, name, fn_own)) return true,
-                };
-                return false;
-            },
-            .match_expr => |me| {
-                for (me.arms) |arm| {
-                    if (exprHasOwnCallOf(arm.body, name, fn_own)) return true;
-                }
-                return false;
-            },
-            else => false,
-        },
-        .for_loop => |fl| blockHasOwnCallOf(fl.body, name, fn_own),
-        .while_loop => |wl| blockHasOwnCallOf(wl.body, name, fn_own),
-        else => false,
-    };
-}
-
-fn blockHasOwnCallOf(block: *const ast.Block, name: []const u8, fn_own: std.StringHashMapUnmanaged(u64)) bool {
-    for (block.stmts) |stmt| {
-        if (stmtHasOwnCallInCond(stmt, name, fn_own)) return true;
-        switch (stmt.kind) {
-            .expr_stmt => |e| if (exprHasOwnCallOf(e, name, fn_own)) return true,
-            .binding => |b| if (exprHasOwnCallOf(b.value, name, fn_own)) return true,
-            .assign => |a| if (exprHasOwnCallOf(a.value, name, fn_own)) return true,
-            .compound_assign => |ca| if (exprHasOwnCallOf(ca.value, name, fn_own)) return true,
-            .ret => |r| if (r.value) |v| {
-                if (exprHasOwnCallOf(v, name, fn_own)) return true;
-            },
-            else => {},
-        }
-    }
-    if (block.trailing) |trailing| {
-        if (exprHasOwnCallOf(trailing, name, fn_own)) return true;
-    }
-    return false;
-}
-
 fn exprUsesName(expr: *const ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .identifier => |id| std.mem.eql(u8, id, name),
@@ -3548,61 +3284,6 @@ fn exprUsesName(expr: *const ast.Expr, name: []const u8) bool {
         },
         else => false,
     };
-}
-
-fn mayAliasCallResult(current_stmt: ast.Stmt, name: []const u8, future_stmts: []const ast.Stmt, trailing: ?*const ast.Expr) bool {
-    if (current_stmt.kind == .binding) {
-        const b = current_stmt.kind.binding;
-        if (b.value.kind == .call) {
-            const call = b.value.kind.call;
-            var arg_matches = false;
-            for (call.args) |arg| {
-                if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) {
-                    arg_matches = true;
-                    break;
-                }
-            }
-            if (arg_matches) {
-                for (future_stmts) |future_stmt| {
-                    if (stmtUsesName(future_stmt, b.name)) return true;
-                }
-                if (trailing) |expr| {
-                    if (exprUsesName(expr, b.name)) return true;
-                }
-            }
-        }
-    }
-
-    // push(arr, val) and similar: if name is an arg to a call in an expr_stmt,
-    // and another arg to that call is used later, the value may be stored
-    if (current_stmt.kind == .expr_stmt) {
-        const expr = current_stmt.kind.expr_stmt;
-        if (expr.kind == .call) {
-            const call = expr.kind.call;
-            var arg_matches = false;
-            for (call.args) |arg| {
-                if (arg.kind == .identifier and std.mem.eql(u8, arg.kind.identifier, name)) {
-                    arg_matches = true;
-                    break;
-                }
-            }
-            if (arg_matches) {
-                for (call.args) |arg| {
-                    if (arg.kind != .identifier) continue;
-                    const other = arg.kind.identifier;
-                    if (std.mem.eql(u8, other, name)) continue;
-                    for (future_stmts) |future_stmt| {
-                        if (stmtUsesName(future_stmt, other)) return true;
-                    }
-                    if (trailing) |texpr| {
-                        if (exprUsesName(texpr, other)) return true;
-                    }
-                }
-            }
-        }
-    }
-
-    return false;
 }
 
 fn stmtUsesName(stmt: ast.Stmt, name: []const u8) bool {
@@ -3683,8 +3364,6 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
             },
             .push_arena, .pop_arena => {},
             .make_error, .unwrap_error, .extract_error => {},
-            .free_local => i += 1,
-            .free_local_if => i += 2,
             .set_global, .define_global, .print, .println => return false,
             .spawn, .channel_create, .channel_send, .channel_recv, .await_task, .await_all, .net_accept, .net_read, .net_write, .net_connect, .net_sendto, .net_recvfrom, .ffi_call => return false,
         }
@@ -3715,102 +3394,3 @@ fn allSimpleArgs(args: []const *const ast.Expr) bool {
     return true;
 }
 
-test "compileForHints: owned local freed after last use" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    const source =
-        \\struct User {
-        \\  name: str
-        \\}
-        \\fn main() {
-        \\  u = User { name: "alice" }
-        \\  println(u.name)
-        \\}
-    ;
-    const tokens = @import("parser.zig").tokenize(alloc, source);
-    var p = @import("parser.zig").Parser.init(tokens, source, alloc);
-    const tree = p.parse();
-    const hints = Compiler.compileForHints(alloc, tree) orelse {
-        try std.testing.expect(false);
-        return;
-    };
-
-    try std.testing.expect(hints.len > 0);
-    try std.testing.expectEqual(OwnershipHint.Kind.freed, hints[0].kind);
-    try std.testing.expectEqualStrings("u", hints[0].name);
-}
-
-test "compileForHints: ownership transfer recorded" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    const source =
-        \\struct Data {
-        \\  val: int
-        \\}
-        \\fn consume(own d: Data) {
-        \\  println(d.val)
-        \\}
-        \\fn main() {
-        \\  d = Data { val: 42 }
-        \\  consume(d)
-        \\}
-    ;
-    const tokens = @import("parser.zig").tokenize(alloc, source);
-    var p = @import("parser.zig").Parser.init(tokens, source, alloc);
-    const tree = p.parse();
-    const hints = Compiler.compileForHints(alloc, tree) orelse {
-        try std.testing.expect(false);
-        return;
-    };
-
-    var has_moved = false;
-    for (hints) |h| {
-        if (h.kind == .moved) {
-            has_moved = true;
-            try std.testing.expectEqualStrings("d", h.name);
-            try std.testing.expectEqualStrings("consume", h.target);
-        }
-    }
-    try std.testing.expect(has_moved);
-}
-
-test "compileForHints: conditional move has conditional_free" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    const source =
-        \\struct Data {
-        \\  val: int
-        \\}
-        \\fn consume(own d: Data) {
-        \\  println(d.val)
-        \\}
-        \\fn main() {
-        \\  d = Data { val: 42 }
-        \\  if d.val > 10 {
-        \\    consume(d)
-        \\  }
-        \\  println(0)
-        \\}
-    ;
-    const tokens = @import("parser.zig").tokenize(alloc, source);
-    var p = @import("parser.zig").Parser.init(tokens, source, alloc);
-    const tree = p.parse();
-    const hints = Compiler.compileForHints(alloc, tree) orelse {
-        try std.testing.expect(false);
-        return;
-    };
-
-    var has_moved = false;
-    var has_cond_free = false;
-    for (hints) |h| {
-        if (std.mem.eql(u8, h.name, "d")) {
-            if (h.kind == .moved) has_moved = true;
-            if (h.kind == .conditional_free) has_cond_free = true;
-        }
-    }
-    try std.testing.expect(has_moved);
-    try std.testing.expect(has_cond_free);
-}
