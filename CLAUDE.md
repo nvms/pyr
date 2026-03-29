@@ -183,13 +183,13 @@ older handoff documents should be cleaned up. if the work described in a handoff
 
 ## current status
 
-pyr is a fully functional bytecode VM language. 283 tests, 41 validated examples, 11 benchmarks.
+pyr is a fully functional bytecode VM language. 283 tests, 42 validated examples, 11 benchmarks.
 
-**language features:** structs, enums (algebraic sum types with payloads), pattern matching (O(1) variant dispatch), closures (copy-capture), for-range/for-in loops, break/continue, arrays, strings with interpolation and escape sequences, UFCS, option types (`T?`, `or`, `?` propagation), result types (`T!`, `fail`, `or |err|`), defer, mutable references (`*mut T`/`&mut x`), type aliases, FFI (`extern "lib"`)
+**language features:** structs, enums (algebraic sum types with payloads), pattern matching (O(1) variant dispatch), closures (copy-capture), for-range/for-in loops, break/continue, arrays, maps (hash maps with `{}` literal syntax), strings with interpolation and escape sequences, UFCS, option types (`T?`, `or`, `?` propagation), result types (`T!`, `fail`, `or |err|`), defer, mutable references (`*mut T`/`&mut x`), type aliases, FFI (`extern "lib"`)
 
 **stdlib:** std/io, std/fs, std/os, std/json, std/net (TCP + UDP + timeouts), std/http, std/tls (client + server), std/gc
 
-**builtins:** sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower, clone, sort, sort_by, map, filter, reduce
+**builtins:** sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower, clone, sort, sort_by, map, filter, reduce, delete, keys, getattr, type_of
 
 **runtime:** NaN-boxed values (u64), dual-loop VM dispatch (run + fastLoop), type-specialized opcodes, function inlining, cooperative green threads (spawn/channel/await_all), arena memory blocks, mark-sweep GC
 
@@ -203,11 +203,11 @@ pyr is a fully functional bytecode VM language. 283 tests, 41 validated examples
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. hash maps: first-class map type (JS object-like). literal syntax, dynamic key set/get/delete, iteration, `len()`. this is the biggest missing primitive - unlocks an entire category of programs. refactor dogfood programs (wordfreq, logstat, jq) to use maps once available
-2. LSP type information for builtins/stdlib: hover on `slice`, `sort_by`, `map` etc shows no type signatures. builtins and stdlib functions need typed signatures so the LSP can surface them. the polymorphism (slice works on arrays and strings) should be expressed, not hidden
-3. sort_by comparator convention: currently takes a boolean predicate (true = already in order), which is surprising. either rename to `sort_when`/`sort_asc` to make the convention obvious, or switch to standard -1/0/1 comparator semantics
-4. builtin shadowing warnings: naming a variable `filter` silently shadows the builtin and you get a confusing runtime error. sema should warn or error when a local variable shadows a builtin
-5. type annotation enforcement: type annotations exist but aren't checked at compile time. either make them gradual (enforce what's annotated) or drop the pretense. the current state is annotations that can lie
+1. LSP type information for builtins/stdlib: hover on `slice`, `sort_by`, `map` etc shows no type signatures. builtins and stdlib functions need typed signatures so the LSP can surface them. the polymorphism (slice works on arrays and strings) should be expressed, not hidden
+2. sort_by comparator convention: currently takes a boolean predicate (true = already in order), which is surprising. either rename to `sort_when`/`sort_asc` to make the convention obvious, or switch to standard -1/0/1 comparator semantics
+3. builtin shadowing warnings: naming a variable `filter` silently shadows the builtin and you get a confusing runtime error. sema should warn or error when a local variable shadows a builtin
+4. type annotation enforcement: type annotations exist but aren't checked at compile time. either make them gradual (enforce what's annotated) or drop the pretense. the current state is annotations that can lie
+5. refactor dogfood programs to use maps where appropriate (wordfreq, logstat, jq use parallel arrays for key-value data)
 6. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat, wordfreq, csv, calc
 
 ## implementation notes

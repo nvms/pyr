@@ -1,0 +1,21 @@
+alice
+30
+3
+["name", "age", "city"]
+map
+true
+false
+alice@example.com
+4
+3
+nil
+{}
+0
+alice smith
+95
+{"name":"alice","age":30,"email":"alice@example.com"}
+alice smith
+1
+[2, 3]
+{"x":1,"y":[2,3],"z":true}
+alice

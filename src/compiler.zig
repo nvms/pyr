@@ -166,6 +166,7 @@ pub const Compiler = struct {
         self.defineNativeFn("getattr", 2, &nativeGetattr);
         self.defineNativeFn("keys", 1, &nativeKeys);
         self.defineNativeFn("type_of", 1, &nativeTypeOf);
+        self.defineNativeFn("delete", 2, &nativeDelete);
         self.defineNativeFn("sort", 1, &nativeSort);
 
         self.defineHelperFn("map", 2, buildMapFunc);
@@ -258,6 +259,7 @@ pub const Compiler = struct {
         const v = args[0];
         if (v.tag() == .string) return Value.initInt(@intCast(v.asString().chars.len));
         if (v.tag() == .array) return Value.initInt(@intCast(v.asArray().items.len));
+        if (v.tag() == .map) return Value.initInt(@intCast(v.asMap().count()));
         return Value.initInt(0);
     }
 
@@ -294,6 +296,9 @@ pub const Compiler = struct {
                 if (Value.eql(item, args[1])) return Value.initBool(true);
             }
             return Value.initBool(false);
+        }
+        if (args[0].tag() == .map and args[1].tag() == .string) {
+            return Value.initBool(args[0].asMap().get(args[1].asString().chars) != null);
         }
         if (args[0].tag() == .string and args[1].tag() == .string) {
             const haystack = args[0].asString().chars;
@@ -488,9 +493,11 @@ pub const Compiler = struct {
     }
 
     fn nativeGetattr(_: std.mem.Allocator, args: []const Value) Value {
-        if (args[0].tag() != .struct_ or args[1].tag() != .string) return Value.initNil();
-        const s = args[0].asStruct();
-        return s.getField(args[1].asString().chars) orelse Value.initNil();
+        if (args[1].tag() != .string) return Value.initNil();
+        const key = args[1].asString().chars;
+        if (args[0].tag() == .struct_) return args[0].asStruct().getField(key) orelse Value.initNil();
+        if (args[0].tag() == .map) return args[0].asMap().get(key) orelse Value.initNil();
+        return Value.initNil();
     }
 
     fn nativeKeys(alloc: std.mem.Allocator, args: []const Value) Value {
@@ -499,6 +506,15 @@ pub const Compiler = struct {
             const items = alloc.alloc(Value, arr.items.len) catch return Value.initNil();
             for (0..arr.items.len) |i| {
                 items[i] = Value.initInt(@intCast(i));
+            }
+            return ObjArray.create(alloc, items).toValue();
+        }
+        if (args[0].tag() == .map) {
+            const m = args[0].asMap();
+            const map_keys = m.entries.keys();
+            const items = alloc.alloc(Value, map_keys.len) catch return Value.initNil();
+            for (map_keys, 0..) |key, i| {
+                items[i] = ObjString.create(alloc, key).toValue();
             }
             return ObjArray.create(alloc, items).toValue();
         }
@@ -520,8 +536,16 @@ pub const Compiler = struct {
             .string => Value.initString(ObjString.create(std.heap.page_allocator, "string")),
             .array => Value.initString(ObjString.create(std.heap.page_allocator, "array")),
             .struct_ => Value.initString(ObjString.create(std.heap.page_allocator, "object")),
+            .map => Value.initString(ObjString.create(std.heap.page_allocator, "map")),
             else => Value.initString(ObjString.create(std.heap.page_allocator, "unknown")),
         };
+    }
+
+    fn nativeDelete(alloc: std.mem.Allocator, args: []const Value) Value {
+        if (args[0].tag() == .map and args[1].tag() == .string) {
+            return Value.initBool(args[0].asMap().delete(alloc, args[1].asString().chars));
+        }
+        return Value.initBool(false);
     }
 
     fn nativeSort(alloc: std.mem.Allocator, args: []const Value) Value {
@@ -1583,6 +1607,7 @@ pub const Compiler = struct {
                     }
                 }
                 if (self.resolveFieldIndex(fa.field)) |field_idx| {
+                    const name_idx = self.addStringConstant(fa.field);
                     if (fa.target.kind == .identifier) {
                         if (self.resolveLocal(fa.target.kind.identifier)) |slot| {
                             if (self.localTypeHint(fa.target.kind.identifier) == .struct_) {
@@ -1594,16 +1619,19 @@ pub const Compiler = struct {
                                 self.emitByte(slot);
                                 self.emitOp(.get_field_idx);
                                 self.emitByte(field_idx);
+                                self.emitU16(name_idx);
                             }
                         } else {
                             self.compileExpr(fa.target);
                             self.emitOp(.get_field_idx);
                             self.emitByte(field_idx);
+                            self.emitU16(name_idx);
                         }
                     } else {
                         self.compileExpr(fa.target);
                         self.emitOp(.get_field_idx);
                         self.emitByte(field_idx);
+                        self.emitU16(name_idx);
                     }
                 } else {
                     self.compileExpr(fa.target);
@@ -1636,6 +1664,14 @@ pub const Compiler = struct {
                 for (elems) |elem| self.compileExpr(elem);
                 self.emitOp(.array_create);
                 self.emitByte(@intCast(elems.len));
+            },
+            .map_literal => |entries| {
+                for (entries) |entry| {
+                    self.compileExpr(entry.key);
+                    self.compileExpr(entry.value);
+                }
+                self.emitOp(.map_create);
+                self.emitByte(@intCast(entries.len));
             },
             .try_unwrap => |inner| {
                 self.compileExpr(inner);
@@ -2680,8 +2716,10 @@ pub const Compiler = struct {
             .field_access => |fa| {
                 self.compileExpr(fa.target);
                 if (self.resolveFieldIndex(fa.field)) |fi| {
+                    const name_idx = self.addStringConstant(fa.field);
                     self.emitOp(.get_field_idx);
                     self.emitByte(fi);
+                    self.emitU16(name_idx);
                 } else {
                     const idx = self.addStringConstant(fa.field);
                     self.emitOp(.get_field);
@@ -3288,13 +3326,14 @@ fn analyzeLocalsOnly(c: *const @import("chunk.zig").Chunk) bool {
                 i += @as(usize, fc) * 2;
             },
             .get_field, .set_field => i += 2,
-            .get_field_idx, .set_field_idx, .concat_local => i += 1,
+            .get_field_idx => i += 3,
+            .set_field_idx, .concat_local => i += 1,
             .get_local_field => i += 2,
             .enum_variant => i += 6,
             .match_variant => i += 1,
             .get_payload => i += 1,
             .get_upvalue, .set_upvalue => i += 1,
-            .array_create => i += 1,
+            .array_create, .map_create => i += 1,
             .index_get, .index_set, .array_push, .array_len => {},
             .index_local => i += 1,
             .index_local_local => i += 2,

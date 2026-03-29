@@ -134,7 +134,7 @@ fn netConnect(alloc: std.mem.Allocator, args: []const Value) Value {
 
 fn netRead(alloc: std.mem.Allocator, args: []const Value) Value {
     if (args[0].tag() == .ext and args[0].extKind() == .tls_conn) return tlsRead(alloc, args[0].asTlsConn());
-    if (args[0].tag() != .conn) return root.makeIoError(alloc, "read requires conn");
+    if (!args[0].isConn()) return root.makeIoError(alloc, "read requires conn");
     const conn = args[0].asConn();
     var buf: [8192]u8 = undefined;
     const n = std.posix.read(conn.fd, &buf) catch return root.makeIoError(alloc, "read failed");
@@ -179,7 +179,7 @@ fn tlsRead(alloc: std.mem.Allocator, obj: *ObjTlsConn) Value {
 
 fn netWrite(alloc: std.mem.Allocator, args: []const Value) Value {
     if (args[0].tag() == .ext and args[0].extKind() == .tls_conn) return tlsWrite(alloc, args[0].asTlsConn(), args);
-    if (args[0].tag() != .conn or args[1].tag() != .string) return root.makeIoError(alloc, "write requires conn and string");
+    if (!args[0].isConn() or args[1].tag() != .string) return root.makeIoError(alloc, "write requires conn and string");
     const conn = args[0].asConn();
     const data = args[1].asString().chars;
     var written: usize = 0;
@@ -218,8 +218,9 @@ fn netClose(_: std.mem.Allocator, args: []const Value) Value {
                 std.posix.close(args[0].asSslConn().fd);
             },
             .ssl_ctx => {},
+            .conn => std.posix.close(args[0].asConn().fd),
         }
-    } else if (args[0].tag() == .conn) {
+    } else if (args[0].isConn()) {
         std.posix.close(args[0].asConn().fd);
     }
     return Value.initNil();
@@ -234,8 +235,9 @@ fn netTimeout(_: std.mem.Allocator, args: []const Value) Value {
             .tls_conn => args[0].asTlsConn().timeout_ms = ms,
             .ssl_conn => args[0].asSslConn().timeout_ms = ms,
             .ssl_ctx => {},
+            .conn => args[0].asConn().timeout_ms = ms,
         }
-    } else if (args[0].tag() == .conn) {
+    } else if (args[0].isConn()) {
         args[0].asConn().timeout_ms = ms;
     }
     return Value.initNil();

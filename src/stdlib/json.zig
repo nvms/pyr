@@ -3,6 +3,7 @@ const Value = @import("../value.zig").Value;
 const ObjString = @import("../value.zig").ObjString;
 const ObjArray = @import("../value.zig").ObjArray;
 const ObjStruct = @import("../value.zig").ObjStruct;
+const ObjMap = @import("../value.zig").ObjMap;
 const root = @import("../stdlib.zig");
 
 pub const fns = [_]root.NativeDef{
@@ -72,7 +73,21 @@ pub fn writeValue(alloc: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), v:
             writeValue(alloc, buf, v.asError().value);
             buf.append(alloc, '}') catch return;
         },
-        .function, .native_fn, .closure, .task, .channel, .conn, .ext, .ptr => buf.appendSlice(alloc, "null") catch return,
+        .map => {
+            const m = v.asMap();
+            buf.append(alloc, '{') catch return;
+            var it = m.entries.iterator();
+            var first = true;
+            while (it.next()) |entry| {
+                if (!first) buf.append(alloc, ',') catch return;
+                writeString(alloc, buf, entry.key_ptr.*);
+                buf.append(alloc, ':') catch return;
+                writeValue(alloc, buf, entry.value_ptr.*);
+                first = false;
+            }
+            buf.append(alloc, '}') catch return;
+        },
+        .function, .native_fn, .closure, .task, .channel, .ext, .ptr => buf.appendSlice(alloc, "null") catch return,
     }
 }
 
@@ -226,13 +241,10 @@ const JsonParser = struct {
     fn parseObject(self: *JsonParser) Value {
         self.pos += 1;
         self.skipWhitespace();
-        var names = std.ArrayListUnmanaged([]const u8){};
-        var values = std.ArrayListUnmanaged(Value){};
+        const m = ObjMap.create(self.alloc);
         if (self.pos < self.src.len and self.src[self.pos] == '}') {
             self.pos += 1;
-            const name_slice = names.toOwnedSlice(self.alloc) catch return Value.initNil();
-            const val_slice = values.toOwnedSlice(self.alloc) catch return Value.initNil();
-            return ObjStruct.create(self.alloc, "object", name_slice, val_slice).toValue();
+            return m.toValue();
         }
         while (self.pos < self.src.len) {
             self.skipWhitespace();
@@ -241,8 +253,7 @@ const JsonParser = struct {
             const key = key_val.asString().chars;
             self.skipWhitespace();
             if (self.pos < self.src.len and self.src[self.pos] == ':') self.pos += 1;
-            names.append(self.alloc, key) catch return Value.initNil();
-            values.append(self.alloc, self.parseValue()) catch return Value.initNil();
+            m.set(self.alloc, key, self.parseValue());
             self.skipWhitespace();
             if (self.pos < self.src.len and self.src[self.pos] == ',') {
                 self.pos += 1;
@@ -251,8 +262,6 @@ const JsonParser = struct {
             break;
         }
         if (self.pos < self.src.len and self.src[self.pos] == '}') self.pos += 1;
-        const name_slice = names.toOwnedSlice(self.alloc) catch return Value.initNil();
-        const val_slice = values.toOwnedSlice(self.alloc) catch return Value.initNil();
-        return ObjStruct.create(self.alloc, "object", name_slice, val_slice).toValue();
+        return m.toValue();
     }
 };

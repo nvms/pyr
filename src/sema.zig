@@ -189,6 +189,7 @@ pub const Sema = struct {
         self.define("reduce", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("sort", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("sort_by", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
+        self.define("delete", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("channel", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
         self.define("await_all", .{ .ty = &builtin_println_ty, .is_mut = false, .kind = .builtin });
 
@@ -594,6 +595,12 @@ pub const Sema = struct {
             },
             .array_literal => |elems| {
                 for (elems) |elem| self.analyzeExpr(elem);
+            },
+            .map_literal => |entries| {
+                for (entries) |entry| {
+                    self.analyzeExpr(entry.key);
+                    self.analyzeExpr(entry.value);
+                }
             },
             .try_unwrap => |inner| self.analyzeExpr(inner),
             .or_expr => |oe| {

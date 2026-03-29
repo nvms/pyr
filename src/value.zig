@@ -22,13 +22,13 @@ pub const Value = struct {
         task = 10,
         channel = 11,
         error_val = 12,
-        conn = 13,
+        map = 13,
         ptr = 14,
         ext = 15,
         float = 16,
     };
 
-    pub const ExtKind = enum(u3) { listener, dgram, tls_conn, ssl_ctx, ssl_conn };
+    pub const ExtKind = enum(u3) { listener, dgram, tls_conn, ssl_ctx, ssl_conn, conn };
 
     fn encode(t: Tag, val: u64) Value {
         const tv: u64 = @intFromEnum(t);
@@ -51,6 +51,10 @@ pub const Value = struct {
 
     pub fn isExt(self: Value) bool {
         return self.tag() == .ext;
+    }
+
+    pub fn isConn(self: Value) bool {
+        return self.tag() == .ext and self.extKind() == .conn;
     }
 
     pub fn extKind(self: Value) ExtKind {
@@ -119,8 +123,12 @@ pub const Value = struct {
         return encodeExt(.listener, @intFromPtr(p));
     }
 
+    pub fn initMap(p: *ObjMap) Value {
+        return encode(.map, @intFromPtr(p));
+    }
+
     pub fn initConn(p: *ObjConn) Value {
-        return encode(.conn, @intFromPtr(p));
+        return encodeExt(.conn, @intFromPtr(p));
     }
 
     pub fn initDgram(p: *ObjDgram) Value {
@@ -205,6 +213,10 @@ pub const Value = struct {
         return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
 
+    pub fn asMap(self: Value) *ObjMap {
+        return @ptrCast(@alignCast(self.ptrFromPayload()));
+    }
+
     pub fn asTask(self: Value) *ObjTask {
         return @ptrCast(@alignCast(self.ptrFromPayload()));
     }
@@ -218,7 +230,7 @@ pub const Value = struct {
     }
 
     pub fn asConn(self: Value) *ObjConn {
-        return @ptrCast(@alignCast(self.ptrFromPayload()));
+        return @ptrCast(@alignCast(self.extPtr()));
     }
 
     pub fn asDgram(self: Value) *ObjDgram {
@@ -243,7 +255,7 @@ pub const Value = struct {
             .bool_ => self.asBool(),
             .int => self.asInt() != 0,
             .float => self.asFloat() != 0.0,
-            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .task, .channel, .conn, .ext => true,
+            .string, .function, .struct_, .enum_, .native_fn, .closure, .array, .map, .task, .channel, .ext => true,
             .ptr => self.payload() != 0,
             .error_val => false,
         };
@@ -273,6 +285,17 @@ pub const Value = struct {
                 if (aa.items.len != ba.items.len) return false;
                 for (aa.items, ba.items) |av, bv| {
                     if (!eql(av, bv)) return false;
+                }
+                return true;
+            },
+            .map => {
+                const am = a.asMap();
+                const bm = b.asMap();
+                if (am.count() != bm.count()) return false;
+                var it = am.entries.iterator();
+                while (it.next()) |entry| {
+                    const bval = bm.entries.get(entry.key_ptr.*) orelse return false;
+                    if (!eql(entry.value_ptr.*, bval)) return false;
                 }
                 return true;
             },
@@ -308,6 +331,15 @@ pub const Value = struct {
                 }
                 return ObjEnum.create(alloc, e.type_name, e.variant, e.variant_index, cloned_payloads).toValue();
             },
+            .map => {
+                const m = self.asMap();
+                const cloned = ObjMap.create(alloc);
+                var it = m.entries.iterator();
+                while (it.next()) |entry| {
+                    cloned.set(alloc, entry.key_ptr.*, entry.value_ptr.*.deepClone(alloc));
+                }
+                return cloned.toValue();
+            },
             .string => {
                 const s = self.asString();
                 const chars_copy = alloc.dupe(u8, s.chars) catch @panic("oom");
@@ -342,6 +374,11 @@ pub const Value = struct {
                 const c = self.asClosure();
                 if (c.upvalues.len > 0) alloc.free(c.upvalues);
                 alloc.destroy(c);
+            },
+            .map => {
+                const m = self.asMap();
+                m.deinit(alloc);
+                alloc.destroy(m);
             },
             .error_val => {
                 const e = self.asError();
@@ -390,7 +427,23 @@ pub const Value = struct {
             .closure => std.debug.print("<closure>", .{}),
             .task => std.debug.print("<task>", .{}),
             .channel => std.debug.print("<channel>", .{}),
-            .conn => std.debug.print("<conn>", .{}),
+            .map => {
+                const m = self.asMap();
+                std.debug.print("{{", .{});
+                var it = m.entries.iterator();
+                var first = true;
+                while (it.next()) |entry| {
+                    if (!first) std.debug.print(", ", .{});
+                    std.debug.print("\"{s}\": ", .{entry.key_ptr.*});
+                    if (entry.value_ptr.*.tag() == .string) {
+                        std.debug.print("\"{s}\"", .{entry.value_ptr.*.asString().chars});
+                    } else {
+                        entry.value_ptr.*.dump();
+                    }
+                    first = false;
+                }
+                std.debug.print("}}", .{});
+            },
             .ptr => std.debug.print("<ptr 0x{x}>", .{self.payload()}),
             .ext => std.debug.print("<{s}>", .{@tagName(self.extKind())}),
             .error_val => {
@@ -567,6 +620,52 @@ pub const ObjArray = struct {
 
     pub fn toValue(self: *ObjArray) Value {
         return Value.initArray(self);
+    }
+};
+
+pub const ObjMap = struct {
+    entries: std.StringArrayHashMapUnmanaged(Value),
+
+    pub fn create(alloc: std.mem.Allocator) *ObjMap {
+        const m = alloc.create(ObjMap) catch @panic("oom");
+        m.* = .{ .entries = .{} };
+        return m;
+    }
+
+    pub fn get(self: *ObjMap, key: []const u8) ?Value {
+        return self.entries.get(key);
+    }
+
+    pub fn set(self: *ObjMap, alloc: std.mem.Allocator, key: []const u8, val: Value) void {
+        const gop = self.entries.getOrPut(alloc, key) catch @panic("oom");
+        if (!gop.found_existing) {
+            gop.key_ptr.* = alloc.dupe(u8, key) catch @panic("oom");
+        }
+        gop.value_ptr.* = val;
+    }
+
+    pub fn delete(self: *ObjMap, alloc: std.mem.Allocator, key: []const u8) bool {
+        if (self.entries.fetchOrderedRemove(key)) |kv| {
+            alloc.free(@constCast(kv.key));
+            return true;
+        }
+        return false;
+    }
+
+    pub fn count(self: *ObjMap) usize {
+        return self.entries.count();
+    }
+
+    pub fn deinit(self: *ObjMap, alloc: std.mem.Allocator) void {
+        var it = self.entries.iterator();
+        while (it.next()) |entry| {
+            alloc.free(@constCast(entry.key_ptr.*));
+        }
+        self.entries.deinit(alloc);
+    }
+
+    pub fn toValue(self: *ObjMap) Value {
+        return Value.initMap(self);
     }
 };
 

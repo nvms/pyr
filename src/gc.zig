@@ -8,6 +8,7 @@ const ObjArray = @import("value.zig").ObjArray;
 const ObjClosure = @import("value.zig").ObjClosure;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ObjError = @import("value.zig").ObjError;
+const ObjMap = @import("value.zig").ObjMap;
 
 pub const GC = struct {
     objects: std.ArrayListUnmanaged(GcObj),
@@ -75,6 +76,7 @@ pub const GC = struct {
             .enum_ => @sizeOf(ObjEnum) + val.asEnum().payloads.len * @sizeOf(Value),
             .closure => @sizeOf(ObjClosure) + val.asClosure().upvalues.len * @sizeOf(Value),
             .error_val => @sizeOf(ObjError),
+            .map => @sizeOf(ObjMap) + val.asMap().count() * (@sizeOf(Value) + 32),
             else => 0,
         };
     }
@@ -117,7 +119,7 @@ pub const GC = struct {
     fn markValue(self: *GC, val: Value) void {
         const tag = val.tag();
         switch (tag) {
-            .string, .struct_, .enum_, .array, .closure, .error_val => {},
+            .string, .struct_, .enum_, .array, .closure, .error_val, .map => {},
             else => return,
         }
         const ptr = val.payload();
@@ -148,6 +150,13 @@ pub const GC = struct {
             .enum_ => {
                 const e = val.asEnum();
                 for (e.payloads) |p| self.markValue(p);
+            },
+            .map => {
+                const m = val.asMap();
+                var it = m.entries.iterator();
+                while (it.next()) |entry| {
+                    self.markValue(entry.value_ptr.*);
+                }
             },
             .error_val => {
                 self.markValue(val.asError().value);
@@ -209,6 +218,12 @@ pub const GC = struct {
                 freed = @sizeOf(ObjClosure) + cl.upvalues.len * @sizeOf(Value);
                 if (cl.upvalues.len > 0) a.free(cl.upvalues);
                 a.destroy(cl);
+            },
+            .map => {
+                const m: *ObjMap = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
+                freed = @sizeOf(ObjMap) + m.count() * (@sizeOf(Value) + 32);
+                m.deinit(a);
+                a.destroy(m);
             },
             .error_val => {
                 const e: *ObjError = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));

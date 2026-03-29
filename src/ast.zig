@@ -193,6 +193,7 @@ pub const Expr = struct {
         try_unwrap: *const Expr,
         or_expr: OrExpr,
         unwrap_crash: *const Expr,
+        map_literal: []const MapEntry,
     };
 };
 
@@ -293,6 +294,11 @@ pub const StructLiteral = struct {
 
 pub const FieldInit = struct {
     name: []const u8,
+    value: *const Expr,
+};
+
+pub const MapEntry = struct {
+    key: *const Expr,
     value: *const Expr,
 };
 

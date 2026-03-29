@@ -76,6 +76,7 @@ pub const OpCode = enum(u8) {
     index_set,
     array_push,
     array_len,
+    map_create,
 
     slide,
     match_jump,

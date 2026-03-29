@@ -9,6 +9,7 @@ const ObjEnum = @import("value.zig").ObjEnum;
 const ObjNativeFn = @import("value.zig").ObjNativeFn;
 const ObjClosure = @import("value.zig").ObjClosure;
 const ObjArray = @import("value.zig").ObjArray;
+const ObjMap = @import("value.zig").ObjMap;
 const ObjTask = @import("value.zig").ObjTask;
 const ObjChannel = @import("value.zig").ObjChannel;
 const ObjListener = @import("value.zig").ObjListener;
@@ -722,6 +723,12 @@ pub const VM = struct {
                             self.runtimeError("array has no field '{s}'", .{field_name});
                             return error.RuntimeError;
                         }
+                    } else if (val.tag() == .map) {
+                        if (std.mem.eql(u8, field_name, "len")) {
+                            self.push(Value.initInt(@intCast(val.asMap().count())));
+                        } else {
+                            self.push(val.asMap().get(field_name) orelse Value.initNil());
+                        }
                     } else {
                         self.runtimeError("cannot access field on this value", .{});
                         return error.RuntimeError;
@@ -730,6 +737,7 @@ pub const VM = struct {
 
                 .get_field_idx => {
                     const idx = self.readByte();
+                    const name_idx = self.readU16();
                     const val = self.pop();
                     if (val.tag() == .struct_) {
                         const s = val.asStruct();
@@ -739,6 +747,9 @@ pub const VM = struct {
                             self.runtimeError("field index out of bounds", .{});
                             return error.RuntimeError;
                         }
+                    } else if (val.tag() == .map) {
+                        const field_name = self.currentChunk().constants.items[name_idx].asString().chars;
+                        self.push(val.asMap().get(field_name) orelse Value.initNil());
                     } else {
                         self.runtimeError("cannot access field on non-struct value", .{});
                         return error.RuntimeError;
@@ -755,6 +766,8 @@ pub const VM = struct {
                             self.runtimeError("struct has no field '{s}'", .{field_name});
                             return error.RuntimeError;
                         }
+                    } else if (target.tag() == .map) {
+                        target.asMap().set(self.currentAlloc(), field_name, val);
                     } else {
                         self.runtimeError("cannot set field on non-struct value", .{});
                         return error.RuntimeError;
@@ -987,6 +1000,24 @@ pub const VM = struct {
                     self.trackGc(av);
                     self.push(av);
                 },
+                .map_create => {
+                    const count = self.readByte();
+                    const alloc = self.currentAlloc();
+                    const m = ObjMap.create(alloc);
+                    var i: usize = 0;
+                    const base = self.sp - @as(usize, count) * 2;
+                    while (i < count) : (i += 1) {
+                        const key = self.stack[base + i * 2];
+                        const val = self.stack[base + i * 2 + 1];
+                        if (key.tag() == .string) {
+                            m.set(alloc, key.asString().chars, val);
+                        }
+                    }
+                    self.sp = base;
+                    const mv = m.toValue();
+                    self.trackGc(mv);
+                    self.push(mv);
+                },
                 .index_get => {
                     const idx_val = self.pop();
                     const target = self.pop();
@@ -1011,6 +1042,10 @@ pub const VM = struct {
                             self.runtimeError("string index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
                         }
+                    } else if (target.tag() == .map and idx_val.tag() == .string) {
+                        const m = target.asMap();
+                        const key = idx_val.asString().chars;
+                        self.push(m.get(key) orelse Value.initNil());
                     } else {
                         self.runtimeError("cannot index into this value", .{});
                         return error.RuntimeError;
@@ -1043,6 +1078,9 @@ pub const VM = struct {
                             self.runtimeError("string index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
                         }
+                    } else if (target.tag() == .map and idx_val.tag() == .string) {
+                        const m = target.asMap();
+                        self.push(m.get(idx_val.asString().chars) orelse Value.initNil());
                     } else {
                         self.runtimeError("cannot index into this value", .{});
                         return error.RuntimeError;
@@ -1094,6 +1132,9 @@ pub const VM = struct {
                             self.runtimeError("array index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
                         }
+                    } else if (target.tag() == .map and idx_val.tag() == .string) {
+                        const m = target.asMap();
+                        m.set(self.currentAlloc(), idx_val.asString().chars, val);
                     } else {
                         self.runtimeError("cannot index-assign into this value", .{});
                         return error.RuntimeError;
@@ -1447,12 +1488,12 @@ pub const VM = struct {
                 },
                 @intFromEnum(OpCode.get_field_idx) => {
                     const idx = code[frame.ip];
-                    frame.ip += 1;
+                    frame.ip += 3;
                     const val = self.stack[self.sp - 1];
                     if (val.tag() == .struct_) {
                         self.stack[self.sp - 1] = val.asStruct().fieldValues()[idx];
                     } else {
-                        frame.ip -= 2;
+                        frame.ip -= 4;
                         return;
                     }
                 },
@@ -2268,8 +2309,12 @@ pub const VM = struct {
         if (target.tag() == .ext) {
             if (target.extKind() == .tls_conn) { self.execTlsRead(target.asTlsConn()); return; }
             if (target.extKind() == .ssl_conn) { self.execSslRead(target.asSslConn()); return; }
+            if (target.extKind() == .conn) {} else {
+                self.runtimeError("read on non-conn value", .{});
+                return error.RuntimeError;
+            }
         }
-        if (target.tag() != .conn) {
+        if (!target.isConn()) {
             self.runtimeError("read on non-conn value", .{});
             return error.RuntimeError;
         }
@@ -2348,7 +2393,7 @@ pub const VM = struct {
             if (target.extKind() == .tls_conn) { self.execTlsWrite(target.asTlsConn(), data_val); return; }
             if (target.extKind() == .ssl_conn) { self.execSslWrite(target.asSslConn(), data_val); return; }
         }
-        if (target.tag() != .conn or data_val.tag() != .string) {
+        if (!target.isConn() or data_val.tag() != .string) {
             self.push(self.ioError("write requires conn and string"));
             return;
         }

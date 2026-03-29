@@ -50,7 +50,7 @@ fn tlsContext(alloc: std.mem.Allocator, args: []const Value) Value {
 }
 
 fn tlsUpgrade(alloc: std.mem.Allocator, args: []const Value) Value {
-    if (args[0].tag() != .conn) return root.makeIoError(alloc, "upgrade requires conn");
+    if (!args[0].isConn()) return root.makeIoError(alloc, "upgrade requires conn");
 
     if (args[1].tag() == .ext and args[1].extKind() == .ssl_ctx) return sslServerUpgrade(alloc, args);
 

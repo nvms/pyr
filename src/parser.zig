@@ -787,6 +787,7 @@ pub const Parser = struct {
                 return inner;
             },
             .lbrace => {
+                if (self.looksLikeMapLiteral()) return self.parseMapLiteral();
                 const block = self.parseBlock() orelse return null;
                 return self.create(ast.Expr, .{
                     .span = self.spanFrom(start),
@@ -836,6 +837,38 @@ pub const Parser = struct {
         return self.create(ast.Expr, .{
             .span = self.spanFrom(start),
             .kind = .{ .array_literal = elems.toOwnedSlice(self.arena) catch @panic("oom") },
+        });
+    }
+
+    fn parseMapLiteral(self: *Parser) ?*const ast.Expr {
+        const start = self.currentSpanStart();
+        _ = self.advance(); // eat {
+        self.nesting += 1;
+        self.skipNewlines();
+        var entries = std.ArrayListUnmanaged(ast.MapEntry){};
+        while (self.peek() != .rbrace and !self.atEnd()) {
+            const key = if (self.peek() == .identifier) blk: {
+                const key_start = self.currentSpanStart();
+                const name = self.tokenSlice(self.advance());
+                const quoted = std.fmt.allocPrint(self.arena, "\"{s}\"", .{name}) catch @panic("oom");
+                break :blk self.create(ast.Expr, .{
+                    .span = self.spanFrom(key_start),
+                    .kind = .{ .string_literal = quoted },
+                });
+            } else self.parseExpr() orelse return null;
+            _ = self.expect(.colon) orelse return null;
+            self.skipNewlines();
+            const value = self.parseExpr() orelse return null;
+            entries.append(self.arena, .{ .key = key, .value = value }) catch @panic("oom");
+            self.skipNewlines();
+            if (self.eat(.comma) == null) break;
+            self.skipNewlines();
+        }
+        self.nesting -= 1;
+        _ = self.expect(.rbrace) orelse return null;
+        return self.create(ast.Expr, .{
+            .span = self.spanFrom(start),
+            .kind = .{ .map_literal = entries.toOwnedSlice(self.arena) catch @panic("oom") },
         });
     }
 
@@ -1528,6 +1561,27 @@ pub const Parser = struct {
         }
         if (i >= self.tokens.len) return false;
         return self.tokens[i].tag == .colon;
+    }
+
+    fn looksLikeMapLiteral(self: *Parser) bool {
+        if (self.peek() != .lbrace) return false;
+        var i = self.pos + 1;
+        while (i < self.tokens.len and self.tokens[i].tag == .newline) i += 1;
+        if (i >= self.tokens.len) return false;
+        if (self.tokens[i].tag == .rbrace) return true;
+        if (self.tokens[i].tag == .string) {
+            i += 1;
+            while (i < self.tokens.len and self.tokens[i].tag == .newline) i += 1;
+            if (i >= self.tokens.len) return false;
+            return self.tokens[i].tag == .colon;
+        }
+        if (self.tokens[i].tag == .identifier) {
+            i += 1;
+            while (i < self.tokens.len and self.tokens[i].tag == .newline) i += 1;
+            if (i >= self.tokens.len) return false;
+            return self.tokens[i].tag == .colon;
+        }
+        return false;
     }
 
     fn create(self: *Parser, comptime T: type, value: T) *const T {

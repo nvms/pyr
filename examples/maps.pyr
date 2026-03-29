@@ -1,0 +1,43 @@
+imp std/io { println }
+imp std/json
+
+fn main() {
+  m = { name: "alice", age: 30, city: "new york" }
+  println(m["name"])
+  println(m["age"])
+  println(len(m))
+  println(keys(m))
+  println(type_of(m))
+
+  println(contains(m, "name"))
+  println(contains(m, "missing"))
+
+  m["email"] = "alice@example.com"
+  println(m["email"])
+  println(len(m))
+
+  delete(m, "city")
+  println(len(m))
+
+  println(m["gone"])
+
+  empty = {}
+  println(empty)
+  println(len(empty))
+
+  m2 = { "full name": "alice smith", score: 95 }
+  println(m2["full name"])
+  println(m2["score"])
+
+  println(json.encode(m))
+  roundtrip = json.decode(json.encode(m2))
+  println(roundtrip["full name"])
+
+  data = json.decode("\{\"x\": 1, \"y\": [2, 3]}")
+  println(data["x"])
+  println(data["y"])
+  data["z"] = true
+  println(json.encode(data))
+
+  println(getattr(m, "name"))
+}

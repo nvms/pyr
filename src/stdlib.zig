@@ -148,7 +148,26 @@ pub fn writeValueTo(alloc: std.mem.Allocator, fd: std.posix.fd_t, v: Value) void
         .closure => writeBytes(fd, "<closure>"),
         .task => writeBytes(fd, "<task>"),
         .channel => writeBytes(fd, "<channel>"),
-        .conn => writeBytes(fd, "<conn>"),
+        .map => {
+            const m = v.asMap();
+            writeBytes(fd, "{");
+            var it = m.entries.iterator();
+            var first = true;
+            while (it.next()) |entry| {
+                if (!first) writeBytes(fd, ", ");
+                writeBytes(fd, entry.key_ptr.*);
+                writeBytes(fd, ": ");
+                if (entry.value_ptr.*.tag() == .string) {
+                    writeBytes(fd, "\"");
+                    writeBytes(fd, entry.value_ptr.*.asString().chars);
+                    writeBytes(fd, "\"");
+                } else {
+                    writeValueTo(alloc, fd, entry.value_ptr.*);
+                }
+                first = false;
+            }
+            writeBytes(fd, "}");
+        },
         .ext => writeBytes(fd, @tagName(v.extKind())),
         .ptr => {
             var buf: [32]u8 = undefined;
