@@ -1,4 +1,7 @@
 CLAUDE.md
+INTERNALS.md
+ROADMAP.md
+SPEC.md
 zig-cache/
 zig-out/
 .zig-cache/
