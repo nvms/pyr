@@ -137,7 +137,6 @@ pub const Parser = struct {
 
         self.skipNewlines();
         while (self.peek() != .rparen and !self.atEnd()) {
-            _ = self.eat(.kw_own);
             const pname = self.expectIdent() orelse return null;
             var type_expr: ?*const ast.TypeExpr = null;
             if (self.eat(.colon) != null) {

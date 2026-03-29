@@ -3,7 +3,7 @@ struct User {
   score: int
 }
 
-fn consume(own user: User) {
+fn consume(user: User) {
   println(user.name)
 }
 

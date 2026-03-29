@@ -50,7 +50,6 @@ pub const Token = struct {
         kw_break,
         kw_continue,
         kw_type,
-        kw_own,
 
         // types
         kw_int,
@@ -170,7 +169,6 @@ pub const Token = struct {
                 .kw_break => "'break'",
                 .kw_continue => "'continue'",
                 .kw_type => "'type'",
-                .kw_own => "'own'",
                 .kw_int => "'int'",
                 .kw_float => "'float'",
                 .kw_str => "'str'",
@@ -217,7 +215,6 @@ pub const keywords = std.StaticStringMap(Token.Tag).initComptime(.{
     .{ "break", .kw_break },
     .{ "continue", .kw_continue },
     .{ "type", .kw_type },
-    .{ "own", .kw_own },
     .{ "int", .kw_int },
     .{ "float", .kw_float },
     .{ "str", .kw_str },
