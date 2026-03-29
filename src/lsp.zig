@@ -418,27 +418,21 @@ pub const Server = struct {
         // detect context from line text
         const trimmed = std.mem.trimLeft(u8, line_text, " \t");
 
-        // import path completion: "imp std/"
+        // import completion
         if (std.mem.startsWith(u8, trimmed, "imp ")) {
-            const after_imp = std.mem.trimLeft(u8, trimmed[4..], " ");
-            if (std.mem.startsWith(u8, after_imp, "std/")) {
-                self.completeStdlibModules(id);
-                return;
-            }
-        }
-
-        // selective import completion: "imp std/os { " or "imp std/os { println, "
-        if (std.mem.startsWith(u8, trimmed, "imp ")) {
-            if (std.mem.indexOf(u8, trimmed, "{")) |brace| {
-                const path_part = std.mem.trimLeft(u8, trimmed[4..], " ");
-                if (std.mem.startsWith(u8, path_part, "std/")) {
+            const path_part = std.mem.trimLeft(u8, trimmed[4..], " ");
+            if (std.mem.startsWith(u8, path_part, "std/")) {
+                // selective import: "imp std/io { " -> complete functions
+                if (std.mem.indexOf(u8, trimmed, "{")) |_| {
                     const slash = std.mem.indexOf(u8, path_part, "/") orelse 0;
                     const space = std.mem.indexOf(u8, path_part[slash + 1 ..], " ") orelse (path_part.len - slash - 1);
                     const mod_name = path_part[slash + 1 .. slash + 1 + space];
-                    _ = brace;
                     self.completeStdlibFunctions(id, mod_name);
                     return;
                 }
+                // module path: "imp std/" -> complete module names
+                self.completeStdlibModules(id);
+                return;
             }
         }
 
