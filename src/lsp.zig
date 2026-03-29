@@ -953,7 +953,9 @@ pub const Server = struct {
         }
 
         if (result.errors.len == 0) {
-            const analysis = sema.Sema.analyze(alloc, result);
+            const dir = uriToDir(uri) orelse ".";
+            var loader = module.ModuleLoader.init(alloc, dir);
+            const analysis = sema.Sema.analyzeModule(alloc, result, &loader, dir);
             for (analysis.errors) |err| {
                 if (count > 0) diags.appendSlice(alloc, ",") catch return;
                 appendDiagnostic(alloc, &diags, source, err.span, err.message, 2);
