@@ -20,6 +20,7 @@ const SymbolInfo = struct {
     kind: SymbolKind,
     span: ast.Span,
     detail: []const u8,
+    doc: []const u8 = "",
 };
 
 pub const Server = struct {
@@ -243,10 +244,13 @@ pub const Server = struct {
             return;
         }
 
-        const sym = findDefinition(result.items, name, offset, doc.content) orelse {
+        var sym = findDefinition(result.items, name, offset, doc.content) orelse {
             self.respondNull(id);
             return;
         };
+
+        var doc_buf: [2048]u8 = undefined;
+        sym.doc = extractDocComment(doc.content, sym.span.start, &doc_buf);
 
         var hover_buf: [4096]u8 = undefined;
         const hover_text = buildHoverText(sym, &hover_buf);
@@ -662,7 +666,14 @@ fn firstLine(source: []const u8, span: ast.Span) []const u8 {
     const start = span.start;
     var end = start;
     while (end < source.len and end < span.end and source[end] != '\n') end += 1;
-    return source[start..end];
+    var line = source[start..end];
+    // strip trailing " {" or " =" from signatures
+    if (line.len >= 2 and std.mem.endsWith(u8, line, " {")) {
+        line = line[0 .. line.len - 2];
+    } else if (line.len >= 2 and std.mem.endsWith(u8, line, " =")) {
+        line = line[0 .. line.len - 2];
+    }
+    return line;
 }
 
 fn externFnSignature(lib: []const u8, f: ast.FfiFunc) []const u8 {
@@ -743,7 +754,84 @@ fn buildHoverText(sym: SymbolInfo, buf: []u8) []const u8 {
             pos += code_suffix.len;
         },
     }
+
+    if (sym.doc.len > 0 and pos + sym.doc.len + 2 < buf.len) {
+        @memcpy(buf[pos..][0..2], "\n\n");
+        pos += 2;
+        @memcpy(buf[pos..][0..sym.doc.len], sym.doc);
+        pos += sym.doc.len;
+    }
+
     return buf[0..pos];
+}
+
+fn extractDocComment(source: []const u8, span_start: usize, buf: []u8) []const u8 {
+    if (span_start == 0) return "";
+
+    var line_starts: [64]usize = undefined;
+    var line_ends: [64]usize = undefined;
+    var count: usize = 0;
+
+    var pos = span_start;
+
+    // walk back past whitespace/newline to end of previous line's content
+    while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t' or source[pos - 1] == '\n' or source[pos - 1] == '\r')) {
+        pos -= 1;
+    }
+
+    // collect comment lines going upward
+    while (pos > 0 and count < 64) {
+        const line_end = pos;
+
+        // find start of this line
+        var line_start = pos;
+        while (line_start > 0 and source[line_start - 1] != '\n') {
+            line_start -= 1;
+        }
+
+        const line = std.mem.trimLeft(u8, source[line_start..line_end], " \t");
+        if (line.len >= 2 and line[0] == '/' and line[1] == '/') {
+            line_starts[count] = line_start;
+            line_ends[count] = line_end;
+            count += 1;
+            if (line_start == 0) break;
+            // go to the newline before this line
+            pos = line_start - 1;
+            // check for blank line: if the char before the newline is also a newline, stop
+            if (pos > 0 and source[pos - 1] == '\n') break;
+            if (pos == 0 and source[0] == '\n') break;
+            // skip trailing whitespace on the line above
+            while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t')) {
+                pos -= 1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    if (count == 0) return "";
+
+    // lines are in reverse order, write them forward
+    var out_pos: usize = 0;
+    var i = count;
+    while (i > 0) {
+        i -= 1;
+        const raw = source[line_starts[i]..line_ends[i]];
+        const trimmed = std.mem.trimLeft(u8, raw, " \t");
+        // strip the // prefix and optional leading space
+        var text = trimmed[2..];
+        if (text.len > 0 and text[0] == ' ') text = text[1..];
+
+        if (out_pos + text.len + 1 >= buf.len) break;
+        @memcpy(buf[out_pos..][0..text.len], text);
+        out_pos += text.len;
+        if (i > 0) {
+            buf[out_pos] = '\n';
+            out_pos += 1;
+        }
+    }
+
+    return buf[0..out_pos];
 }
 
 fn inferBindingType(detail: []const u8) []const u8 {
@@ -1332,6 +1420,34 @@ test "builtin hover: no return type" {
         "```pyr\nprintln(value: any)\n```\n\nPrint a value to stdout followed by a newline.",
         text,
     );
+}
+
+test "doc comment: single line" {
+    const source = "// adds two numbers\nfn add(a, b) = a + b";
+    var buf: [2048]u8 = undefined;
+    const doc = extractDocComment(source, 20, &buf);
+    try std.testing.expectEqualStrings("adds two numbers", doc);
+}
+
+test "doc comment: multi-line" {
+    const source = "// first line\n// second line\nfn foo() = 1";
+    var buf: [2048]u8 = undefined;
+    const doc = extractDocComment(source, 29, &buf);
+    try std.testing.expectEqualStrings("first line\nsecond line", doc);
+}
+
+test "doc comment: no comment" {
+    const source = "x = 5\nfn foo() = 1";
+    var buf: [2048]u8 = undefined;
+    const doc = extractDocComment(source, 6, &buf);
+    try std.testing.expectEqualStrings("", doc);
+}
+
+test "doc comment: gap breaks collection" {
+    const source = "// orphan\n\n// real doc\nfn foo() = 1";
+    var buf: [2048]u8 = undefined;
+    const doc = extractDocComment(source, 23, &buf);
+    try std.testing.expectEqualStrings("real doc", doc);
 }
 
 test "builtin hover: all builtins resolve" {
