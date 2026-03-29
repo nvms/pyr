@@ -174,7 +174,7 @@ older handoff documents should be cleaned up. if the work described in a handoff
 
 ## current status
 
-pyr is a fully functional bytecode VM language. 283 tests, 40 validated examples, 11 benchmarks.
+pyr is a fully functional bytecode VM language. 283 tests, 41 validated examples, 11 benchmarks.
 
 **language features:** structs, enums (algebraic sum types with payloads), pattern matching (O(1) variant dispatch), closures (copy-capture), for-range/for-in loops, break/continue, arrays, strings with interpolation and escape sequences, UFCS, option types (`T?`, `or`, `?` propagation), result types (`T!`, `fail`, `or |err|`), defer, mutable references (`*mut T`/`&mut x`), type aliases, FFI (`extern "lib"`)
 
@@ -206,7 +206,7 @@ critical invariants to always keep in mind:
 - new specialized opcodes go in run() only unless proven safe in fastLoop (float ops in fastLoop caused 7x regression)
 - NaN boxing: Value.tag is a method (`.tag()`), not a field. Value.bits is the raw u64. integers are 45-bit signed (sign-extended). pointers are 45-bit (32TB). never access `.data` - use the typed accessors (asInt, asFloat, asString, etc)
 - arena blocks and while loop bodies must NOT use compileBlock() - it emits return_ for trailing expressions, causing early return that skips cleanup (pop_arena, net.close, etc). use inline beginScope/endScope + pop trailing expression instead
-- GC only tracks objects allocated outside arenas (arena_stack.depth == 0). constant pool objects (strings, functions from the compiler) are NOT gc-tracked. GC safepoints are at loop back-edges only - NOT at call boundaries (adding one to callValue caused 30% fib regression)
+- GC only tracks objects allocated outside arenas (arena_stack.depth == 0). constant pool objects (strings, functions from the compiler) are NOT gc-tracked. GC safepoints are at loop back-edges only - NOT at call boundaries (adding one to callValue caused 30% fib regression). markValue uses ptr_map (hash map) for O(1) lookup - sweep must update ptr_map indices on swap-remove
 
 ## design principles
 
