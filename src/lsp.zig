@@ -253,25 +253,39 @@ pub const Server = struct {
             break :blk s;
         };
         if (namespaceAtOffset(doc.content, ident_start)) |ns| {
-            if (resolveNamespace(result.items, ns)) |mod_name| {
-                if (lookupStdlib(mod_name, name)) |sig| {
-                    var bi_buf: [4096]u8 = undefined;
-                    const qualified = std.fmt.bufPrint(&bi_buf, "{s}.{s}", .{ ns, name }) catch {
-                        self.respondNull(id);
-                        return;
-                    };
-                    const qlen = qualified.len;
-                    var fmt_buf: [4096]u8 = undefined;
-                    const bi_doc = formatBuiltinHover(bi_buf[0..qlen], sig, &fmt_buf);
-                    if (bi_doc.len > 0) {
-                        self.respondHoverMarkdown(id, bi_doc);
-                        return;
-                    }
+            if (resolveNamespace(result.items, ns)) |resolved| {
+                switch (resolved.kind) {
+                    .stdlib => {
+                        if (lookupStdlib(resolved.std_module.?, name)) |sig| {
+                            var bi_buf: [4096]u8 = undefined;
+                            const qualified = std.fmt.bufPrint(&bi_buf, "{s}.{s}", .{ ns, name }) catch {
+                                self.respondNull(id);
+                                return;
+                            };
+                            const qlen = qualified.len;
+                            var fmt_buf: [4096]u8 = undefined;
+                            const bi_doc = formatBuiltinHover(bi_buf[0..qlen], sig, &fmt_buf);
+                            if (bi_doc.len > 0) {
+                                self.respondHoverMarkdown(id, bi_doc);
+                                return;
+                            }
+                        }
+                    },
+                    .user => {
+                        if (uriToDir(uri)) |dir| {
+                            if (resolveUserModuleSymbol(alloc, dir, resolved.user_path.?, name)) |sym| {
+                                var hover_buf: [4096]u8 = undefined;
+                                const hover_text = buildHoverText(sym, &hover_buf);
+                                self.respondHoverMarkdown(id, hover_text);
+                                return;
+                            }
+                        }
+                    },
                 }
             }
         }
 
-        // also check for selective imports (e.g. imp std/io { eprintln })
+        // check for selective imports (stdlib and user modules)
         for (result.items) |item| {
             switch (item.kind) {
                 .import => |imp| {
@@ -285,6 +299,22 @@ pub const Server = struct {
                                         self.respondHoverMarkdown(id, bi_doc);
                                         return;
                                     }
+                                }
+                            }
+                        }
+                    } else if (imp.path.len >= 1 and !(imp.path.len == 2 and std.mem.eql(u8, imp.path[0], "std"))) {
+                        // user module: check selective imports and namespace access
+                        const is_selective = for (imp.items) |imported_name| {
+                            if (std.mem.eql(u8, imported_name, name)) break true;
+                        } else false;
+                        const is_wildcard = imp.items.len == 0 and imp.alias == null;
+                        if (is_selective or is_wildcard) {
+                            if (uriToDir(uri)) |dir| {
+                                if (resolveUserModuleSymbol(alloc, dir, imp.path, name)) |sym| {
+                                    var hover_buf: [4096]u8 = undefined;
+                                    const hover_text = buildHoverText(sym, &hover_buf);
+                                    self.respondHoverMarkdown(id, hover_text);
+                                    return;
                                 }
                             }
                         }
@@ -413,6 +443,12 @@ pub const Server = struct {
         const alloc = tmp_arena.allocator();
 
         const offset = positionToOffset(doc.content, line, character);
+
+        if (isInStringOrComment(doc.content, offset)) {
+            self.respondResult(id, "[]");
+            return;
+        }
+
         const line_text = getLineText(doc.content, line);
 
         // detect context from line text
@@ -434,12 +470,22 @@ pub const Server = struct {
                 self.completeStdlibModules(id);
                 return;
             }
-            // bare "imp " -> suggest "std/" prefix
-            self.completeImportRoots(id);
+            // selective import from user module: "imp mathlib { " -> complete pub fns
+            if (std.mem.indexOf(u8, trimmed, "{")) |_| {
+                const space = std.mem.indexOf(u8, path_part, " ") orelse path_part.len;
+                const mod_path = path_part[0..space];
+                if (uriToDir(uri)) |dir| {
+                    self.completeUserModuleFunctions(id, alloc, dir, mod_path);
+                    return;
+                }
+            }
+            // bare "imp " -> suggest "std/" plus local .pyr files
+            const dir = uriToDir(uri);
+            self.completeImportRoots(id, alloc, dir);
             return;
         }
 
-        // namespace dot completion: "io." or "fs."
+        // namespace dot completion: "io." or "fs." or "mymod."
         if (offset >= 2 and doc.content[offset - 1] == '.') {
             var ns_start = offset - 1;
             while (ns_start > 0 and isIdentChar(doc.content[ns_start - 1])) ns_start -= 1;
@@ -449,8 +495,21 @@ pub const Server = struct {
                 var p = parser.Parser.init(tokens, doc.content, alloc);
                 const result = p.parse();
                 if (result.errors.len == 0) {
-                    if (resolveNamespace(result.items, ns)) |mod_name| {
-                        self.completeStdlibFunctions(id, mod_name);
+                    if (resolveNamespace(result.items, ns)) |resolved| {
+                        switch (resolved.kind) {
+                            .stdlib => self.completeStdlibFunctions(id, resolved.std_module.?),
+                            .user => {
+                                if (uriToDir(uri)) |dir| {
+                                    const mod_path = std.mem.join(alloc, "/", resolved.user_path.?) catch {
+                                        self.respondResult(id, "[]");
+                                        return;
+                                    };
+                                    self.completeUserModuleFunctions(id, alloc, dir, mod_path);
+                                } else {
+                                    self.respondResult(id, "[]");
+                                }
+                            },
+                        }
                         return;
                     }
                 }
@@ -461,10 +520,106 @@ pub const Server = struct {
         self.completeGeneral(id, alloc, doc.content, offset);
     }
 
-    fn completeImportRoots(self: *Server, id: ?std.json.Value) void {
-        self.respondResult(id,
-            \\[{"label":"std/","kind":9}]
-        );
+    fn completeImportRoots(self: *Server, id: ?std.json.Value, _: std.mem.Allocator, dir: ?[]const u8) void {
+        var buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+        const prefix = "[{\"label\":\"std/\",\"kind\":9}";
+        @memcpy(buf[pos..][0..prefix.len], prefix);
+        pos += prefix.len;
+
+        if (dir) |d| {
+            var it = std.fs.openDirAbsolute(d, .{ .iterate = true }) catch {
+                buf[pos] = ']';
+                pos += 1;
+                self.respondResult(id, buf[0..pos]);
+                return;
+            };
+            defer it.close();
+            var walker = it.iterate();
+            while (walker.next() catch null) |entry| {
+                if (entry.kind != .file) continue;
+                const name = entry.name;
+                if (!std.mem.endsWith(u8, name, ".pyr")) continue;
+                const stem = name[0 .. name.len - 4];
+                const item = std.fmt.bufPrint(buf[pos..],
+                    \\,{{"label":"{s}","kind":17}}
+                , .{stem}) catch break;
+                pos += item.len;
+            }
+        }
+
+        buf[pos] = ']';
+        pos += 1;
+        self.respondResult(id, buf[0..pos]);
+    }
+
+    fn completeUserModuleFunctions(self: *Server, id: ?std.json.Value, alloc: std.mem.Allocator, dir: []const u8, mod_path: []const u8) void {
+        // build file path: dir + mod_path + ".pyr"
+        var path_buf: [1024]u8 = undefined;
+        const full_path = std.fmt.bufPrint(&path_buf, "{s}{s}.pyr", .{ dir, mod_path }) catch {
+            self.respondResult(id, "[]");
+            return;
+        };
+        const content = std.fs.cwd().readFileAlloc(alloc, full_path, 1024 * 1024) catch {
+            self.respondResult(id, "[]");
+            return;
+        };
+        const tokens = parser.tokenize(alloc, content);
+        var p = parser.Parser.init(tokens, content, alloc);
+        const result = p.parse();
+
+        var buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+        buf[pos] = '[';
+        pos += 1;
+        var first = true;
+        for (result.items) |item| {
+            switch (item.kind) {
+                .fn_decl => |f| {
+                    if (!f.is_pub) continue;
+                    if (!first) {
+                        buf[pos] = ',';
+                        pos += 1;
+                    }
+                    first = false;
+                    const detail = firstLine(content, item.span);
+                    var escaped: [1024]u8 = undefined;
+                    const safe = jsonEscape(detail, &escaped);
+                    const entry = std.fmt.bufPrint(buf[pos..],
+                        \\{{"label":"{s}","kind":3,"detail":"{s}"}}
+                    , .{ f.name, safe }) catch break;
+                    pos += entry.len;
+                },
+                .struct_decl => |s| {
+                    if (!s.is_pub) continue;
+                    if (!first) {
+                        buf[pos] = ',';
+                        pos += 1;
+                    }
+                    first = false;
+                    const entry = std.fmt.bufPrint(buf[pos..],
+                        \\{{"label":"{s}","kind":22}}
+                    , .{s.name}) catch break;
+                    pos += entry.len;
+                },
+                .enum_decl => |e| {
+                    if (!e.is_pub) continue;
+                    if (!first) {
+                        buf[pos] = ',';
+                        pos += 1;
+                    }
+                    first = false;
+                    const entry = std.fmt.bufPrint(buf[pos..],
+                        \\{{"label":"{s}","kind":13}}
+                    , .{e.name}) catch break;
+                    pos += entry.len;
+                },
+                else => {},
+            }
+        }
+        buf[pos] = ']';
+        pos += 1;
+        self.respondResult(id, buf[0..pos]);
     }
 
     fn completeStdlibModules(self: *Server, id: ?std.json.Value) void {
@@ -1716,6 +1871,109 @@ fn identifierAtOffset(source: []const u8, offset: usize) ?[]const u8 {
     return source[start..end];
 }
 
+fn resolveUserModuleSymbol(alloc: std.mem.Allocator, dir: []const u8, mod_path: []const []const u8, name: []const u8) ?SymbolInfo {
+    var path_buf: [1024]u8 = undefined;
+    var path_pos: usize = 0;
+    @memcpy(path_buf[path_pos..][0..dir.len], dir);
+    path_pos += dir.len;
+    for (mod_path, 0..) |segment, i| {
+        if (i > 0) {
+            path_buf[path_pos] = '/';
+            path_pos += 1;
+        }
+        @memcpy(path_buf[path_pos..][0..segment.len], segment);
+        path_pos += segment.len;
+    }
+    @memcpy(path_buf[path_pos..][0..4], ".pyr");
+    path_pos += 4;
+
+    const content = std.fs.cwd().readFileAlloc(alloc, path_buf[0..path_pos], 1024 * 1024) catch return null;
+    const tokens = parser.tokenize(alloc, content);
+    var p = parser.Parser.init(tokens, content, alloc);
+    const result = p.parse();
+    if (result.errors.len > 0) return null;
+
+    for (result.items) |item| {
+        switch (item.kind) {
+            .fn_decl => |f| {
+                if (f.is_pub and std.mem.eql(u8, f.name, name)) {
+                    var doc_buf: [2048]u8 = undefined;
+                    return .{
+                        .name = f.name,
+                        .kind = .function,
+                        .span = item.span,
+                        .detail = firstLine(content, item.span),
+                        .doc = extractDocComment(content, item.span.start, &doc_buf),
+                    };
+                }
+            },
+            .struct_decl => |s| {
+                if (s.is_pub and std.mem.eql(u8, s.name, name)) {
+                    return .{
+                        .name = s.name,
+                        .kind = .struct_,
+                        .span = item.span,
+                        .detail = firstLine(content, item.span),
+                    };
+                }
+            },
+            .enum_decl => |e| {
+                if (e.is_pub and std.mem.eql(u8, e.name, name)) {
+                    return .{
+                        .name = e.name,
+                        .kind = .enum_,
+                        .span = item.span,
+                        .detail = firstLine(content, item.span),
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn isInStringOrComment(source: []const u8, offset: usize) bool {
+    var i: usize = 0;
+    var in_string = false;
+    while (i < offset and i < source.len) {
+        if (source[i] == '/' and i + 1 < source.len and source[i + 1] == '/') {
+            // comment runs to end of line
+            while (i < source.len and source[i] != '\n') {
+                if (i == offset) return true;
+                i += 1;
+            }
+            if (i == offset) return false;
+            i += 1;
+            continue;
+        }
+        if (source[i] == '"' and !in_string) {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if (in_string) {
+            if (source[i] == '\\') {
+                i += 2;
+                continue;
+            }
+            if (source[i] == '"') {
+                in_string = false;
+            }
+        }
+        i += 1;
+    }
+    return in_string;
+}
+
+fn uriToDir(uri: []const u8) ?[]const u8 {
+    const path = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else return null;
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |last_slash| {
+        return path[0 .. last_slash + 1];
+    }
+    return null;
+}
+
 fn isIdentChar(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
 }
@@ -1804,15 +2062,28 @@ fn namespaceAtOffset(source: []const u8, ident_start: usize) ?[]const u8 {
     return source[start..end];
 }
 
-fn resolveNamespace(items: []const ast.Item, ns: []const u8) ?[]const u8 {
+const ResolvedImport = struct {
+    kind: enum { stdlib, user },
+    std_module: ?[]const u8,
+    user_path: ?[]const []const u8,
+};
+
+fn resolveNamespace(items: []const ast.Item, ns: []const u8) ?ResolvedImport {
     for (items) |item| {
         switch (item.kind) {
             .import => |imp| {
                 if (imp.path.len == 2 and std.mem.eql(u8, imp.path[0], "std")) {
                     if (imp.alias) |alias| {
-                        if (std.mem.eql(u8, alias, ns)) return imp.path[1];
+                        if (std.mem.eql(u8, alias, ns)) return .{ .kind = .stdlib, .std_module = imp.path[1], .user_path = null };
                     } else if (imp.items.len == 0) {
-                        if (std.mem.eql(u8, imp.path[1], ns)) return imp.path[1];
+                        if (std.mem.eql(u8, imp.path[1], ns)) return .{ .kind = .stdlib, .std_module = imp.path[1], .user_path = null };
+                    }
+                } else {
+                    // user module: "imp foo as bar" or "imp foo" (namespace)
+                    if (imp.alias) |alias| {
+                        if (std.mem.eql(u8, alias, ns)) return .{ .kind = .user, .std_module = null, .user_path = imp.path };
+                    } else if (imp.items.len == 0 and imp.path.len > 0) {
+                        if (std.mem.eql(u8, imp.path[imp.path.len - 1], ns)) return .{ .kind = .user, .std_module = null, .user_path = imp.path };
                     }
                 }
             },
