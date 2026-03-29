@@ -221,9 +221,13 @@ pub const Server = struct {
             return;
         }
 
-        if (builtinHover(name)) |bi_doc| {
-            self.respondHoverMarkdown(id, bi_doc);
-            return;
+        if (lookupBuiltin(name)) |sig| {
+            var bi_buf: [4096]u8 = undefined;
+            const bi_doc = formatBuiltinHover(name, sig, &bi_buf);
+            if (bi_doc.len > 0) {
+                self.respondHoverMarkdown(id, bi_doc);
+                return;
+            }
         }
 
         if (typeKeywordHover(name)) |ty_doc| {
@@ -799,41 +803,305 @@ fn keywordHover(name: []const u8) ?[]const u8 {
     return keywords.get(name);
 }
 
-fn builtinHover(name: []const u8) ?[]const u8 {
-    const builtins = std.StaticStringMap([]const u8).initComptime(.{
-        .{ "println", "```pyr\nprintln(value)\n```\n\nPrint a value to stdout followed by a newline." },
-        .{ "print", "```pyr\nprint(value)\n```\n\nPrint a value to stdout without a trailing newline." },
-        .{ "len", "```pyr\nlen(collection) -> int\n```\n\nReturn the length of an array or string (byte count for strings)." },
-        .{ "push", "```pyr\npush(array, value)\n```\n\nAppend a value to the end of a mutable array." },
-        .{ "pop", "```pyr\npop(array) -> value\n```\n\nRemove and return the last element of a mutable array." },
-        .{ "assert", "```pyr\nassert(condition)\n```\n\nExit with an error if the condition is false." },
-        .{ "assert_eq", "```pyr\nassert_eq(actual, expected)\n```\n\nExit with an error if the two values are not equal. Shows both values on failure." },
-        .{ "range", "```pyr\nrange(n)              // 0 to n-1\nrange(start, end)     // start to end-1\nrange(start, end, step)\n```\n\nGenerate a sequence of integers. Used with `for` loops. Compiled to a while loop at compile time - no iterator overhead." },
-        .{ "channel", "```pyr\nch = channel(capacity)\n```\n\nCreate a bounded channel for communication between tasks. `ch.send(val)` and `ch.recv()` block when full/empty." },
-        .{ "sqrt", "```pyr\nsqrt(number) -> float\n```\n\nReturn the square root of a number." },
-        .{ "abs", "```pyr\nabs(number) -> number\n```\n\nReturn the absolute value of a number." },
-        .{ "contains", "```pyr\ncontains(haystack, needle) -> bool\n```\n\nCheck if a string contains a substring, or an array contains a value." },
-        .{ "index_of", "```pyr\nindex_of(haystack, needle) -> int\n```\n\nReturn the index of the first occurrence, or -1 if not found." },
-        .{ "slice", "```pyr\nslice(collection, start, end) -> collection\n```\n\nReturn a sub-array or substring from start (inclusive) to end (exclusive)." },
-        .{ "join", "```pyr\njoin(array, separator) -> str\n```\n\nJoin an array of strings with a separator." },
-        .{ "split", "```pyr\nsplit(string, separator) -> array\n```\n\nSplit a string by a separator into an array of strings." },
-        .{ "trim", "```pyr\ntrim(string) -> str\n```\n\nRemove leading and trailing whitespace." },
-        .{ "reverse", "```pyr\nreverse(array) -> array\n```\n\nReturn a reversed copy of the array." },
-        .{ "starts_with", "```pyr\nstarts_with(string, prefix) -> bool\n```\n\nCheck if a string starts with the given prefix." },
-        .{ "ends_with", "```pyr\nends_with(string, suffix) -> bool\n```\n\nCheck if a string ends with the given suffix." },
-        .{ "replace", "```pyr\nreplace(string, old, new) -> str\n```\n\nReplace all occurrences of `old` with `new`." },
-        .{ "to_upper", "```pyr\nto_upper(string) -> str\n```\n\nConvert a string to uppercase." },
-        .{ "to_lower", "```pyr\nto_lower(string) -> str\n```\n\nConvert a string to lowercase." },
-        .{ "clone", "```pyr\nclone(value) -> value\n```\n\nDeep copy a heap-allocated value (struct, array, enum, string). The clone is independently owned. Works with UFCS: `val.clone()`." },
-        .{ "getattr", "```pyr\ngetattr(obj, name) -> value\n```\n\nGet a struct field by name at runtime. Returns nil if the field does not exist." },
-        .{ "keys", "```pyr\nkeys(obj) -> []str\n```\n\nReturn the field names of a struct as an array of strings." },
-        .{ "type_of", "```pyr\ntype_of(value) -> str\n```\n\nReturn the type name: \"null\", \"boolean\", \"number\", \"string\", \"array\", \"object\"." },
-        .{ "map", "```pyr\nmap(array, fn(x) expr) -> array\n```\n\nApply a function to each element and return a new array." },
-        .{ "filter", "```pyr\nfilter(array, fn(x) condition) -> array\n```\n\nReturn elements where the predicate returns true." },
-        .{ "reduce", "```pyr\nreduce(array, initial, fn(acc, x) expr) -> value\n```\n\nReduce an array to a single value by applying a function to each element." },
-    });
+const ParamSig = struct { name: []const u8, type_name: []const u8 };
+const Overload = struct { params: []const ParamSig, return_type: ?[]const u8 };
+const BuiltinSig = struct { overloads: []const Overload, description: []const u8 };
 
-    return builtins.get(name);
+const builtin_signatures = [_]struct { []const u8, BuiltinSig }{
+    .{ "println", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = null }},
+        .description = "Print a value to stdout followed by a newline.",
+    } },
+    .{ "print", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = null }},
+        .description = "Print a value to stdout without a trailing newline.",
+    } },
+    .{ "len", .{
+        .overloads = &.{
+            .{ .params = &.{.{ .name = "arr", .type_name = "[]T" }}, .return_type = "int" },
+            .{ .params = &.{.{ .name = "s", .type_name = "str" }}, .return_type = "int" },
+            .{ .params = &.{.{ .name = "m", .type_name = "map" }}, .return_type = "int" },
+        },
+        .description = "Return the length of a collection (element count for arrays/maps, byte count for strings).",
+    } },
+    .{ "push", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "arr", .type_name = "[]T" },
+            .{ .name = "value", .type_name = "T" },
+        }, .return_type = null }},
+        .description = "Append a value to the end of a mutable array.",
+    } },
+    .{ "pop", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "arr", .type_name = "[]T" }}, .return_type = "T" }},
+        .description = "Remove and return the last element of a mutable array.",
+    } },
+    .{ "assert", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "condition", .type_name = "bool" }}, .return_type = null }},
+        .description = "Exit with an error if the condition is false.",
+    } },
+    .{ "assert_eq", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "actual", .type_name = "T" },
+            .{ .name = "expected", .type_name = "T" },
+        }, .return_type = null }},
+        .description = "Exit with an error if the two values are not equal. Shows both values on failure.",
+    } },
+    .{ "range", .{
+        .overloads = &.{
+            .{ .params = &.{.{ .name = "n", .type_name = "int" }}, .return_type = "iter" },
+            .{ .params = &.{
+                .{ .name = "start", .type_name = "int" },
+                .{ .name = "end", .type_name = "int" },
+            }, .return_type = "iter" },
+            .{ .params = &.{
+                .{ .name = "start", .type_name = "int" },
+                .{ .name = "end", .type_name = "int" },
+                .{ .name = "step", .type_name = "int" },
+            }, .return_type = "iter" },
+        },
+        .description = "Generate a sequence of integers. Used with `for` loops. Compiled to a while loop - no iterator overhead.",
+    } },
+    .{ "channel", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "capacity", .type_name = "int" }}, .return_type = "channel" }},
+        .description = "Create a bounded channel for communication between tasks. `ch.send(val)` and `ch.recv()` block when full/empty.",
+    } },
+    .{ "sqrt", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "n", .type_name = "number" }}, .return_type = "float" }},
+        .description = "Return the square root of a number.",
+    } },
+    .{ "abs", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "n", .type_name = "number" }}, .return_type = "number" }},
+        .description = "Return the absolute value of a number.",
+    } },
+    .{ "int", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = "int" }},
+        .description = "Convert a value to an integer. Truncates floats, parses strings.",
+    } },
+    .{ "float", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = "float" }},
+        .description = "Convert a value to a float. Parses strings, promotes integers.",
+    } },
+    .{ "contains", .{
+        .overloads = &.{
+            .{ .params = &.{
+                .{ .name = "arr", .type_name = "[]T" },
+                .{ .name = "value", .type_name = "T" },
+            }, .return_type = "bool" },
+            .{ .params = &.{
+                .{ .name = "s", .type_name = "str" },
+                .{ .name = "substr", .type_name = "str" },
+            }, .return_type = "bool" },
+            .{ .params = &.{
+                .{ .name = "m", .type_name = "map" },
+                .{ .name = "key", .type_name = "str" },
+            }, .return_type = "bool" },
+        },
+        .description = "Check if a collection contains a value, substring, or key.",
+    } },
+    .{ "index_of", .{
+        .overloads = &.{
+            .{ .params = &.{
+                .{ .name = "arr", .type_name = "[]T" },
+                .{ .name = "value", .type_name = "T" },
+            }, .return_type = "int" },
+            .{ .params = &.{
+                .{ .name = "s", .type_name = "str" },
+                .{ .name = "substr", .type_name = "str" },
+            }, .return_type = "int" },
+        },
+        .description = "Return the index of the first occurrence, or -1 if not found.",
+    } },
+    .{ "slice", .{
+        .overloads = &.{
+            .{ .params = &.{
+                .{ .name = "arr", .type_name = "[]T" },
+                .{ .name = "start", .type_name = "int" },
+                .{ .name = "end", .type_name = "int" },
+            }, .return_type = "[]T" },
+            .{ .params = &.{
+                .{ .name = "s", .type_name = "str" },
+                .{ .name = "start", .type_name = "int" },
+                .{ .name = "end", .type_name = "int" },
+            }, .return_type = "str" },
+        },
+        .description = "Return a sub-array or substring from start (inclusive) to end (exclusive).",
+    } },
+    .{ "join", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "arr", .type_name = "[]str" },
+            .{ .name = "sep", .type_name = "str" },
+        }, .return_type = "str" }},
+        .description = "Join an array of strings with a separator.",
+    } },
+    .{ "split", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "s", .type_name = "str" },
+            .{ .name = "sep", .type_name = "str" },
+        }, .return_type = "[]str" }},
+        .description = "Split a string by a separator into an array of strings.",
+    } },
+    .{ "trim", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "s", .type_name = "str" }}, .return_type = "str" }},
+        .description = "Remove leading and trailing whitespace.",
+    } },
+    .{ "reverse", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "arr", .type_name = "[]T" }}, .return_type = "[]T" }},
+        .description = "Return a reversed copy of the array.",
+    } },
+    .{ "starts_with", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "s", .type_name = "str" },
+            .{ .name = "prefix", .type_name = "str" },
+        }, .return_type = "bool" }},
+        .description = "Check if a string starts with the given prefix.",
+    } },
+    .{ "ends_with", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "s", .type_name = "str" },
+            .{ .name = "suffix", .type_name = "str" },
+        }, .return_type = "bool" }},
+        .description = "Check if a string ends with the given suffix.",
+    } },
+    .{ "replace", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "s", .type_name = "str" },
+            .{ .name = "old", .type_name = "str" },
+            .{ .name = "new", .type_name = "str" },
+        }, .return_type = "str" }},
+        .description = "Replace all occurrences of `old` with `new`.",
+    } },
+    .{ "to_upper", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "s", .type_name = "str" }}, .return_type = "str" }},
+        .description = "Convert a string to uppercase.",
+    } },
+    .{ "to_lower", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "s", .type_name = "str" }}, .return_type = "str" }},
+        .description = "Convert a string to lowercase.",
+    } },
+    .{ "clone", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "T" }}, .return_type = "T" }},
+        .description = "Deep copy a heap-allocated value (struct, array, enum, string). The clone is independently owned. Works with UFCS: `val.clone()`.",
+    } },
+    .{ "getattr", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "obj", .type_name = "struct" },
+            .{ .name = "name", .type_name = "str" },
+        }, .return_type = "any?" }},
+        .description = "Get a struct field by name at runtime. Returns nil if the field does not exist.",
+    } },
+    .{ "keys", .{
+        .overloads = &.{
+            .{ .params = &.{.{ .name = "obj", .type_name = "struct" }}, .return_type = "[]str" },
+            .{ .params = &.{.{ .name = "m", .type_name = "map" }}, .return_type = "[]str" },
+        },
+        .description = "Return the field names of a struct or keys of a map as an array of strings.",
+    } },
+    .{ "type_of", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = "str" }},
+        .description = "Return the type name: \"null\", \"boolean\", \"number\", \"string\", \"array\", \"object\", \"map\".",
+    } },
+    .{ "map", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "arr", .type_name = "[]T" },
+            .{ .name = "f", .type_name = "fn(T) -> U" },
+        }, .return_type = "[]U" }},
+        .description = "Apply a function to each element and return a new array.",
+    } },
+    .{ "filter", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "arr", .type_name = "[]T" },
+            .{ .name = "f", .type_name = "fn(T) -> bool" },
+        }, .return_type = "[]T" }},
+        .description = "Return elements where the predicate returns true.",
+    } },
+    .{ "reduce", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "arr", .type_name = "[]T" },
+            .{ .name = "initial", .type_name = "U" },
+            .{ .name = "f", .type_name = "fn(U, T) -> U" },
+        }, .return_type = "U" }},
+        .description = "Reduce an array to a single value by applying a function to each element.",
+    } },
+    .{ "sort", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "arr", .type_name = "[]T" }}, .return_type = "[]T" }},
+        .description = "Return a sorted copy of the array. Elements must be comparable.",
+    } },
+    .{ "sort_by", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "arr", .type_name = "[]T" },
+            .{ .name = "f", .type_name = "fn(T, T) -> bool" },
+        }, .return_type = "[]T" }},
+        .description = "Return a sorted copy using a comparator. `fn(a, b)` returns true if a should come before b.",
+    } },
+    .{ "delete", .{
+        .overloads = &.{.{ .params = &.{
+            .{ .name = "m", .type_name = "map" },
+            .{ .name = "key", .type_name = "str" },
+        }, .return_type = "bool" }},
+        .description = "Remove a key from a map. Returns true if the key existed.",
+    } },
+    .{ "await_all", .{
+        .overloads = &.{.{ .params = &.{.{ .name = "tasks", .type_name = "...task" }}, .return_type = "[]any" }},
+        .description = "Wait for multiple spawned tasks to complete and collect their results into an array.",
+    } },
+};
+
+fn lookupBuiltin(name: []const u8) ?BuiltinSig {
+    for (&builtin_signatures) |*entry| {
+        if (std.mem.eql(u8, entry[0], name)) return entry[1];
+    }
+    return null;
+}
+
+fn formatBuiltinHover(name: []const u8, sig: BuiltinSig, buf: []u8) []const u8 {
+    var pos: usize = 0;
+
+    const prefix = "```pyr\n";
+    @memcpy(buf[pos..][0..prefix.len], prefix);
+    pos += prefix.len;
+
+    for (sig.overloads, 0..) |overload, i| {
+        if (i > 0) {
+            buf[pos] = '\n';
+            pos += 1;
+        }
+
+        @memcpy(buf[pos..][0..name.len], name);
+        pos += name.len;
+        buf[pos] = '(';
+        pos += 1;
+
+        for (overload.params, 0..) |param, j| {
+            if (j > 0) {
+                @memcpy(buf[pos..][0..2], ", ");
+                pos += 2;
+            }
+            @memcpy(buf[pos..][0..param.name.len], param.name);
+            pos += param.name.len;
+            @memcpy(buf[pos..][0..2], ": ");
+            pos += 2;
+            @memcpy(buf[pos..][0..param.type_name.len], param.type_name);
+            pos += param.type_name.len;
+        }
+        buf[pos] = ')';
+        pos += 1;
+
+        if (overload.return_type) |rt| {
+            @memcpy(buf[pos..][0..4], " -> ");
+            pos += 4;
+            @memcpy(buf[pos..][0..rt.len], rt);
+            pos += rt.len;
+        }
+    }
+
+    const suffix = "\n```\n\n";
+    @memcpy(buf[pos..][0..suffix.len], suffix);
+    pos += suffix.len;
+
+    @memcpy(buf[pos..][0..sig.description.len], sig.description);
+    pos += sig.description.len;
+
+    return buf[0..pos];
 }
 
 fn typeKeywordHover(name: []const u8) ?[]const u8 {
@@ -1033,4 +1301,57 @@ fn writeMessage(body: []const u8) void {
     const header = std.fmt.bufPrint(&header_buf, "Content-Length: {d}\r\n\r\n", .{body.len}) catch return;
     writeAll(header);
     writeAll(body);
+}
+
+test "builtin hover: single overload" {
+    const sig = lookupBuiltin("trim") orelse return error.NotFound;
+    var buf: [4096]u8 = undefined;
+    const text = formatBuiltinHover("trim", sig, &buf);
+    try std.testing.expectEqualStrings(
+        "```pyr\ntrim(s: str) -> str\n```\n\nRemove leading and trailing whitespace.",
+        text,
+    );
+}
+
+test "builtin hover: multiple overloads" {
+    const sig = lookupBuiltin("len") orelse return error.NotFound;
+    var buf: [4096]u8 = undefined;
+    const text = formatBuiltinHover("len", sig, &buf);
+    try std.testing.expectEqualStrings(
+        "```pyr\nlen(arr: []T) -> int\nlen(s: str) -> int\nlen(m: map) -> int\n```\n\n" ++
+            "Return the length of a collection (element count for arrays/maps, byte count for strings).",
+        text,
+    );
+}
+
+test "builtin hover: no return type" {
+    const sig = lookupBuiltin("println") orelse return error.NotFound;
+    var buf: [4096]u8 = undefined;
+    const text = formatBuiltinHover("println", sig, &buf);
+    try std.testing.expectEqualStrings(
+        "```pyr\nprintln(value: any)\n```\n\nPrint a value to stdout followed by a newline.",
+        text,
+    );
+}
+
+test "builtin hover: all builtins resolve" {
+    const names = [_][]const u8{
+        "println",    "print",      "len",       "push",       "pop",
+        "assert",     "assert_eq",  "range",     "channel",    "sqrt",
+        "abs",        "int",        "float",     "contains",   "index_of",
+        "slice",      "join",       "split",     "trim",       "reverse",
+        "starts_with", "ends_with", "replace",   "to_upper",   "to_lower",
+        "clone",      "getattr",    "keys",      "type_of",    "map",
+        "filter",     "reduce",     "sort",      "sort_by",    "delete",
+        "await_all",
+    };
+    for (&names) |name| {
+        const sig = lookupBuiltin(name) orelse {
+            std.debug.print("missing builtin: {s}\n", .{name});
+            return error.MissingBuiltin;
+        };
+        var buf: [4096]u8 = undefined;
+        const text = formatBuiltinHover(name, sig, &buf);
+        try std.testing.expect(text.len > 0);
+    }
 }
