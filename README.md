@@ -14,13 +14,13 @@
 
 ---
 
-Pyr is a compiled language that targets native code via Zig. It combines the performance of systems languages with the expressiveness of scripting languages. No garbage collector, no runtime overhead - arena-scoped memory, lightweight concurrency, and a type system that stays out of your way until you need it.
+Pyr is a compiled language that targets native code via Zig. It combines the performance of systems languages with the expressiveness of scripting languages. Mark-sweep GC with arena-scoped memory for hot paths, lightweight concurrency, and a type system that stays out of your way until you need it.
 
 High-level code reads like Python. Low-level code reads like Zig. Same language, different depths.
 
 ## Features
 
-- **No GC** - Arena-scoped memory management. Per-request arenas for servers, explicit allocators for systems work
+- **Lightweight GC** - Mark-sweep collector with arena blocks for hot paths. Per-request arenas for servers, `std/gc` for manual control
 - **Native performance** - Compiles to native code via Zig. SIMD, io_uring, zero-cost C FFI
 - **Lightweight concurrency** - Green threads on a work-stealing thread pool. Typed channels for communication
 - **Structural typing** - If it fits, it works. No interface declarations required

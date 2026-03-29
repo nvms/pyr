@@ -10,6 +10,7 @@ const json = @import("stdlib/json.zig");
 pub const net = @import("stdlib/net.zig");
 const http = @import("stdlib/http.zig");
 const tls = @import("stdlib/tls.zig");
+pub const gc_mod = @import("stdlib/gc_mod.zig");
 
 pub fn makeIoEof(alloc: std.mem.Allocator) Value {
     return ObjEnum.create(alloc, "IoError", "Eof", 0, &.{}).toValue();
@@ -55,6 +56,7 @@ const modules = [_]StdModule{
     .{ .name = "net", .functions = &net.fns },
     .{ .name = "http", .functions = &http.fns },
     .{ .name = "tls", .functions = &tls.fns },
+    .{ .name = "gc", .functions = &gc_mod.fns },
 };
 
 pub fn qualifyNative(buf: []u8, func_ptr: *const fn (std.mem.Allocator, []const Value) Value) ?[]const u8 {

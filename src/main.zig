@@ -152,7 +152,7 @@ fn runFile(allocator: std.mem.Allocator, path: []const u8) !void {
     var result = try compile(allocator, path);
     defer result.arena.deinit();
 
-    var vm = vm_mod.VM.init(result.arena.allocator());
+    var vm = vm_mod.VM.init(std.heap.c_allocator);
     vm.setFfiDescs(result.ffi_descs);
     vm.interpret(result.func) catch {
         std.process.exit(1);
@@ -208,7 +208,7 @@ fn runEmbedded(allocator: std.mem.Allocator, bc: []const u8) void {
 
     bytecode_format.patchNatives(result.functions);
 
-    var vm = vm_mod.VM.init(alloc);
+    var vm = vm_mod.VM.init(std.heap.c_allocator);
     vm.setFfiDescs(result.ffi_descs);
     vm.interpret(result.func) catch {
         std.process.exit(1);

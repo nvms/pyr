@@ -137,14 +137,14 @@ pub const Parser = struct {
 
         self.skipNewlines();
         while (self.peek() != .rparen and !self.atEnd()) {
-            const is_own = self.eat(.kw_own) != null;
+            _ = self.eat(.kw_own);
             const pname = self.expectIdent() orelse return null;
             var type_expr: ?*const ast.TypeExpr = null;
             if (self.eat(.colon) != null) {
                 self.skipNewlines();
                 type_expr = self.parseTypeExpr() orelse return null;
             }
-            params.append(self.arena, .{ .name = pname, .type_expr = type_expr, .is_own = is_own }) catch @panic("oom");
+            params.append(self.arena, .{ .name = pname, .type_expr = type_expr }) catch @panic("oom");
             self.skipNewlines();
             if (self.peek() != .rparen) {
                 _ = self.expect(.comma) orelse return null;

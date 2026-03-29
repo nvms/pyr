@@ -247,17 +247,7 @@ pub const Server = struct {
         var hover_buf: [4096]u8 = undefined;
         const hover_text = buildHoverText(sym, &hover_buf);
 
-        const ownership_info = buildOwnershipInfo(sym, result, alloc, doc.content);
-        if (ownership_info.len > 0) {
-            var combined_buf: [8192]u8 = undefined;
-            const combined = std.fmt.bufPrint(&combined_buf, "{s}\n\n{s}", .{ hover_text, ownership_info }) catch {
-                self.respondHoverMarkdown(id, hover_text);
-                return;
-            };
-            self.respondHoverMarkdown(id, combined);
-        } else {
-            self.respondHoverMarkdown(id, hover_text);
-        }
+        self.respondHoverMarkdown(id, hover_text);
     }
 
     fn handleReferences(self: *Server, root: std.json.ObjectMap, id: ?std.json.Value) void {
@@ -338,95 +328,8 @@ pub const Server = struct {
         }
     }
 
-    fn handleInlayHint(self: *Server, root: std.json.ObjectMap, id: ?std.json.Value) void {
-        const params = (root.get("params") orelse return).object;
-        const td = (params.get("textDocument") orelse return).object;
-        const uri = switch (td.get("uri") orelse return) {
-            .string => |s| s,
-            else => return,
-        };
-
-        const doc = self.documents.get(uri) orelse {
-            self.respondResult(id, "[]");
-            return;
-        };
-
-        var hint_arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer hint_arena.deinit();
-        const alloc = hint_arena.allocator();
-
-        const tokens = parser.tokenize(alloc, doc.content);
-        var p = parser.Parser.init(tokens, doc.content, alloc);
-        const result = p.parse();
-        if (result.errors.len > 0) {
-            self.respondResult(id, "[]");
-            return;
-        }
-
-        const analysis = sema.Sema.analyze(alloc, result);
-        if (analysis.errors.len > 0) {
-            self.respondResult(id, "[]");
-            return;
-        }
-
-        const hints = compiler.Compiler.compileForHints(alloc, result) orelse {
-            self.respondResult(id, "[]");
-            return;
-        };
-
-        if (hints.len == 0) {
-            self.respondResult(id, "[]");
-            return;
-        }
-
-        var moved_names: std.StringHashMapUnmanaged(void) = .{};
-        for (hints) |h| {
-            if (h.kind == .moved) moved_names.put(alloc, h.name, {}) catch {};
-        }
-
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        buf.appendSlice(alloc, "[") catch return;
-
-        var count: usize = 0;
-        for (hints) |hint| {
-            if (hint.kind == .freed and moved_names.contains(hint.name)) continue;
-            if (count > 0) buf.appendSlice(alloc, ",") catch return;
-            count += 1;
-
-            const pos = offsetToPosition(doc.content, hint.offset);
-            const label = switch (hint.kind) {
-                .freed => blk: {
-                    var tmp: [256]u8 = undefined;
-                    break :blk std.fmt.bufPrint(&tmp, "{s} freed", .{hint.name}) catch continue;
-                },
-                .moved => blk: {
-                    var tmp: [256]u8 = undefined;
-                    break :blk std.fmt.bufPrint(&tmp, "{s} moved (ownership transferred)", .{hint.name}) catch continue;
-                },
-                .conditional_free => blk: {
-                    var tmp: [256]u8 = undefined;
-                    break :blk std.fmt.bufPrint(&tmp, "{s} freed (if not moved)", .{hint.name}) catch continue;
-                },
-            };
-
-            var escaped_buf: [512]u8 = undefined;
-            const escaped = jsonEscape(label, &escaped_buf);
-
-            const kind_str = switch (hint.kind) {
-                .freed => "freed",
-                .moved => "moved",
-                .conditional_free => "conditional_free",
-            };
-
-            var entry_buf: [1024]u8 = undefined;
-            const entry = std.fmt.bufPrint(&entry_buf,
-                \\{{"position":{{"line":{d},"character":{d}}},"label":"{s}","kind":1,"paddingLeft":true,"data":"{s}"}}
-            , .{ pos.line, pos.character, escaped, kind_str }) catch continue;
-            buf.appendSlice(alloc, entry) catch return;
-        }
-
-        buf.appendSlice(alloc, "]") catch return;
-        self.respondResult(id, buf.items);
+    fn handleInlayHint(self: *Server, _: std.json.ObjectMap, id: ?std.json.Value) void {
+        self.respondResult(id, "[]");
     }
 
     fn respondHoverMarkdown(self: *Server, id: ?std.json.Value, markdown: []const u8) void {
@@ -595,84 +498,6 @@ fn appendDiagnostic(alloc: Allocator, buf: *std.ArrayListUnmanaged(u8), source: 
         \\{{"range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}},"severity":{d},"source":"pyr","message":"{s}"}}
     , .{ start.line, start.character, end.line, end.character, severity, escaped }) catch return;
     buf.appendSlice(alloc, len) catch return;
-}
-
-fn buildOwnershipInfo(sym: SymbolInfo, tree: ast.Ast, alloc: std.mem.Allocator, source: []const u8) []const u8 {
-    _ = source;
-    switch (sym.kind) {
-        .function => {
-            for (tree.items) |item| {
-                if (item.kind != .fn_decl) continue;
-                const f = item.kind.fn_decl;
-                if (!std.mem.eql(u8, f.name, sym.name)) continue;
-
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                buf.appendSlice(alloc, "**ownership:**") catch return "";
-
-                for (f.params) |param| {
-                    if (param.is_own) {
-                        buf.appendSlice(alloc, "\n- `") catch return "";
-                        buf.appendSlice(alloc, param.name) catch return "";
-                        buf.appendSlice(alloc, "`: owned (caller transfers ownership)") catch return "";
-                    } else {
-                        buf.appendSlice(alloc, "\n- `") catch return "";
-                        buf.appendSlice(alloc, param.name) catch return "";
-                        buf.appendSlice(alloc, "`: borrowed") catch return "";
-                    }
-                }
-
-                if (buf.items.len > "**ownership:**".len) return buf.items;
-                return "";
-            }
-            return "";
-        },
-        .variable => {
-            const hints = compiler.Compiler.compileForHints(alloc, tree) orelse return "";
-
-            var buf: std.ArrayListUnmanaged(u8) = .{};
-            for (hints) |h| {
-                if (!std.mem.eql(u8, h.name, sym.name)) continue;
-                switch (h.kind) {
-                    .freed => {
-                        const pos = offsetToPosition(tree.source, h.offset);
-                        buf.appendSlice(alloc, "**ownership:** owned, freed after last use (line ") catch return "";
-                        var num_buf: [16]u8 = undefined;
-                        const num = std.fmt.bufPrint(&num_buf, "{d}", .{pos.line + 1}) catch continue;
-                        buf.appendSlice(alloc, num) catch return "";
-                        buf.appendSlice(alloc, ")") catch return "";
-                        return buf.items;
-                    },
-                    .moved => {
-                        buf.appendSlice(alloc, "**ownership:** moved to `") catch return "";
-                        buf.appendSlice(alloc, h.target) catch return "";
-                        buf.appendSlice(alloc, "`") catch return "";
-                        return buf.items;
-                    },
-                    .conditional_free => {
-                        buf.appendSlice(alloc, "**ownership:** owned, conditionally freed (may be moved)") catch return "";
-                        return buf.items;
-                    },
-                }
-            }
-            return "";
-        },
-        .parameter => {
-            for (tree.items) |item| {
-                if (item.kind != .fn_decl) continue;
-                const f = item.kind.fn_decl;
-                for (f.params) |param| {
-                    if (!std.mem.eql(u8, param.name, sym.name)) continue;
-                    if (param.is_own) {
-                        return "**ownership:** owned (takes ownership from caller)";
-                    } else {
-                        return "**ownership:** borrowed";
-                    }
-                }
-            }
-            return "";
-        },
-        else => return "",
-    }
 }
 
 // AST symbol finder

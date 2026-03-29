@@ -440,6 +440,7 @@ pub const VM = struct {
         sc.* = Scheduler.init(alloc);
         const gc_state = alloc.create(GC) catch @panic("oom");
         gc_state.* = GC.init(alloc);
+        stdlib.gc_mod.setGc(gc_state);
         return .{
             .frames = undefined,
             .frame_count = 0,
@@ -457,6 +458,20 @@ pub const VM = struct {
 
     fn currentAlloc(self: *VM) std.mem.Allocator {
         return self.arena_stack.currentAlloc();
+    }
+
+    fn trackGc(self: *VM, val: Value) void {
+        if (self.arena_stack.depth == 0) self.gc.track(val);
+    }
+
+    fn gcSafepoint(self: *VM) void {
+        if (self.arena_stack.depth > 0) return;
+        self.gc.maybeCollect(
+            self.stack[0..self.sp],
+            &self.globals,
+            &self.frames,
+            self.frame_count,
+        );
     }
 
     pub fn setFfiDescs(self: *VM, descs: []ffi_mod.FfiDesc) void {
@@ -588,7 +603,9 @@ pub const VM = struct {
                 .make_error => {
                     const val = self.pop();
                     const err = ObjError.create(self.currentAlloc(), val);
-                    self.push(err.toValue());
+                    const ev = err.toValue();
+                    self.trackGc(ev);
+                    self.push(ev);
                 },
                 .unwrap_error => {
                     const val = self.peek(0);
@@ -612,6 +629,7 @@ pub const VM = struct {
                 .loop_ => {
                     const offset = self.readU16();
                     self.currentFrame().ip -= offset;
+                    self.gcSafepoint();
                 },
 
                 .call => {
@@ -673,7 +691,9 @@ pub const VM = struct {
 
                     const s = ObjStruct.create(ca, name, field_names, temp_values);
                     ca.free(temp_values);
-                    self.push(s.toValue());
+                    const sv = s.toValue();
+                    self.trackGc(sv);
+                    self.push(sv);
                 },
 
                 .get_field => {
@@ -776,7 +796,9 @@ pub const VM = struct {
                     if (val.tag() == .string) {
                         self.push(val);
                     } else {
-                        self.push(self.valueToString(val));
+                        const sv = self.valueToString(val);
+                        self.trackGc(sv);
+                        self.push(sv);
                     }
                 },
 
@@ -797,7 +819,9 @@ pub const VM = struct {
                     }
 
                     const e = ObjEnum.create(ca, type_name, variant_name, vi, payloads);
-                    self.push(e.toValue());
+                    const ev = e.toValue();
+                    self.trackGc(ev);
+                    self.push(ev);
                 },
 
                 .match_variant => {
@@ -831,7 +855,9 @@ pub const VM = struct {
                         }
                     }
                     const cl = ObjClosure.create(ca, func, upvalues);
-                    self.push(cl.toValue());
+                    const cv = cl.toValue();
+                    self.trackGc(cv);
+                    self.push(cv);
                 },
 
                 .get_upvalue => {
@@ -957,7 +983,9 @@ pub const VM = struct {
                     const items = self.stack[self.sp - count .. self.sp];
                     const arr = ObjArray.create(self.currentAlloc(), items);
                     self.sp -= count;
-                    self.push(arr.toValue());
+                    const av = arr.toValue();
+                    self.trackGc(av);
+                    self.push(av);
                 },
                 .index_get => {
                     const idx_val = self.pop();
@@ -976,7 +1004,9 @@ pub const VM = struct {
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
                             const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
-                            self.push(ObjString.create(self.currentAlloc(), ch).toValue());
+                            const chv = ObjString.create(self.currentAlloc(), ch).toValue();
+                            self.trackGc(chv);
+                            self.push(chv);
                         } else {
                             self.runtimeError("string index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
@@ -1006,7 +1036,9 @@ pub const VM = struct {
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
                             const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
-                            self.push(ObjString.create(self.currentAlloc(), ch).toValue());
+                            const chv = ObjString.create(self.currentAlloc(), ch).toValue();
+                            self.trackGc(chv);
+                            self.push(chv);
                         } else {
                             self.runtimeError("string index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
@@ -1037,7 +1069,9 @@ pub const VM = struct {
                         const idx = idx_val.asInt();
                         if (idx >= 0 and idx < @as(i64, @intCast(s.chars.len))) {
                             const ch = s.chars[@intCast(idx) .. @as(usize, @intCast(idx)) + 1];
-                            self.push(ObjString.create(self.currentAlloc(), ch).toValue());
+                            const chv = ObjString.create(self.currentAlloc(), ch).toValue();
+                            self.trackGc(chv);
+                            self.push(chv);
                         } else {
                             self.runtimeError("string index out of bounds: {d}", .{idx});
                             return error.RuntimeError;
@@ -1074,7 +1108,10 @@ pub const VM = struct {
                 },
                 .array_len => {},
                 .push_arena => self.arena_stack.push(),
-                .pop_arena => self.arena_stack.pop(),
+                .pop_arena => {
+                    self.arena_stack.pop();
+                    self.gcSafepoint();
+                },
 
                 .spawn => try self.execSpawn(),
                 .channel_create => {
@@ -1237,6 +1274,7 @@ pub const VM = struct {
                     const lo: u16 = code[frame.ip + 1];
                     frame.ip += 2;
                     frame.ip -= (hi << 8) | lo;
+                    self.gcSafepoint();
                 },
                 @intFromEnum(OpCode.call) => {
                     const arg_count = code[frame.ip];
@@ -1601,7 +1639,9 @@ pub const VM = struct {
                 @intFromEnum(OpCode.make_error) => {
                     const val = self.stack[self.sp - 1];
                     const err = ObjError.create(self.currentAlloc(), val);
-                    self.stack[self.sp - 1] = err.toValue();
+                    const ev = err.toValue();
+                    self.trackGc(ev);
+                    self.stack[self.sp - 1] = ev;
                 },
                 @intFromEnum(OpCode.unwrap_error) => {
                     const val = self.stack[self.sp - 1];
@@ -1652,7 +1692,9 @@ pub const VM = struct {
             @memcpy(buf[0..as.len], as);
             @memcpy(buf[as.len..], bs);
             const str = ObjString.create(ca, buf);
-            self.stack[self.sp - 1] = str.toValue();
+            const sv = str.toValue();
+            self.trackGc(sv);
+            self.stack[self.sp - 1] = sv;
             return;
         }
         self.runtimeError("operands must be numbers", .{});
@@ -1696,6 +1738,7 @@ pub const VM = struct {
             }
             const args = self.stack[self.sp - arg_count .. self.sp];
             const result = nf.func(self.currentAlloc(), args);
+            self.trackGc(result);
             self.sp -= arg_count + 1;
             self.push(result);
             return;
@@ -1867,7 +1910,9 @@ pub const VM = struct {
             @memcpy(buf[0..as.len], as);
             @memcpy(buf[as.len..], bs);
             const str = ObjString.create(ca, buf);
-            self.push(str.toValue());
+            const sv = str.toValue();
+            self.trackGc(sv);
+            self.push(sv);
             return;
         }
 
@@ -2272,7 +2317,9 @@ pub const VM = struct {
                     self.push(self.ioError("out of memory"));
                     return;
                 };
-                self.push(ObjString.create(self.currentAlloc(), owned).toValue());
+                const rsv = ObjString.create(self.currentAlloc(), owned).toValue();
+                self.trackGc(rsv);
+                self.push(rsv);
                 return;
             }
             if (err == error.ConnectionResetByPeer or err == error.BrokenPipe) {
@@ -2534,7 +2581,9 @@ pub const VM = struct {
 
         const new_obj = ObjString.create(self.alloc, cs.buf.items);
         cs.owner_obj = new_obj;
-        self.stack[abs_slot] = new_obj.toValue();
+        const sv = new_obj.toValue();
+        self.trackGc(sv);
+        self.stack[abs_slot] = sv;
     }
 
     fn concatFinalize(self: *VM) void {
@@ -2816,7 +2865,7 @@ fn testRunExpectError(source: []const u8) !void {
     const tree = p.parse();
     if (tree.errors.len > 0) @panic("parse error in test");
     const cr = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
-    var vm = VM.init(alloc);
+    var vm = VM.init(std.heap.c_allocator);
     vm.setFfiDescs(cr.ffi_descs);
     const result = vm.interpret(cr.func);
     try std.testing.expectError(error.RuntimeError, result);
@@ -2831,7 +2880,7 @@ fn testRun(source: []const u8) !void {
     const tree = p.parse();
     if (tree.errors.len > 0) @panic("parse error in test");
     const cr = compiler.Compiler.compile(alloc, tree) orelse @panic("compile error");
-    var vm = VM.init(alloc);
+    var vm = VM.init(std.heap.c_allocator);
     vm.setFfiDescs(cr.ffi_descs);
     try vm.interpret(cr.func);
 }
@@ -4623,65 +4672,6 @@ test "vm: type alias for primitive" {
     try testRun("type ID = int\nfn show(id: ID) { println(id) }\nfn main() { show(42) }");
 }
 
-// ownership model tests
-
-test "vm: own param basic transfer" {
-    try testRun(
-        \\fn consume(own x: int) -> int { return x + 1 }
-        \\fn main() {
-        \\  a = 5
-        \\  b = consume(a)
-        \\  assert_eq(b, 6)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: borrow does not consume" {
-    try testRun(
-        \\fn read(x: int) -> int { return x * 2 }
-        \\fn main() {
-        \\  a = 5
-        \\  assert_eq(read(a), 10)
-        \\  assert_eq(read(a), 10)
-        \\  assert_eq(a, 5)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: own struct transfer" {
-    try testRun(
-        \\struct Point {
-        \\  x: int
-        \\  y: int
-        \\}
-        \\fn consume(own p: Point) -> int { return p.x + p.y }
-        \\fn main() {
-        \\  p = Point { x: 3, y: 4 }
-        \\  assert_eq(consume(p), 7)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: borrow struct preserves access" {
-    try testRun(
-        \\struct Point {
-        \\  x: int
-        \\  y: int
-        \\}
-        \\fn sum(p: Point) -> int { return p.x + p.y }
-        \\fn main() {
-        \\  p = Point { x: 10, y: 20 }
-        \\  assert_eq(sum(p), 30)
-        \\  assert_eq(sum(p), 30)
-        \\  assert_eq(p.x, 10)
-        \\  println("ok")
-        \\}
-    );
-}
-
 test "vm: loop struct create and free" {
     try testRun(
         \\struct Data { value: int }
@@ -4712,98 +4702,7 @@ test "vm: loop array create and free" {
     );
 }
 
-test "vm: own transfer chain" {
-    try testRun(
-        \\fn step1(own x: int) -> int { return x + 1 }
-        \\fn step2(own x: int) -> int { return x * 2 }
-        \\fn main() {
-        \\  a = 5
-        \\  b = step1(a)
-        \\  c = step2(b)
-        \\  assert_eq(c, 12)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: conditional move branch taken" {
-    try testRun(
-        \\fn consume(own x: int) -> int { return x + 1 }
-        \\fn main() {
-        \\  a = 5
-        \\  mut result = 0
-        \\  if a > 3 {
-        \\    result = consume(a)
-        \\  }
-        \\  assert_eq(result, 6)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: conditional move branch not taken" {
-    try testRun(
-        \\fn consume(own x: int) -> int { return x + 1 }
-        \\fn main() {
-        \\  a = 5
-        \\  mut result = 0
-        \\  if a > 100 {
-        \\    result = consume(a)
-        \\  }
-        \\  assert_eq(result, 0)
-        \\  assert_eq(a, 5)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: conditional move struct in loop" {
-    try testRun(
-        \\struct Data { value: int }
-        \\fn consume(own d: Data) -> int { return d.value }
-        \\fn main() {
-        \\  mut total = 0
-        \\  for i in range(10) {
-        \\    d = Data { value: i }
-        \\    if i > 5 {
-        \\      total += consume(d)
-        \\    }
-        \\  }
-        \\  assert_eq(total, 30)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: multiple borrows same value" {
-    try testRun(
-        \\struct Point {
-        \\  x: int
-        \\  y: int
-        \\}
-        \\fn get_x(p: Point) -> int { return p.x }
-        \\fn get_y(p: Point) -> int { return p.y }
-        \\fn main() {
-        \\  p = Point { x: 10, y: 20 }
-        \\  assert_eq(get_x(p) + get_y(p), 30)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: own with multiple params" {
-    try testRun(
-        \\fn take_both(own a: int, own b: int) -> int { return a + b }
-        \\fn main() {
-        \\  x = 3
-        \\  y = 7
-        \\  assert_eq(take_both(x, y), 10)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: nested function returns ownership" {
+test "vm: nested function returns struct" {
     try testRun(
         \\struct User {
         \\  name: str
@@ -4822,7 +4721,7 @@ test "vm: nested function returns ownership" {
     );
 }
 
-test "vm: early free does not affect later reads" {
+test "vm: multiple struct reads" {
     try testRun(
         \\struct A { v: int }
         \\struct B { v: int }
@@ -4839,24 +4738,7 @@ test "vm: early free does not affect later reads" {
     );
 }
 
-test "vm: own in push to array" {
-    try testRun(
-        \\struct Item { v: int }
-        \\fn add(list, own item: Item) {
-        \\  push(list, item)
-        \\}
-        \\fn main() {
-        \\  list = []
-        \\  add(list, Item { v: 1 })
-        \\  add(list, Item { v: 2 })
-        \\  add(list, Item { v: 3 })
-        \\  assert_eq(len(list), 3)
-        \\  println("ok")
-        \\}
-    );
-}
-
-test "vm: struct field mutation with borrow" {
+test "vm: struct field mutation via mut ref" {
     try testRun(
         \\struct Counter { count: int }
         \\fn increment(c: *mut Counter) {
@@ -4873,7 +4755,7 @@ test "vm: struct field mutation with borrow" {
     );
 }
 
-test "vm: stress loop alloc free 100k" {
+test "vm: stress loop alloc 100k" {
     try testRun(
         \\struct Node {
         \\  value: int

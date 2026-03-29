@@ -1,6 +1,6 @@
 # pyr
 
-a systems programming language with scripting ergonomics, built in zig. compiles to native code. no GC, no runtime overhead, arena-scoped memory. high-level code reads like python, low-level code reads like zig - same language, different depths.
+a systems programming language with scripting ergonomics, built in zig. compiles to native code. mark-sweep GC with arena-scoped memory for hot paths. high-level code reads like python, low-level code reads like zig - same language, different depths.
 
 you are the sole maintainer. before making technology or architecture decisions, read `~/code/vigil/learnings.md` for cross-cutting insights from past experiments. you may write to this file but never commit or push changes to the vigil repo - only modify the file and leave it for the user.
 
@@ -12,13 +12,10 @@ pyr is not just a server language. it's a systems language that happens to have 
 
 ### what zig gives us
 
-- arena-per-request memory (no GC, no refcounting, no manual free)
+- arena allocators for bulk-free memory management
 - comptime for route table compilation, string interning, static dispatch
-- SIMD via @Vector for JSON/HTTP parsing
-- io_uring/kqueue for native async I/O
 - zero-cost C FFI (database drivers, TLS, compression)
-- no hidden allocations - every allocation is explicit and arena-routed
-- work-stealing thread pool for green thread scheduling
+- io_uring/kqueue for native async I/O
 
 ## language spec
 
@@ -52,7 +49,9 @@ src/
   vm.zig              - bytecode interpreter (switch dispatch)
   module.zig          - module loading + package-aware resolution
   pkg.zig             - package manager (manifest parser, lock file, git ops, cache)
+  gc.zig              - mark-sweep garbage collector (heap-allocated side struct)
   bytecode_format.zig - bytecode serialization/deserialization + executable embedding
+  stdlib/             - std module implementations (io, fs, os, json, net, http, tls, gc)
 ```
 
 ### CLI
@@ -65,25 +64,7 @@ src/
 
 ### compiler error quality
 
-the compiler must produce genuinely helpful errors. this is critical for dogfooding - we are both the language designers and the primary users. every error message should:
-
-- show the exact source location with line/column
-- highlight the relevant span
-- explain what went wrong in plain language
-- suggest a fix when possible
-
-```
-error: type mismatch
-  --> server.pyr:12:18
-   |
-12 |   user = find(42) ?? not_found()
-   |                  ^^ expected User, found ?User
-   |
-   = help: find() returns ?User. use ?? to provide a fallback:
-           user = find(42) ?? return not_found()
-```
-
-**current state:** all three layers implemented. layer 1: `printDiagnostic()` in main.zig renders parser and sema errors with source excerpts, line number gutters, and `^^^` underlines. layer 2: compiler propagates real line numbers from AST spans to bytecode (via `current_line` field + `setSpan()` calls on item/stmt/expr). layer 3: `runtimeError()` in vm.zig reads line numbers from bytecode, prints source context with gutter formatting, and a full stack trace with function names and line numbers. `ObjFunction.source` field stores the source text pointer for runtime diagnostics
+the compiler must produce genuinely helpful errors - source location, span highlighting, plain language explanation, fix suggestion when possible. all three layers implemented: compile-time diagnostics (parser + sema), bytecode line tracking, and runtime errors with source context and stack traces.
 
 ## workflow
 
@@ -193,119 +174,21 @@ older handoff documents should be cleaned up. if the work described in a handoff
 
 ## current status
 
-pyr is a bytecode VM language. examples run end-to-end: struct creation, field access, enum variants, pattern matching, native functions, string operations.
+pyr is a fully functional bytecode VM language. 283 tests, 40 validated examples, 11 benchmarks.
 
-**implemented:**
-- lexer: full tokenization of all pyr syntax (8 tests)
-- parser: recursive descent + pratt precedence climbing (42 tests)
-  - all declaration types, expression types, statement types, type expressions
-  - go-style newline significance
-- sema: scope analysis, name resolution, type checking, mutability, arity (17 tests)
-  - mutable variable rebinding (mut x = 0; x = x + 1)
-- bytecode compiler: AST -> bytecode. each function gets own chunk. locals are slot-indexed. script function registers natives + globals then calls main()
-  - two-pass compilation: first pass pre-allocates all ObjFunctions + registers struct/enum metadata, second pass compiles
-  - direct function calls: compiler embeds pre-allocated ObjFunction pointers as constants instead of get_global hash lookup. ~29M hash lookups eliminated for fib(35)
-  - type inference: compiler infers types from annotations, literals, and expression propagation. emits specialized opcodes (add_int, sub_int, less_int, greater_int, add_float) that skip tag checks
-  - locals_only analysis marks functions for fast-path dispatch
-- VM interpreter: dual-loop dispatch (16 tests)
-  - `run()`: switch-based, handles all opcodes
-  - `fastLoop()`: switch dispatch for hot-path opcodes (6.6x speedup on fib(35), switch replaced if/else for ~5% uniform gain)
-  - int/float arithmetic, string values, booleans, variable bindings
-  - function definitions and calls, if/else, while loops, comparisons, negation, print/println
-  - struct creation and field access (ObjStruct with named fields)
-  - get_field_idx: compile-time field index optimization - compiler resolves field positions across struct defs, emits direct index when unambiguous. eliminates string comparison in hot loops
-  - enum variants with payloads (ObjEnum)
-  - pattern matching: variant patterns with destructuring, literal patterns, identifier patterns, wildcard. match_jump opcode for O(1) variant dispatch via jump table (replaces linear match_variant scan). inline match expressions work as RHS of assignments
-  - native functions: sqrt, abs, int, float, len, push, assert, assert_eq
-  - mutable variable reassignment (set_local/set_global)
-  - string concatenation via `+` operator (allocates new ObjString)
-  - string `.len` field access (returns byte count as int)
-  - string value equality (compares chars, not pointer identity)
-- closures with copy-capture (ObjClosure wraps ObjFunction + captured values)
-  - make_closure opcode with upvalue descriptors (is_local flag + index)
-  - get_upvalue/set_upvalue opcodes for reading/writing captured values
-  - mutable closure capture: set_upvalue writes to the closure's own copy (counter pattern works). outer scope unaffected (copy semantics)
-  - compiler walks enclosing scope chain to resolve upvalues. binding handler checks resolveUpvalue before creating new locals
-  - closures callable from both run() and fastLoop
-- for loops with range: `for i in range(n)`, `for i in range(start, end)`, `for i in range(start, end, step)`
-  - compiled to while loops at compile time - no iterator protocol overhead
-  - range() detected and lowered by compiler, not a runtime function
-- mutable variable rebinding: `mut x = 0; x = x + 1` works via sema allowing rebinding of mutable locals
-- arrays: `[1, 2, 3]` literals, `arr[i]` indexing (also works on strings), `push(arr, val)`, `len(arr)`, deep equality via `==`, `for x in arr` iteration
-  - ObjArray with growable backing store (capacity doubling). array_create, index_get, index_set opcodes in run()
-  - for-in compiles to hidden `$iter` + `$idx` locals, index-based loop with len check and index_get per iteration
-- NaN-boxed values: Value is a single u64 (8 bytes, down from 16). doubles stored as raw IEEE 754 bits. non-double types encoded in the quiet NaN space: QNAN base (0x7FFC000000000000) + 5-bit type tag (bits 49-45) + 45-bit payload. tag() method returns Tag enum, isFloat detected by (bits & QNAN) != QNAN. integers sign-extended from 45 bits (range +/- 17.6 trillion). pointers stored in 45-bit payload (32TB address space). floats canonicalized to 0x7FF8... if they collide with QNAN pattern. halved memory for stack, arrays, channels, struct fields - major performance win for data-heavy workloads
-- value types: nil, bool, int (i45 signed), float (f64), string (*ObjString), function (*ObjFunction), struct_ (*ObjStruct), enum_ (*ObjEnum), native_fn (*ObjNativeFn), closure (*ObjClosure), array (*ObjArray), task (*ObjTask), channel (*ObjChannel), listener (*ObjListener), conn (*ObjConn), dgram (*ObjDgram), tls_conn (*ObjTlsConn), ssl_ctx (*ObjSslCtx), ssl_conn (*ObjSslConn), ptr (raw C pointer for FFI), error_val (*ObjError - wraps any Value as error payload)
-- arena memory model: `arena { ... }` blocks create child arena allocators. all allocations inside use the child arena. freed in bulk on block exit. ArenaStack side struct (heap-allocated, avoids LLVM perturbation) holds up to 16 nested arenas. push_arena/pop_arena opcodes. VM.currentAlloc() routes allocations to active arena. each task gets its own ArenaStack and ConcatState (saved/restored on context switch) - shared arena state across tasks caused use-after-free under concurrent spawns. arena blocks compile with inline beginScope/endScope (not compileBlock) to avoid emitting return_ for trailing expressions, which would skip pop_arena and leak resources
-- concat_local opcode: compile-time detection of `s = s + expr` pattern. compiler emits concat_local instead of get_local+add+set_local. VM maintains a growable ConcatState buffer (heap-allocated, avoids LLVM perturbation). amortized O(1) append instead of O(n) realloc per iteration. also handles `s += expr` compound assignment. creates a NEW ObjString on first concat (never mutates constants from the constant pool). owner_obj tracking detects slot reassignment across loop iterations. concatFinalize dupes buffer content so strings stored in arrays/structs survive buffer reuse
-- type-specialized opcodes: add_int, sub_int, mul_int, div_int, mod_int, less_int, greater_int, add_float, sub_float, mul_float, div_float, less_float, greater_float - skip tag checks entirely when compiler can prove operand types. int ops in fastLoop, float ops in run() only (fastLoop size limit)
-- inline struct field storage: ObjStruct and field values allocated as single contiguous block, eliminating one pointer deref per field access
-- get_local_field opcode: combines get_local + get_field_idx for struct-typed locals (compiler proves struct type via parameter annotations)
-- struct_ type hint: compiler resolves struct type names via struct_defs, enables tag-check-free field access
-- for-range optimizations: less_int/add_int for counter ops, inc_local compound opcode (replaces 5-opcode increment pattern), binding aliases counter local directly (eliminates copy+pop per iteration)
-- closures get locals_only analysis so they execute in fastLoop (was missing, caused 8x closure call penalty)
-- string escape sequences: compiler processEscapes handles `\n`, `\t`, `\r`, `\\`, `\"`, `\{`, `\}`, `\0`, `\xNN`. applied to both plain string literals and interpolation literal parts. lexer skips escaped chars for delimiter purposes, compiler resolves them to actual bytes
-- string interpolation: `"hello {name}"` - lexer splits into string_begin/string_part/string_end tokens, compiler emits to_str + add for each part
-- module system: `imp math { add }` for selective import, `imp math` for namespace access (`math.add()`), `imp math as m` for alias. file resolution relative to entry file. circular imports handled via module cache. pub enforcement on all declarations
-- stdlib: compiler-intrinsic std modules (no .pyr files needed). native function registry in stdlib.zig. native fn signature includes allocator for std modules that allocate (readln, fs.read, os.env)
-  - std/io: println, print, eprintln, eprint, readln. writes to real stdout/stderr via std.posix.write (not std.debug.print)
-  - std/fs: read, write, append, exists, remove. file operations via std.fs.cwd()
-  - std/os: env (environment variables), args (returns string array), exit
-  - std/json: encode (any pyr value -> JSON string), decode (JSON string -> pyr value). encode handles int, float, str, bool, nil, array, struct, enum. decode returns int/float/str/bool/nil for primitives, ObjArray for arrays, ObjStruct (name "object") for objects. round-trip: decode(encode(v)) preserves structure for structs/arrays
-  - std/net: listen, accept, connect, read, write, close, timeout, udp_bind, udp_open, sendto, recvfrom. TCP sockets via std.posix.* syscalls. ObjListener (fd + port) and ObjConn (fd + nonblock flag) value types. method-call syntax (`server.accept()`, `conn.read()`, `conn.write(data)`) and `net.connect(addr, port)` compile to net_accept/net_read/net_write/net_connect opcodes with non-blocking I/O + scheduler integration. namespace syntax (`net.accept(server)`, `net.read(conn)`, `net.write(conn, data)`) uses blocking native functions. ObjConn.ensureNonBlock() caches fcntl state - only sets O_NONBLOCK once per fd, eliminating redundant syscalls in hot loops. UDP: ObjDgram (fd + timeout_ms + bound flag) value type. `udp_bind(addr, port)` creates bound socket for receiving, `udp_open()` creates unbound socket for sending. `sendto(sock, data, addr, port)` sends datagrams, `recvfrom(sock)` returns UdpMessage struct {data, addr, port}. method-call syntax (`sock.sendto(data, addr, port)`, `sock.recvfrom()`) compiles to net_sendto/net_recvfrom opcodes. recvfrom integrates with scheduler for non-blocking I/O in async contexts. timeout support via net.timeout(sock, ms)
-  - std/http: parse_request, respond, respond_status, json_response, route, match_route. HTTP utility module - server loop written in pyr using std/net primitives. handlers are regular pyr functions. route/match_route pattern for declarative routing
-  - std/tls: TLS 1.2/1.3 client via zig's std.crypto.tls.Client. `tls.upgrade(conn, hostname)` wraps a TCP connection with TLS. hostname enables SNI + certificate verification via system CA bundle (cached across connections). `tls.upgrade(conn, nil)` skips verification. ObjTlsConn value type holds heap-allocated TLS client state with stable addresses for zig's @fieldParentPtr vtable pattern. transparent read/write via .read()/.write() method-call syntax - same net_read/net_write opcodes, VM dispatches on tag. reads use peekGreedy(1) + tossBuffered() on the Io.Reader (NOT readSliceShort, which loops trying to fill the entire buffer and causes hangs). poll-based read with 5s default timeout prevents indefinite blocking when servers are slow to close. allow_truncation_attacks=true for real-world servers that don't send close_notify. `net.connect` supports DNS resolution via std.net.getAddressList for hostnames (falls back from parseAddr when address doesn't look like an IP). server-side TLS via runtime dlopen of OpenSSL/LibreSSL (no build-time dependency). `tls.context(cert_path, key_path)` creates ObjSslCtx (wraps SSL_CTX*). `tls.upgrade(conn, ctx)` when second arg is ssl_ctx does SSL_accept server handshake, returns ObjSslConn (wraps SSL*). VM dispatches net_read/net_write on .ssl_conn tag via SSL_read/SSL_write. ssl.zig binding layer: runtime dlopen with platform-specific search paths (homebrew on macOS, system paths on Linux), lazy init, ~12 function pointers resolved via dlsym. OPENSSL_init_ssl called on first load. net.close handles SSL_shutdown + SSL_free for ssl_conn. net.timeout sets timeout_ms on ssl_conn. test_tls/run.sh validates server with openssl s_client
-- type keywords (int, float, str, bool, byte) usable in expression position as conversion functions: `int(3.7)`, `float(5)`
-- assert and assert_eq builtins: assert(condition) exits on failure, assert_eq(a, b) exits with diff on mismatch
-- slide opcode: endScopeKeepTop emits slide to clean up scope locals while preserving expression result. fixes inline match expressions (e.g. `x = match e { ... }`) which previously left scope locals on the stack
-- set_field/set_field_idx opcodes: struct field mutation (`p.x = 10`, `p.x += 3`). set_field_idx uses compile-time field index for unambiguous fields. mutation works through function calls (struct values are pointers)
-- index_set opcode: array element assignment (`arr[i] = val`, `arr[i] += val`). bounds-checked at runtime
-- concurrency runtime: cooperative green threads (tasks), bounded channels, cooperative scheduler
-  - `spawn { body }` creates a green thread. body compiled as closure with upvalue capture
-  - `channel(N)` creates a bounded channel with capacity N
-  - `ch.send(val)` and `ch.recv()` compiled to dedicated opcodes with blocking/waking
-  - Scheduler side struct (heap-allocated, avoids LLVM perturbation) with growable circular run queue, io poller, await waiters, pre-allocated pollfds, and task free list for recycling (starts at 64 slots, doubles on demand). fire-and-forget tasks (no awaiters) are recycled on completion - prevents memory leak under sustained spawn load. cooperative I/O-boundary yielding (no preemptive loop_ yield)
-  - ObjTask holds full VM state snapshot (stack, frames, sp, frame_count)
-  - context switching at channel boundaries: save current task state, restore next ready task
-  - task state machine: ready -> running -> done, with blocked_send/blocked_recv/blocked_await
-  - deadlock detection when all tasks blocked
-  - `await_all(spawn { a() }, spawn { b() })` collects results from parallel tasks into an array
-- FFI: `extern "lib" { fn name(type, ...) -> type }` syntax. dlopen/dlsym resolution at VM init. trampoline dispatch for up to 6 int/ptr args. cstr auto null-termination. "c" library resolves to libc. FfiState is a heap-allocated side struct (avoids LLVM perturbation). ffi_call opcode with u16 descriptor index + u8 arg count. src/ffi.zig contains FfiState, trampolines, marshaling. build.zig links libc
-- `nil` keyword (not `none`) for null values. Value tag is `.nil`
-- option types: postfix `T?` syntax (was prefix `?T`). `or` keyword replaces `??` for nil coalescing (jump_if_nil opcode - checks nil specifically, not truthiness, so `false or x` correctly returns false). `expr?` suffix operator for early return on nil or error (try_unwrap AST node, compiles to jump_if_nil + jump_if_error + return_ pattern). `&&` and `||` short-circuit logical operators
-- result types and error handling: `T!` for string errors, `T!(E)` for typed errors. `fail expr` creates error_val and returns. `or` catches both nil and error_val. `or |err| { body }` binds the error payload. `expr!` crash-unwraps (exits on nil or error). error_val is a new Value tag wrapping ObjError (heap-allocated, holds payload Value). `jump_if_error` opcode mirrors `jump_if_nil`. `make_error` wraps top-of-stack in error_val. `extract_error` replaces error_val with its payload (for `or |err|`). `unwrap_error` crashes with error info (for `!`). error propagation: `?` checks both nil and error_val, returns whichever on failure. typed errors auto-stringify when propagated into `T!` context via valueToString
-- 87 opcodes: constants, locals, globals, arithmetic, specialized int/float arithmetic, comparison, logic, jumps, jump_if_nil, jump_if_error, calls, return, print, struct_create, get_field, set_field, set_field_idx, get_field_idx, get_local_field, enum_variant, match_variant, get_payload, make_closure, get_upvalue, set_upvalue, concat_local, to_str, array_create, index_get, index_set, array_push, array_len, slide, match_jump, inc_local, push_arena, pop_arena, spawn, channel_create, channel_send, channel_recv, await_task, await_all, net_accept, net_read, net_write, net_connect, net_sendto, net_recvfrom, ffi_call, make_error, unwrap_error, extract_error
-- package manager: git-based, go-style. `pyr.pkg` manifest (name, version, require block). `pyr.lock` lockfile with commit hashes. `~/.pyr/cache/` local cache mirroring git paths. `pyr init [name]` creates manifest, `pyr install` fetches all deps, `pyr add <url> [version]` adds dependency. resolution order: stdlib -> local file -> pyr.pkg dependencies. packages imported by their name field: `imp router { serve }`, `imp router`, `imp router as r`. package entry point is `src/main.pyr`. bare repo cache for efficient fetches, version tags resolved via git rev-parse. src/pkg.zig contains manifest parser, lock file, git ops, cache management. module.zig extended with package_map for fallback resolution
-- native compilation: `pyr build <file> [-o name]` produces a standalone binary. bytecode serialized to compact binary format (PYRC header, string table, function table, FFI descriptors), appended to the pyr runtime executable with a 16-byte trailer (PYREXE magic + offset + length). at startup, binary checks for embedded bytecode before parsing CLI args. native functions patched by qualified name (module.func for stdlib, bare name for builtins) to handle collisions across std modules. release binaries ~1.3MB. all 34 testable examples produce identical output as built binaries
-- CLI: `pyr run <file>` executes on VM, `pyr build <file> [-o name]` compiles to standalone binary, `pyr init [name]`, `pyr install`, `pyr add <url> [version]`, `pyr version`
-- IoError: built-in enum type (Eof, Closed, Error(str), Timeout) registered in both compiler and sema. I/O operations return IoError variants instead of nil/false on failure. net_read returns Eof on clean close, Closed on reset, Error(msg) on other failures. net_write returns true on success, IoError on failure. fs.read returns IoError on failure. enum equality compares by type_name + variant_index + payloads (structural, not pointer identity). zero-payload variants (Eof, Closed, Timeout) usable as expressions for direct comparison: `if data == Eof`
-- read/accept timeouts: `net.timeout(target, ms)` sets per-connection or per-listener timeout in milliseconds. -1 to disable. stored as timeout_ms on ObjListener/ObjConn. blocking path: poll() with timeout, returns IoError.Timeout on expiry. scheduler path: io_deadlines parallel array stores epoch-ms deadlines, pollAndWake computes min deadline as poll timeout, expires waiters past deadline. connections with timeout set are forced nonblocking so poll path is always reachable
-- while loop body compilation: uses inline beginScope/endScope instead of compileBlock to avoid emitting return_ for trailing expressions. compileBlock emits return_ for trailing expressions (correct for function bodies) but wrong for loop bodies where trailing expressions should be discarded
-- defer: scoped cleanup (like zig). `defer expr` and `defer { block }`. LIFO order. runs at scope exit - normal end, return, fail, or ? propagation. compile-time construct: compiler stores deferred AST nodes per scope depth, emits them at every exit point. no new opcodes. emitScopeDefers for normal scope exit, emitAllDefers for early returns. compileBlock's trailing expression path emits defers before return_
-- mutable references: `*mut T` parameter types declare mutation intent. `&mut x` required at call sites. sema enforces: field assignment on non-`*mut` params is compile error, `&mut` on immutable vars is error, unnecessary `&mut` to non-`*mut` params is error. pure compile-time - no new VM opcodes or value types. `&mut x` compiles to just `x` (already a pointer for heap types). FnType.mut_params bitmask (u64) tracks which params are `*mut`
-- type aliases: `type Name = TypeExpr` for named type aliases. `fn(T, T) -> T` syntax in type expressions for function types. `type` keyword parsed as top-level item. sema resolves aliases via symbol lookup, fn_type resolves to FnType. compiler and VM unchanged - pure type system feature
-- function inlining: expression-body functions with pure arithmetic/comparison bodies are inlined at call sites via expression substitution. compiler maps parameter names to argument expressions, compiles body directly in caller context (no call frame, no return). restricted to simple args (identifiers/literals) so multi-use params are safe. works with UFCS calls. 26% speedup on tight loops calling small helpers. zero VM changes - purely a compiler optimization
-- ownership model: compile-time memory management. heap-allocated values (structs, arrays, strings) are automatically freed when no longer used. `own` keyword on function parameters for explicit ownership transfer. sema tracks ownership states (owned/borrowed/moved/maybe_moved). use-after-move is a compile error. conditional moves (inside if/match) use `maybe_moved` state with runtime drop flags. `free_local` opcode with shallow free (frees container, not contents - contents may be constant pool values). `free_local_if` opcode for conditional free (checks drop flag, only frees if not moved). liveness analysis via AST pre-scan: `emitEarlyFrees()` checks remaining statements for name references, emits free after last use instead of waiting for scope exit. borrow-store detection: sema catches `push(arr, borrowed_param)` and suggests `own`. drop flags: compiler allocates hidden `$drop_flag` locals (initialized to 0), sets to 1 on conditional move via `emitDropFlags()`, `free_local_if` checks flag at free point. `own_params` bitmask on FnType (same pattern as mut_params). `fn_own_params` hashmap on Compiler for codegen access. `isHeapExpr()` in compiler detects struct literals, array literals, call returns, string interpolation. `cond_depth` tracked in both sema and compiler for conditional move detection. full spec in OWNERSHIP.md
-- LSP server (`pyr lsp`): language server protocol over stdio. document sync (open/change/close/save), diagnostics (parser + sema errors), hover (function signatures, keyword docs, builtin docs, type inference, ownership info), go-to-definition, find references, inlay hints (ownership: free points after last use, ownership transfers at call sites, conditional frees with drop flags). `textDocument/inlayHint` compiles the file via `Compiler.compileForHints()` which runs the full compilation pipeline with a side-channel `OwnershipHint` collector - records freed/moved/conditional_free events with source byte offsets. hover enriched with ownership summaries for functions (own vs borrowed params) and variables (owned/moved/conditional status with free point line numbers). deduplication: when a variable has both moved and freed hints, only the moved hint is shown (moved implies the callee owns it). `inlayHintProvider: true` in capabilities
-- break: exits the innermost loop. works in for-range, for-in, and while. compiled as a forward jump patched at loop exit. emitBreak pops body locals before jumping. nested loops handled via loop_depth stack with per-level break patch lists (max 8 nesting, 32 breaks per loop). enterLoop called after condition pop (not at loop entry) so break only cleans up body locals, not loop control variables
-- continue: skips to next iteration. works in for-range, for-in, and while. compiled as a forward jump patched at the increment point (before the loop back-edge). emitContinue pops body locals (same as break), continue_patches array mirrors break_patches. patchContinues called between endScope and increment code in all three loop types. works with break in the same loop, works in nested loops (each depth has independent continue patches)
-- 303 tests, 42 validated examples, 11 benchmarks
-- UFCS: `x.f(args)` rewrites to `f(x, args)` at compile time when `f` is a known function (fn_table, native_fns, locals, upvalues) and target is not a module namespace. enables `5.double()`, `p.distance(q)`, `4.0.sqrt()`, chaining `5.double().negate()`, `"a-b-c".split("-").join("/")`
-- index_local/index_local_local opcodes: fused array indexing. index_local reads array from local slot, pops index from stack. index_local_local reads both array and index from local slots (used in for-in loops). eliminates stack pushes/pops for the common arr[idx] pattern. compiler detects identifier targets in index expressions
-- builtins: sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower, clone, sort, sort_by. all work with UFCS: `arr.contains(x)`, `str.split(",")`, `"hello".to_upper()`, `user.clone()`, `arr.sort()`, `arr.sort_by(fn(a, b) a > b)`
-- sort(arr): native builtin, returns new array sorted ascending. handles ints, floats, strings (lexicographic). uses insertion sort. original array unchanged
-- sort_by(arr, cmp): helper function with hand-built bytecode (same pattern as map/filter/reduce). cmp(a, b) returns true if a should come before b. uses bubble sort with callback invocation via `call` opcode. works with closures and named functions
-- clone: deep copy of heap-allocated values via `Value.deepClone`. recursively copies structs (new allocation with cloned fields), arrays (new buffer with cloned elements), enums (new allocation with cloned payloads), strings (duped char data). stack values (int, float, bool, nil) returned as-is. the clone result is independently owned - enables passing to `own` params without losing the original
-- higher-order array operations: map(arr, fn), filter(arr, fn), reduce(arr, fn, init). implemented as helper functions with hand-built bytecode (defineHelperFn in compiler.zig) - not native functions, because natives can't call back into pyr. each emits bytecode that uses the `call` opcode to invoke the callback through normal VM dispatch. marked locals_only for fastLoop execution. work with closures, named functions, and UFCS chaining: `arr.filter(fn(x) x > 0).map(fn(x) x * 2)`
-- valueToString: arrays stringify as `[1, 2, 3]` with quoted strings, structs as `Name { field: val }`. used by string interpolation (`to_str` opcode) and `println`. strings inside arrays/structs are double-quoted in the output for clarity
-- benchmarks: fib(35) 0.68s (python 0.88s), loop 10M 0.22s (python 0.21s), closure 10M 0.27s (python 0.39s), struct 10M 0.34s (python 0.20s), string 100K 0.007s (python 0.14s), array 10M 0.66s (python 0.61s), match 30M 2.72s (python 2.37s), arena 1M 0.28s (python 0.21s), channel 100K 0.02s (python 0.10s), tcp_echo 10K 0.19s (python 0.18s), inline 10M 1.06s (python 1.27s). httpd arena benchmark (c=100 keep-alive): pyr 121K req/sec p99 1.6ms, bun 147K p99 1.2ms, node 96K p99 1.9ms, python 19K p99 0.1ms
+**language features:** structs, enums (algebraic sum types with payloads), pattern matching (O(1) variant dispatch), closures (copy-capture), for-range/for-in loops, break/continue, arrays, strings with interpolation and escape sequences, UFCS, option types (`T?`, `or`, `?` propagation), result types (`T!`, `fail`, `or |err|`), defer, mutable references (`*mut T`/`&mut x`), type aliases, FFI (`extern "lib"`)
 
-**not yet implemented (parser level):**
-- anonymous struct literals: `.{ field: val }` inferred from context (zig-style). when the compiler knows the expected type from a function param, return type, or annotated binding, allow omitting the struct name. pure syntax sugar - desugars to `TypeName { field: val }` during compilation
-- raw/multiline strings
-- range expressions, tuple destructuring, deref postfix
+**stdlib:** std/io, std/fs, std/os, std/json, std/net (TCP + UDP + timeouts), std/http, std/tls (client + server), std/gc
 
-**next:** ownership refinements (liveness analysis, drop flags, borrow checking), dogfooding
+**builtins:** sqrt, abs, int, float, len, push, pop, assert, assert_eq, contains, index_of, slice, join, reverse, split, trim, starts_with, ends_with, replace, to_upper, to_lower, clone, sort, sort_by, map, filter, reduce
+
+**runtime:** NaN-boxed values (u64), dual-loop VM dispatch (run + fastLoop), type-specialized opcodes, function inlining, cooperative green threads (spawn/channel/await_all), arena memory blocks, mark-sweep GC
+
+**memory model:** mark-sweep GC for default heap allocations. `arena { ... }` blocks for hot paths (bulk free on exit). `std/gc` module for pause/resume/collect/stats. VM uses c_allocator for runtime objects (separate from compile arena). GC tracks objects outside arenas only, collects at loop back-edges
+
+**tooling:** native compilation (`pyr build`), package manager (git-based), LSP server, formatter
+
+**not yet implemented:** anonymous struct literals, raw/multiline strings, range expressions
 
 ## roadmap
 
@@ -322,9 +205,8 @@ critical invariants to always keep in mind:
 - fastLoop return_ must clean up the stack BEFORE checking exit condition
 - new specialized opcodes go in run() only unless proven safe in fastLoop (float ops in fastLoop caused 7x regression)
 - NaN boxing: Value.tag is a method (`.tag()`), not a field. Value.bits is the raw u64. integers are 45-bit signed (sign-extended). pointers are 45-bit (32TB). never access `.data` - use the typed accessors (asInt, asFloat, asString, etc)
-- blockHasOwnCallOf must check block.trailing (not just stmts) for own-param calls. single-expression if bodies like `if cond { consume(d) }` store the call as trailing, not as a stmt. missing this causes drop flags to not be allocated
-- endScope must NOT emit free_local for owned locals inside loop bodies (loop_depth > 0). values created in loop iterations may be aliased into arrays/structs via push() or similar. free_local inside loops causes use-after-free when the container outlives the loop scope. the loop's arena handles cleanup instead
 - arena blocks and while loop bodies must NOT use compileBlock() - it emits return_ for trailing expressions, causing early return that skips cleanup (pop_arena, net.close, etc). use inline beginScope/endScope + pop trailing expression instead
+- GC only tracks objects allocated outside arenas (arena_stack.depth == 0). constant pool objects (strings, functions from the compiler) are NOT gc-tracked. GC safepoints are at loop back-edges only - NOT at call boundaries (adding one to callValue caused 30% fib regression)
 
 ## design principles
 

@@ -48,15 +48,30 @@ pub const GC = struct {
 
     pub fn track(self: *GC, val: Value) void {
         const tag = val.tag();
-        switch (tag) {
-            .string, .function, .struct_, .enum_, .array, .closure, .native_fn, .error_val => {},
-            else => return,
-        }
+        const size = objSize(val, tag);
+        if (size == 0) return;
         self.objects.append(self.alloc, .{
             .ptr = val.payload(),
             .tag = tag,
             .marked = false,
         }) catch {};
+        self.bytes_allocated += size;
+    }
+
+    fn objSize(val: Value, tag: Value.Tag) usize {
+        return switch (tag) {
+            .string => @sizeOf(ObjString) + val.asString().chars.len,
+            .struct_ => blk: {
+                const s = val.asStruct();
+                break :blk (ObjStruct.header_slots + s.field_count) * @sizeOf(Value);
+            },
+            .array => @sizeOf(ObjArray) + val.asArray().capacity * @sizeOf(Value),
+            .enum_ => @sizeOf(ObjEnum) + val.asEnum().payloads.len * @sizeOf(Value),
+            .closure => @sizeOf(ObjClosure) + val.asClosure().upvalues.len * @sizeOf(Value),
+            .error_val => @sizeOf(ObjError),
+            // functions and native_fns are constant pool objects, never gc-managed
+            else => 0,
+        };
     }
 
     pub fn maybeCollect(self: *GC, stack: []const Value, globals: anytype, frames: anytype, frame_count: usize) void {
@@ -80,13 +95,12 @@ pub const GC = struct {
         }
 
         for (frames[0..frame_count]) |frame| {
-            self.markValue(Value.initFunction(frame.function));
             if (frame.closure) |cl| self.markValue(cl.toValue());
         }
 
         while (self.mark_stack.items.len > 0) {
+            const val = self.mark_stack.items[self.mark_stack.items.len - 1];
             self.mark_stack.items.len -= 1;
-            const val = self.mark_stack.items[self.mark_stack.items.len];
             self.traceValue(val);
         }
 
@@ -98,7 +112,7 @@ pub const GC = struct {
     fn markValue(self: *GC, val: Value) void {
         const tag = val.tag();
         switch (tag) {
-            .string, .function, .struct_, .enum_, .array, .closure, .native_fn, .error_val => {},
+            .string, .struct_, .enum_, .array, .closure, .error_val => {},
             else => return,
         }
         const ptr = val.payload();
@@ -155,39 +169,47 @@ pub const GC = struct {
 
     fn freeObj(self: *GC, obj: GcObj) void {
         const a = self.alloc;
+        var freed: usize = 0;
         switch (obj.tag) {
             .string => {
                 const s: *ObjString = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
+                freed = @sizeOf(ObjString) + s.chars.len;
                 if (s.chars.len > 0) a.free(@constCast(s.chars));
                 a.destroy(s);
             },
             .array => {
                 const arr: *ObjArray = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
+                freed = @sizeOf(ObjArray) + arr.capacity * @sizeOf(Value);
                 if (arr.capacity > 0) a.free(arr.items.ptr[0..arr.capacity]);
                 a.destroy(arr);
             },
             .struct_ => {
                 const s: *ObjStruct = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
                 const total = ObjStruct.header_slots + s.field_count;
+                freed = total * @sizeOf(Value);
                 const buf: [*]Value = @ptrCast(@alignCast(@as([*]u8, @ptrCast(s))));
                 a.free(buf[0..total]);
             },
             .enum_ => {
                 const e: *ObjEnum = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
+                freed = @sizeOf(ObjEnum) + e.payloads.len * @sizeOf(Value);
                 if (e.payloads.len > 0) a.free(e.payloads);
                 a.destroy(e);
             },
             .closure => {
                 const cl: *ObjClosure = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
+                freed = @sizeOf(ObjClosure) + cl.upvalues.len * @sizeOf(Value);
                 if (cl.upvalues.len > 0) a.free(cl.upvalues);
                 a.destroy(cl);
             },
             .error_val => {
                 const e: *ObjError = @ptrCast(@alignCast(@as(*anyopaque, @ptrFromInt(obj.ptr))));
+                freed = @sizeOf(ObjError);
                 a.destroy(e);
             },
             else => {},
         }
+        self.bytes_allocated -|= freed;
     }
 };
 

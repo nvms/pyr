@@ -12,19 +12,9 @@ const Module = @import("module.zig").Module;
 const stdlib = @import("stdlib.zig");
 const ffi = @import("ffi.zig");
 
-pub const OwnershipHint = struct {
-    kind: Kind,
-    name: []const u8,
-    offset: usize,
-    target: []const u8,
-
-    pub const Kind = enum { freed, moved, conditional_free };
-};
-
 pub const CompileResult = struct {
     func: *ObjFunction,
     ffi_descs: []ffi.FfiDesc,
-    hints: []const OwnershipHint = &.{},
 };
 
 const VariantInfo = struct {
@@ -70,7 +60,6 @@ pub const Compiler = struct {
     inline_fns: std.StringHashMapUnmanaged(ast.FnDecl) = .{},
     inline_subs: ?*[16]InlineSub = null,
     inline_sub_count: u8 = 0,
-    hints: ?*std.ArrayListUnmanaged(OwnershipHint) = null,
     current_span: ast.Span = .{ .start = 0, .end = 0 },
     loop_depth: u8 = 0,
     break_patches: [8][32]usize = undefined,
@@ -102,42 +91,6 @@ pub const Compiler = struct {
 
     pub fn compile(alloc: std.mem.Allocator, tree: ast.Ast) ?CompileResult {
         return compileModule(alloc, tree, null, ".");
-    }
-
-    pub fn compileForHints(alloc: std.mem.Allocator, tree: ast.Ast) ?[]const OwnershipHint {
-        var hints: std.ArrayListUnmanaged(OwnershipHint) = .{};
-        const script = ObjFunction.create(alloc, "", 0);
-        script.source = tree.source;
-        var compiler = Compiler{
-            .alloc = alloc,
-            .enclosing = null,
-            .function = script,
-            .locals = undefined,
-            .local_count = 0,
-            .scope_depth = 0,
-            .struct_defs = .{},
-            .enum_variants = .{},
-            .fn_table = .{},
-            .fn_returns = .{},
-            .upvalues = undefined,
-            .upvalue_count = 0,
-            .module_loader = null,
-            .module_dir = ".",
-            .module_namespaces = .{},
-            .std_modules = .{},
-            .native_fns = .{},
-            .ffi_descs = .{},
-            .ffi_funcs = .{},
-            .source = tree.source,
-            .current_line = 1,
-            .hints = &hints,
-        };
-
-        compiler.defineNatives();
-        for (tree.items) |item| compiler.registerDecl(item);
-        for (tree.items) |item| compiler.compileItem(item);
-
-        return hints.toOwnedSlice(alloc) catch &.{};
     }
 
     pub fn compileModule(alloc: std.mem.Allocator, tree: ast.Ast, loader: ?*ModuleLoader, dir: []const u8) ?CompileResult {
@@ -861,7 +814,6 @@ pub const Compiler = struct {
             .ffi_funcs = .{},
             .source = self.source,
             .current_line = self.current_line,
-            .hints = self.hints,
         };
         sub.addLocal("");
 
@@ -2502,7 +2454,6 @@ pub const Compiler = struct {
             .ffi_funcs = .{},
             .source = self.source,
             .current_line = self.current_line,
-            .hints = self.hints,
         };
         sub.addLocal("");
 
@@ -2565,7 +2516,6 @@ pub const Compiler = struct {
             .ffi_funcs = .{},
             .source = self.source,
             .current_line = self.current_line,
-            .hints = self.hints,
         };
         sub.addLocal("");
 

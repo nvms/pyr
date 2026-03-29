@@ -50,7 +50,6 @@ pub const FnDecl = struct {
 pub const Param = struct {
     name: []const u8,
     type_expr: ?*const TypeExpr,
-    is_own: bool = false,
 };
 
 pub const StructDecl = struct {
