@@ -908,26 +908,68 @@ pub const Server = struct {
             return;
         }
 
-        const sym = findDefinition(result.items, name, offset, doc.content) orelse {
-            self.respondNull(id);
+        if (findDefinition(result.items, name, offset, doc.content)) |sym| {
+            const start = offsetToPosition(doc.content, sym.span.start);
+            const end = offsetToPosition(doc.content, sym.span.end);
+
+            var escaped_uri: [2048]u8 = undefined;
+            const safe_uri = jsonEscape(uri, &escaped_uri);
+
+            var buf: [4096]u8 = undefined;
+            const body = std.fmt.bufPrint(&buf,
+                \\{{"uri":"{s}","range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}}}}
+            , .{ safe_uri, start.line, start.character, end.line, end.character }) catch {
+                self.respondNull(id);
+                return;
+            };
+
+            self.respondResult(id, body);
             return;
+        }
+
+        // check namespace-qualified calls (e.g. io.read, m.add)
+        const ident_start = blk: {
+            var s = offset;
+            while (s > 0 and isIdentChar(doc.content[s - 1])) s -= 1;
+            break :blk s;
         };
+        if (namespaceAtOffset(doc.content, ident_start)) |ns| {
+            if (resolveNamespace(result.items, ns)) |resolved| {
+                if (resolved.kind == .user) {
+                    if (uriToDir(uri)) |dir| {
+                        if (resolveUserModuleDefinition(alloc, dir, resolved.user_path.?, name)) |loc| {
+                            self.respondDefinitionLocation(id, loc);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
 
-        const start = offsetToPosition(doc.content, sym.span.start);
-        const end = offsetToPosition(doc.content, sym.span.end);
+        // check imported names (selective and wildcard user module imports)
+        for (result.items) |item| {
+            switch (item.kind) {
+                .import => |imp| {
+                    if (imp.path.len >= 1 and !(imp.path.len == 2 and std.mem.eql(u8, imp.path[0], "std"))) {
+                        const is_selective = for (imp.items) |imported_name| {
+                            if (std.mem.eql(u8, imported_name, name)) break true;
+                        } else false;
+                        const is_wildcard = imp.items.len == 0 and imp.alias == null;
+                        if (is_selective or is_wildcard) {
+                            if (uriToDir(uri)) |dir| {
+                                if (resolveUserModuleDefinition(alloc, dir, imp.path, name)) |loc| {
+                                    self.respondDefinitionLocation(id, loc);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
 
-        var escaped_uri: [2048]u8 = undefined;
-        const safe_uri = jsonEscape(uri, &escaped_uri);
-
-        var buf: [4096]u8 = undefined;
-        const body = std.fmt.bufPrint(&buf,
-            \\{{"uri":"{s}","range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}}}}
-        , .{ safe_uri, start.line, start.character, end.line, end.character }) catch {
-            self.respondNull(id);
-            return;
-        };
-
-        self.respondResult(id, body);
+        self.respondNull(id);
     }
 
     fn publishDiagnostics(self: *Server, uri: []const u8, source: []const u8) void {
@@ -966,6 +1008,23 @@ pub const Server = struct {
         diags.appendSlice(alloc, "]") catch return;
 
         self.sendNotification("textDocument/publishDiagnostics", uri, diags.items);
+    }
+
+    fn respondDefinitionLocation(self: *Server, id: ?std.json.Value, loc: DefinitionLocation) void {
+        const start = offsetToPosition(loc.source, loc.span.start);
+        const end = offsetToPosition(loc.source, loc.span.end);
+
+        var uri_buf: [2048]u8 = undefined;
+        const file_uri = std.fmt.bufPrint(&uri_buf, "file://{s}", .{loc.file_path}) catch return;
+        var escaped_uri: [4096]u8 = undefined;
+        const safe_uri = jsonEscape(file_uri, &escaped_uri);
+
+        var buf: [4096]u8 = undefined;
+        const body = std.fmt.bufPrint(&buf,
+            \\{{"uri":"{s}","range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}}}}
+        , .{ safe_uri, start.line, start.character, end.line, end.character }) catch return;
+
+        self.respondResult(id, body);
     }
 
     fn clearDiagnostics(self: *Server, uri: []const u8) void {
@@ -1928,6 +1987,54 @@ fn resolveUserModuleSymbol(alloc: std.mem.Allocator, dir: []const u8, mod_path: 
                         .detail = firstLine(content, item.span),
                     };
                 }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+const DefinitionLocation = struct {
+    file_path: []const u8,
+    source: []const u8,
+    span: ast.Span,
+};
+
+fn resolveUserModuleDefinition(alloc: std.mem.Allocator, dir: []const u8, mod_path: []const []const u8, name: []const u8) ?DefinitionLocation {
+    var path_buf: [1024]u8 = undefined;
+    var path_pos: usize = 0;
+    @memcpy(path_buf[path_pos..][0..dir.len], dir);
+    path_pos += dir.len;
+    for (mod_path, 0..) |segment, i| {
+        if (i > 0) {
+            path_buf[path_pos] = '/';
+            path_pos += 1;
+        }
+        @memcpy(path_buf[path_pos..][0..segment.len], segment);
+        path_pos += segment.len;
+    }
+    @memcpy(path_buf[path_pos..][0..4], ".pyr");
+    path_pos += 4;
+    const file_path = alloc.dupe(u8, path_buf[0..path_pos]) catch return null;
+
+    const content = std.fs.cwd().readFileAlloc(alloc, file_path, 1024 * 1024) catch return null;
+    const tokens = parser.tokenize(alloc, content);
+    var p = parser.Parser.init(tokens, content, alloc);
+    const result = p.parse();
+
+    for (result.items) |item| {
+        switch (item.kind) {
+            .fn_decl => |f| {
+                if (f.is_pub and std.mem.eql(u8, f.name, name))
+                    return .{ .file_path = file_path, .source = content, .span = item.span };
+            },
+            .struct_decl => |s| {
+                if (s.is_pub and std.mem.eql(u8, s.name, name))
+                    return .{ .file_path = file_path, .source = content, .span = item.span };
+            },
+            .enum_decl => |e| {
+                if (e.is_pub and std.mem.eql(u8, e.name, name))
+                    return .{ .file_path = file_path, .source = content, .span = item.span };
             },
             else => {},
         }
