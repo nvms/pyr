@@ -93,6 +93,8 @@ pub const Server = struct {
             self.handleReferences(root, id);
         } else if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
             self.handleInlayHint(root, id);
+        } else if (std.mem.eql(u8, method, "textDocument/completion")) {
+            self.handleCompletion(root, id);
         } else {
             if (id != null) {
                 self.respondNull(id);
@@ -244,6 +246,54 @@ pub const Server = struct {
             return;
         }
 
+        // check for namespace-qualified stdlib calls (e.g. io.eprintln)
+        const ident_start = blk: {
+            var s = offset;
+            while (s > 0 and isIdentChar(doc.content[s - 1])) s -= 1;
+            break :blk s;
+        };
+        if (namespaceAtOffset(doc.content, ident_start)) |ns| {
+            if (resolveNamespace(result.items, ns)) |mod_name| {
+                if (lookupStdlib(mod_name, name)) |sig| {
+                    var bi_buf: [4096]u8 = undefined;
+                    const qualified = std.fmt.bufPrint(&bi_buf, "{s}.{s}", .{ ns, name }) catch {
+                        self.respondNull(id);
+                        return;
+                    };
+                    const qlen = qualified.len;
+                    var fmt_buf: [4096]u8 = undefined;
+                    const bi_doc = formatBuiltinHover(bi_buf[0..qlen], sig, &fmt_buf);
+                    if (bi_doc.len > 0) {
+                        self.respondHoverMarkdown(id, bi_doc);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // also check for selective imports (e.g. imp std/io { eprintln })
+        for (result.items) |item| {
+            switch (item.kind) {
+                .import => |imp| {
+                    if (imp.path.len == 2 and std.mem.eql(u8, imp.path[0], "std")) {
+                        for (imp.items) |imported_name| {
+                            if (std.mem.eql(u8, imported_name, name)) {
+                                if (lookupStdlib(imp.path[1], name)) |sig| {
+                                    var bi_buf: [4096]u8 = undefined;
+                                    const bi_doc = formatBuiltinHover(name, sig, &bi_buf);
+                                    if (bi_doc.len > 0) {
+                                        self.respondHoverMarkdown(id, bi_doc);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
         var sym = findDefinition(result.items, name, offset, doc.content) orelse {
             self.respondNull(id);
             return;
@@ -334,6 +384,313 @@ pub const Server = struct {
         } else {
             self.respondResult(id, buf[0..pos]);
         }
+    }
+
+    fn handleCompletion(self: *Server, root: std.json.ObjectMap, id: ?std.json.Value) void {
+        const params = (root.get("params") orelse return).object;
+        const td = (params.get("textDocument") orelse return).object;
+        const uri = switch (td.get("uri") orelse return) {
+            .string => |s| s,
+            else => return,
+        };
+        const position = (params.get("position") orelse return).object;
+        const line = switch (position.get("line") orelse return) {
+            .integer => |n| @as(u32, @intCast(n)),
+            else => return,
+        };
+        const character = switch (position.get("character") orelse return) {
+            .integer => |n| @as(u32, @intCast(n)),
+            else => return,
+        };
+
+        const doc = self.documents.get(uri) orelse {
+            self.respondResult(id, "[]");
+            return;
+        };
+
+        var tmp_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer tmp_arena.deinit();
+        const alloc = tmp_arena.allocator();
+
+        const offset = positionToOffset(doc.content, line, character);
+        const line_text = getLineText(doc.content, line);
+
+        // detect context from line text
+        const trimmed = std.mem.trimLeft(u8, line_text, " \t");
+
+        // import path completion: "imp std/"
+        if (std.mem.startsWith(u8, trimmed, "imp ")) {
+            const after_imp = std.mem.trimLeft(u8, trimmed[4..], " ");
+            if (std.mem.startsWith(u8, after_imp, "std/")) {
+                self.completeStdlibModules(id);
+                return;
+            }
+        }
+
+        // selective import completion: "imp std/os { " or "imp std/os { println, "
+        if (std.mem.startsWith(u8, trimmed, "imp ")) {
+            if (std.mem.indexOf(u8, trimmed, "{")) |brace| {
+                const path_part = std.mem.trimLeft(u8, trimmed[4..], " ");
+                if (std.mem.startsWith(u8, path_part, "std/")) {
+                    const slash = std.mem.indexOf(u8, path_part, "/") orelse 0;
+                    const space = std.mem.indexOf(u8, path_part[slash + 1 ..], " ") orelse (path_part.len - slash - 1);
+                    const mod_name = path_part[slash + 1 .. slash + 1 + space];
+                    _ = brace;
+                    self.completeStdlibFunctions(id, mod_name);
+                    return;
+                }
+            }
+        }
+
+        // namespace dot completion: "io." or "fs."
+        if (offset >= 2 and doc.content[offset - 1] == '.') {
+            var ns_start = offset - 1;
+            while (ns_start > 0 and isIdentChar(doc.content[ns_start - 1])) ns_start -= 1;
+            const ns = doc.content[ns_start .. offset - 1];
+            if (ns.len > 0) {
+                const tokens = parser.tokenize(alloc, doc.content);
+                var p = parser.Parser.init(tokens, doc.content, alloc);
+                const result = p.parse();
+                if (result.errors.len == 0) {
+                    if (resolveNamespace(result.items, ns)) |mod_name| {
+                        self.completeStdlibFunctions(id, mod_name);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // general completion: builtins + keywords + user definitions + imported stdlib
+        self.completeGeneral(id, alloc, doc.content, offset);
+    }
+
+    fn completeStdlibModules(self: *Server, id: ?std.json.Value) void {
+        var buf: [4096]u8 = undefined;
+        var pos: usize = 0;
+        buf[pos] = '[';
+        pos += 1;
+        for (&stdlib_modules, 0..) |*m, i| {
+            if (i > 0) {
+                buf[pos] = ',';
+                pos += 1;
+            }
+            const entry = std.fmt.bufPrint(buf[pos..], "{s}{s}{s}", .{
+                "{\"label\":\"",
+                m.name,
+                "\",\"kind\":9}",
+            }) catch break;
+            pos += entry.len;
+        }
+        buf[pos] = ']';
+        pos += 1;
+        self.respondResult(id, buf[0..pos]);
+    }
+
+    fn completeStdlibFunctions(self: *Server, id: ?std.json.Value, mod_name: []const u8) void {
+        const m = findStdlibModule(mod_name) orelse {
+            self.respondResult(id, "[]");
+            return;
+        };
+        var buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+        buf[pos] = '[';
+        pos += 1;
+        for (m.functions, 0..) |entry, i| {
+            if (i > 0) {
+                buf[pos] = ',';
+                pos += 1;
+            }
+            const name = entry[0];
+            const sig = entry[1];
+            var detail_buf: [512]u8 = undefined;
+            const detail = formatSignatureLine(name, sig.overloads[0], &detail_buf);
+            var escaped_detail: [1024]u8 = undefined;
+            const safe_detail = jsonEscape(detail, &escaped_detail);
+            var escaped_doc: [1024]u8 = undefined;
+            const safe_doc = jsonEscape(sig.description, &escaped_doc);
+            const item = std.fmt.bufPrint(buf[pos..],
+                \\{{"label":"{s}","kind":3,"detail":"{s}","documentation":"{s}"}}
+            , .{ name, safe_detail, safe_doc }) catch break;
+            pos += item.len;
+        }
+        buf[pos] = ']';
+        pos += 1;
+        self.respondResult(id, buf[0..pos]);
+    }
+
+    fn completeGeneral(self: *Server, id: ?std.json.Value, alloc: std.mem.Allocator, source: []const u8, offset: usize) void {
+        var buf: [32768]u8 = undefined;
+        var pos: usize = 0;
+        buf[pos] = '[';
+        pos += 1;
+        var first = true;
+
+        // builtins
+        for (&builtin_signatures) |*entry| {
+            if (!first) {
+                buf[pos] = ',';
+                pos += 1;
+            }
+            first = false;
+            const name = entry[0];
+            const sig = entry[1];
+            var detail_buf: [512]u8 = undefined;
+            const detail = formatSignatureLine(name, sig.overloads[0], &detail_buf);
+            var escaped_detail: [1024]u8 = undefined;
+            const safe_detail = jsonEscape(detail, &escaped_detail);
+            const item = std.fmt.bufPrint(buf[pos..],
+                \\{{"label":"{s}","kind":3,"detail":"{s}"}}
+            , .{ name, safe_detail }) catch break;
+            pos += item.len;
+        }
+
+        // keywords
+        const keywords = [_][]const u8{
+            "fn",     "struct", "enum",   "trait",  "if",     "else",
+            "for",    "while",  "return", "match",  "mut",    "imp",
+            "pub",    "break",  "continue", "in",   "defer",  "spawn",
+            "arena",  "fail",   "extern", "type",   "true",   "false",
+            "nil",
+        };
+        for (&keywords) |kw| {
+            if (!first) {
+                buf[pos] = ',';
+                pos += 1;
+            }
+            first = false;
+            const item = std.fmt.bufPrint(buf[pos..],
+                \\{{"label":"{s}","kind":14}}
+            , .{kw}) catch break;
+            pos += item.len;
+        }
+
+        // user-defined symbols from the current file
+        const tokens = parser.tokenize(alloc, source);
+        var p = parser.Parser.init(tokens, source, alloc);
+        const result = p.parse();
+        if (result.errors.len == 0) {
+            for (result.items) |item| {
+                switch (item.kind) {
+                    .fn_decl => |f| {
+                        if (!first) {
+                            buf[pos] = ',';
+                            pos += 1;
+                        }
+                        first = false;
+                        const detail = firstLine(source, item.span);
+                        var escaped: [1024]u8 = undefined;
+                        const safe = jsonEscape(detail, &escaped);
+                        const entry = std.fmt.bufPrint(buf[pos..],
+                            \\{{"label":"{s}","kind":3,"detail":"{s}"}}
+                        , .{ f.name, safe }) catch break;
+                        pos += entry.len;
+                    },
+                    .struct_decl => |s| {
+                        if (!first) {
+                            buf[pos] = ',';
+                            pos += 1;
+                        }
+                        first = false;
+                        const entry = std.fmt.bufPrint(buf[pos..],
+                            \\{{"label":"{s}","kind":22}}
+                        , .{s.name}) catch break;
+                        pos += entry.len;
+                    },
+                    .enum_decl => |e| {
+                        if (!first) {
+                            buf[pos] = ',';
+                            pos += 1;
+                        }
+                        first = false;
+                        const entry = std.fmt.bufPrint(buf[pos..],
+                            \\{{"label":"{s}","kind":13}}
+                        , .{e.name}) catch break;
+                        pos += entry.len;
+                        for (e.variants) |v| {
+                            buf[pos] = ',';
+                            pos += 1;
+                            const ventry = std.fmt.bufPrint(buf[pos..],
+                                \\{{"label":"{s}","kind":20}}
+                            , .{v.name}) catch break;
+                            pos += ventry.len;
+                        }
+                    },
+                    .import => |imp| {
+                        // namespace imports get a module completion entry
+                        if (imp.items.len == 0 and imp.alias == null and imp.path.len == 2) {
+                            if (!first) {
+                                buf[pos] = ',';
+                                pos += 1;
+                            }
+                            first = false;
+                            const entry = std.fmt.bufPrint(buf[pos..],
+                                \\{{"label":"{s}","kind":9}}
+                            , .{imp.path[1]}) catch break;
+                            pos += entry.len;
+                        } else if (imp.alias) |alias| {
+                            if (!first) {
+                                buf[pos] = ',';
+                                pos += 1;
+                            }
+                            first = false;
+                            const entry = std.fmt.bufPrint(buf[pos..],
+                                \\{{"label":"{s}","kind":9}}
+                            , .{alias}) catch break;
+                            pos += entry.len;
+                        }
+                        // selective imports: add each imported name
+                        if (imp.path.len == 2 and std.mem.eql(u8, imp.path[0], "std")) {
+                            for (imp.items) |imported_fn| {
+                                if (lookupStdlib(imp.path[1], imported_fn)) |sig| {
+                                    if (!first) {
+                                        buf[pos] = ',';
+                                        pos += 1;
+                                    }
+                                    first = false;
+                                    var detail_buf: [512]u8 = undefined;
+                                    const detail = formatSignatureLine(imported_fn, sig.overloads[0], &detail_buf);
+                                    var escaped: [1024]u8 = undefined;
+                                    const safe = jsonEscape(detail, &escaped);
+                                    const entry = std.fmt.bufPrint(buf[pos..],
+                                        \\{{"label":"{s}","kind":3,"detail":"{s}"}}
+                                    , .{ imported_fn, safe }) catch break;
+                                    pos += entry.len;
+                                }
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            // also complete bindings visible at the cursor offset
+            for (result.items) |item| {
+                switch (item.kind) {
+                    .fn_decl => |f| {
+                        if (offset >= item.span.start and offset <= item.span.end) {
+                            if (findBindingsInFn(f, source, alloc)) |bindings| {
+                                for (bindings) |b| {
+                                    if (!first) {
+                                        buf[pos] = ',';
+                                        pos += 1;
+                                    }
+                                    first = false;
+                                    const entry = std.fmt.bufPrint(buf[pos..],
+                                        \\{{"label":"{s}","kind":6}}
+                                    , .{b}) catch break;
+                                    pos += entry.len;
+                                }
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        buf[pos] = ']';
+        pos += 1;
+        self.respondResult(id, buf[0..pos]);
     }
 
     fn handleInlayHint(self: *Server, _: std.json.ObjectMap, id: ?std.json.Value) void {
@@ -457,7 +814,7 @@ pub const Server = struct {
 
     fn respondInit(self: *Server, id: ?std.json.Value) void {
         const result =
-            \\{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"hoverProvider":true,"definitionProvider":true,"referencesProvider":true,"inlayHintProvider":true}}
+            \\{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"hoverProvider":true,"definitionProvider":true,"referencesProvider":true,"inlayHintProvider":true,"completionProvider":{"triggerCharacters":[".","/"," "]}}}
         ;
         self.respondResult(id, result);
     }
@@ -1141,6 +1498,87 @@ fn lookupBuiltin(name: []const u8) ?BuiltinSig {
     return null;
 }
 
+const StdlibModule = struct {
+    name: []const u8,
+    functions: []const struct { []const u8, BuiltinSig },
+};
+
+const stdlib_modules = [_]StdlibModule{
+    .{ .name = "io", .functions = &.{
+        .{ "println", .{ .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = null }}, .description = "Print a value to stdout followed by a newline." } },
+        .{ "print", .{ .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = null }}, .description = "Print a value to stdout without a trailing newline." } },
+        .{ "eprintln", .{ .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = null }}, .description = "Print a value to stderr followed by a newline." } },
+        .{ "eprint", .{ .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = null }}, .description = "Print a value to stderr without a trailing newline." } },
+        .{ "readln", .{ .overloads = &.{.{ .params = &.{}, .return_type = "str" }}, .description = "Read a line from stdin." } },
+    } },
+    .{ .name = "fs", .functions = &.{
+        .{ "read", .{ .overloads = &.{.{ .params = &.{.{ .name = "path", .type_name = "str" }}, .return_type = "str" }}, .description = "Read the entire contents of a file as a string." } },
+        .{ "write", .{ .overloads = &.{.{ .params = &.{.{ .name = "path", .type_name = "str" }, .{ .name = "content", .type_name = "str" }}, .return_type = null }}, .description = "Write a string to a file, replacing any existing content." } },
+        .{ "append", .{ .overloads = &.{.{ .params = &.{.{ .name = "path", .type_name = "str" }, .{ .name = "content", .type_name = "str" }}, .return_type = null }}, .description = "Append a string to a file." } },
+        .{ "exists", .{ .overloads = &.{.{ .params = &.{.{ .name = "path", .type_name = "str" }}, .return_type = "bool" }}, .description = "Check if a file exists at the given path." } },
+        .{ "remove", .{ .overloads = &.{.{ .params = &.{.{ .name = "path", .type_name = "str" }}, .return_type = null }}, .description = "Delete a file." } },
+    } },
+    .{ .name = "os", .functions = &.{
+        .{ "env", .{ .overloads = &.{.{ .params = &.{.{ .name = "key", .type_name = "str" }}, .return_type = "str?" }}, .description = "Get an environment variable. Returns nil if not set." } },
+        .{ "args", .{ .overloads = &.{.{ .params = &.{}, .return_type = "[]str" }}, .description = "Get command-line arguments as an array of strings." } },
+        .{ "exit", .{ .overloads = &.{.{ .params = &.{.{ .name = "code", .type_name = "int" }}, .return_type = null }}, .description = "Exit the process with the given status code." } },
+    } },
+    .{ .name = "json", .functions = &.{
+        .{ "encode", .{ .overloads = &.{.{ .params = &.{.{ .name = "value", .type_name = "any" }}, .return_type = "str" }}, .description = "Serialize a value to a JSON string." } },
+        .{ "decode", .{ .overloads = &.{.{ .params = &.{.{ .name = "s", .type_name = "str" }}, .return_type = "any?" }}, .description = "Parse a JSON string into a value. Returns nil on parse failure." } },
+    } },
+    .{ .name = "net", .functions = &.{
+        .{ "listen", .{ .overloads = &.{.{ .params = &.{.{ .name = "host", .type_name = "str" }, .{ .name = "port", .type_name = "int" }}, .return_type = "socket!" }}, .description = "Bind and listen on a TCP address." } },
+        .{ "accept", .{ .overloads = &.{.{ .params = &.{.{ .name = "server", .type_name = "socket" }}, .return_type = "socket!" }}, .description = "Accept an incoming TCP connection." } },
+        .{ "connect", .{ .overloads = &.{.{ .params = &.{.{ .name = "host", .type_name = "str" }, .{ .name = "port", .type_name = "int" }}, .return_type = "socket!" }}, .description = "Open a TCP connection to a remote address." } },
+        .{ "read", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }}, .return_type = "str!" }}, .description = "Read data from a socket. Returns IoError on failure." } },
+        .{ "write", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }, .{ .name = "data", .type_name = "str" }}, .return_type = "bool!" }}, .description = "Write data to a socket." } },
+        .{ "close", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }}, .return_type = null }}, .description = "Close a socket." } },
+        .{ "timeout", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }, .{ .name = "ms", .type_name = "int" }}, .return_type = null }}, .description = "Set a read/write timeout on a socket in milliseconds." } },
+        .{ "udp_bind", .{ .overloads = &.{.{ .params = &.{.{ .name = "host", .type_name = "str" }, .{ .name = "port", .type_name = "int" }}, .return_type = "socket!" }}, .description = "Bind a UDP socket to an address." } },
+        .{ "udp_open", .{ .overloads = &.{.{ .params = &.{}, .return_type = "socket!" }}, .description = "Open an unbound UDP socket." } },
+        .{ "sendto", .{ .overloads = &.{.{ .params = &.{.{ .name = "sock", .type_name = "socket" }, .{ .name = "data", .type_name = "str" }, .{ .name = "host", .type_name = "str" }, .{ .name = "port", .type_name = "int" }}, .return_type = "bool!" }}, .description = "Send a UDP datagram to a specific address." } },
+        .{ "recvfrom", .{ .overloads = &.{.{ .params = &.{.{ .name = "sock", .type_name = "socket" }}, .return_type = "str!" }}, .description = "Receive a UDP datagram." } },
+    } },
+    .{ .name = "http", .functions = &.{
+        .{ "parse_request", .{ .overloads = &.{.{ .params = &.{.{ .name = "raw", .type_name = "str" }}, .return_type = "request?" }}, .description = "Parse a raw HTTP request string into a request object with method, path, headers, and body." } },
+        .{ "respond", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }}, .return_type = null }}, .description = "Send a 200 OK response." } },
+        .{ "respond_status", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }, .{ .name = "status", .type_name = "int" }}, .return_type = null }}, .description = "Send an HTTP response with the given status code." } },
+        .{ "json_response", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }}, .return_type = null }}, .description = "Send a JSON response with Content-Type: application/json." } },
+        .{ "route", .{ .overloads = &.{.{ .params = &.{.{ .name = "method", .type_name = "str" }, .{ .name = "path", .type_name = "str" }, .{ .name = "request", .type_name = "request" }}, .return_type = "bool" }}, .description = "Check if a request matches a method and path." } },
+        .{ "match_route", .{ .overloads = &.{.{ .params = &.{.{ .name = "method", .type_name = "str" }, .{ .name = "pattern", .type_name = "str" }, .{ .name = "request", .type_name = "request" }}, .return_type = "[]str?" }}, .description = "Match a request against a route pattern with `:param` segments. Returns captured values or nil." } },
+    } },
+    .{ .name = "tls", .functions = &.{
+        .{ "upgrade", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }, .{ .name = "hostname", .type_name = "str" }}, .return_type = "tls_conn!" }}, .description = "Upgrade a TCP connection to TLS (client mode)." } },
+        .{ "context", .{ .overloads = &.{.{ .params = &.{.{ .name = "cert_path", .type_name = "str" }, .{ .name = "key_path", .type_name = "str" }}, .return_type = "tls_ctx!" }}, .description = "Create a TLS server context from certificate and key files." } },
+    } },
+    .{ .name = "gc", .functions = &.{
+        .{ "pause", .{ .overloads = &.{.{ .params = &.{}, .return_type = null }}, .description = "Pause automatic garbage collection." } },
+        .{ "resume", .{ .overloads = &.{.{ .params = &.{}, .return_type = null }}, .description = "Resume automatic garbage collection." } },
+        .{ "collect", .{ .overloads = &.{.{ .params = &.{}, .return_type = "int" }}, .description = "Run a garbage collection cycle. Returns the number of objects freed." } },
+        .{ "stats", .{ .overloads = &.{.{ .params = &.{}, .return_type = "str" }}, .description = "Return GC statistics as a formatted string." } },
+    } },
+};
+
+fn lookupStdlib(mod_name: []const u8, fn_name: []const u8) ?BuiltinSig {
+    for (&stdlib_modules) |*m| {
+        if (std.mem.eql(u8, m.name, mod_name)) {
+            for (m.functions) |*entry| {
+                if (std.mem.eql(u8, entry[0], fn_name)) return entry[1];
+            }
+            return null;
+        }
+    }
+    return null;
+}
+
+fn findStdlibModule(name: []const u8) ?*const StdlibModule {
+    for (&stdlib_modules) |*m| {
+        if (std.mem.eql(u8, m.name, name)) return m;
+    }
+    return null;
+}
+
 fn formatBuiltinHover(name: []const u8, sig: BuiltinSig, buf: []u8) []const u8 {
     var pos: usize = 0;
 
@@ -1277,6 +1715,108 @@ fn identifierAtOffset(source: []const u8, offset: usize) ?[]const u8 {
 
 fn isIdentChar(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+}
+
+fn getLineText(source: []const u8, line_num: u32) []const u8 {
+    var cur_line: u32 = 0;
+    var start: usize = 0;
+    for (source, 0..) |c, i| {
+        if (cur_line == line_num) {
+            if (c == '\n') return source[start..i];
+        } else if (c == '\n') {
+            cur_line += 1;
+            start = i + 1;
+        }
+    }
+    if (cur_line == line_num) return source[start..];
+    return "";
+}
+
+fn formatSignatureLine(name: []const u8, overload: Overload, buf: []u8) []const u8 {
+    var pos: usize = 0;
+    @memcpy(buf[pos..][0..name.len], name);
+    pos += name.len;
+    buf[pos] = '(';
+    pos += 1;
+    for (overload.params, 0..) |param, j| {
+        if (j > 0) {
+            @memcpy(buf[pos..][0..2], ", ");
+            pos += 2;
+        }
+        @memcpy(buf[pos..][0..param.name.len], param.name);
+        pos += param.name.len;
+        @memcpy(buf[pos..][0..2], ": ");
+        pos += 2;
+        @memcpy(buf[pos..][0..param.type_name.len], param.type_name);
+        pos += param.type_name.len;
+    }
+    buf[pos] = ')';
+    pos += 1;
+    if (overload.return_type) |rt| {
+        @memcpy(buf[pos..][0..4], " -> ");
+        pos += 4;
+        @memcpy(buf[pos..][0..rt.len], rt);
+        pos += rt.len;
+    }
+    return buf[0..pos];
+}
+
+fn findBindingsInFn(f: ast.FnDecl, source: []const u8, alloc: std.mem.Allocator) ?[]const []const u8 {
+    _ = source;
+    const body_block = switch (f.body) {
+        .block => |b| b,
+        else => return null,
+    };
+    var names: std.ArrayListUnmanaged([]const u8) = .{};
+    for (f.params) |param| {
+        names.append(alloc, param.name) catch {};
+    }
+    collectBindings(body_block, &names, alloc);
+    if (names.items.len == 0) return null;
+    return names.toOwnedSlice(alloc) catch null;
+}
+
+fn collectBindings(block: *const ast.Block, names: *std.ArrayListUnmanaged([]const u8), alloc: std.mem.Allocator) void {
+    for (block.stmts) |stmt| {
+        switch (stmt.kind) {
+            .binding => |b| names.append(alloc, b.name) catch {},
+            .for_loop => |fl| {
+                names.append(alloc, fl.binding) catch {};
+                collectBindings(fl.body, names, alloc);
+            },
+            .while_loop => |wl| collectBindings(wl.body, names, alloc),
+            .arena_block => |ab| collectBindings(ab, names, alloc),
+            else => {},
+        }
+    }
+}
+
+fn namespaceAtOffset(source: []const u8, ident_start: usize) ?[]const u8 {
+    if (ident_start < 2) return null;
+    if (source[ident_start - 1] != '.') return null;
+    const end = ident_start - 1;
+    var start = end;
+    while (start > 0 and isIdentChar(source[start - 1])) start -= 1;
+    if (start == end) return null;
+    return source[start..end];
+}
+
+fn resolveNamespace(items: []const ast.Item, ns: []const u8) ?[]const u8 {
+    for (items) |item| {
+        switch (item.kind) {
+            .import => |imp| {
+                if (imp.path.len == 2 and std.mem.eql(u8, imp.path[0], "std")) {
+                    if (imp.alias) |alias| {
+                        if (std.mem.eql(u8, alias, ns)) return imp.path[1];
+                    } else if (imp.items.len == 0) {
+                        if (std.mem.eql(u8, imp.path[1], ns)) return imp.path[1];
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 // json/transport utilities

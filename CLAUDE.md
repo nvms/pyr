@@ -203,7 +203,7 @@ pyr is a fully functional bytecode VM language. 283 tests, 42 validated examples
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. LSP type information for stdlib: builtins have a structured type registry with overloads (done). stdlib module functions (std/io, std/fs, std/os, std/json, std/net, std/http, std/tls, std/gc) still need the same treatment so hover works on `io.println`, `fs.read`, etc
+1. pyr fmt: the formatter exists but needs work. should produce canonical formatting for all pyr code
 2. sort_by comparator convention: currently takes a boolean predicate (true = already in order), which is surprising. either rename to `sort_when`/`sort_asc` to make the convention obvious, or switch to standard -1/0/1 comparator semantics
 3. type annotation enforcement: type annotations exist but aren't checked at compile time. either make them gradual (enforce what's annotated) or drop the pretense. the current state is annotations that can lie
 4. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat, wordfreq, csv, calc
