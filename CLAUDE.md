@@ -4,6 +4,15 @@ a systems programming language with scripting ergonomics, built in zig. compiles
 
 you are the sole maintainer. before making technology or architecture decisions, read `~/code/vigil/learnings.md` for cross-cutting insights from past experiments. you may write to this file but never commit or push changes to the vigil repo - only modify the file and leave it for the user.
 
+## pyr rename to fur
+
+not yet, but later, when the moment is right, we're renaming pyr (a working title) to it's final, real name: fur
+
+extension: .fu
+domain: furlang.com
+
+for now, it remains pyr in all references. rename to fun will not happen until the user explicitly requests it.
+
 ## concept
 
 the gap in backend languages: general-purpose languages bolt HTTP on as a library (Go, Rust, Java). web-native languages have the right server model but bad performance (PHP, Ruby, Python). pyr closes that gap - a language where the server runtime is a first-class stdlib module with arena-per-request memory, but the language itself is fully general-purpose: CLI tools, data processing, systems programming, low-level work.
@@ -194,7 +203,7 @@ pyr is a fully functional bytecode VM language. 283 tests, 41 validated examples
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat, wordfreq
+1. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat, wordfreq, csv, calc
 
 ## implementation notes
 

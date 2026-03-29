@@ -10,3 +10,7 @@ real programs written in pyr. rebuilt versions of unix tools and utilities, used
 - [head](head/) - print the first N lines of a file
 - [jq](jq/) - JSON query and transform (subset)
 - [httpd](httpd/) - static file HTTP server
+- [logstat](logstat/) - log file analyzer (JSONL input, level/endpoint/latency stats)
+- [wordfreq](wordfreq/) - word frequency counter
+- [csv](csv/) - CSV processor (select columns, filter rows, sort)
+- [calc](calc/) - expression evaluator (arithmetic with operator precedence)

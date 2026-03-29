@@ -1,0 +1,196 @@
+imp std/os
+imp std/io { println, eprintln }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn is_digit(ch: str) -> bool {
+  ch >= "0" && ch <= "9"
+}
+
+fn is_space(ch: str) -> bool {
+  ch == " " || ch == "\t"
+}
+
+fn skip_spaces(expr: str, pos: int) -> int {
+  mut p = pos
+  while p < len(expr) && is_space(expr[p]) {
+    p = p + 1
+  }
+  p
+}
+
+fn parse_number(expr: str, pos: int) {
+  mut p = skip_spaces(expr, pos)
+  if p >= len(expr) {
+    fail "unexpected end of expression"
+  }
+
+  mut negative = false
+  if expr[p] == "-" {
+    negative = true
+    p = p + 1
+  }
+
+  if p >= len(expr) || !is_digit(expr[p]) {
+    fail "expected number at position {p}"
+  }
+
+  mut num_str = ""
+  mut has_dot = false
+  while p < len(expr) && (is_digit(expr[p]) || expr[p] == ".") {
+    if expr[p] == "." {
+      if has_dot {
+        fail "invalid number: multiple decimal points"
+      }
+      has_dot = true
+    }
+    num_str = num_str + expr[p]
+    p = p + 1
+  }
+
+  val = if has_dot { float(num_str) } else { int(num_str) }
+  if negative { val = 0 - val }
+  mut result = []
+  push(result, val)
+  push(result, p)
+  result
+}
+
+fn parse_atom(expr: str, pos: int) {
+  mut p = skip_spaces(expr, pos)
+  if p >= len(expr) {
+    fail "unexpected end of expression"
+  }
+
+  if expr[p] == "(" {
+    inner = parse_expr(expr, p + 1)?
+    val = inner[0]
+    p = skip_spaces(expr, inner[1])
+    if p >= len(expr) || expr[p] != ")" {
+      fail "expected closing parenthesis"
+    }
+    mut result = []
+    push(result, val)
+    push(result, p + 1)
+    return result
+  }
+
+  if expr[p] == "-" && p + 1 < len(expr) && (is_digit(expr[p + 1]) || expr[p + 1] == "(") {
+    if expr[p + 1] == "(" {
+      inner = parse_atom(expr, p + 1)?
+      mut result = []
+      push(result, 0 - inner[0])
+      push(result, inner[1])
+      return result
+    }
+  }
+
+  parse_number(expr, p)?
+}
+
+fn parse_factor(expr: str, pos: int) {
+  result = parse_atom(expr, pos)?
+  mut val = result[0]
+  mut p = skip_spaces(expr, result[1])
+
+  while p < len(expr) && (expr[p] == "*" || expr[p] == "/" || expr[p] == "%") {
+    op = expr[p]
+    right = parse_atom(expr, p + 1)?
+    rval = right[0]
+    p = skip_spaces(expr, right[1])
+
+    if op == "*" {
+      val = val * rval
+    } else if op == "/" {
+      if rval == 0 { fail "division by zero" }
+      val = val / rval
+    } else {
+      if rval == 0 { fail "modulo by zero" }
+      val = int(val) % int(rval)
+    }
+  }
+
+  mut out = []
+  push(out, val)
+  push(out, p)
+  out
+}
+
+fn parse_expr(expr: str, pos: int) {
+  result = parse_factor(expr, pos)?
+  mut val = result[0]
+  mut p = skip_spaces(expr, result[1])
+
+  while p < len(expr) && (expr[p] == "+" || expr[p] == "-") {
+    op = expr[p]
+    right = parse_factor(expr, p + 1)?
+    rval = right[0]
+    p = skip_spaces(expr, right[1])
+
+    if op == "+" {
+      val = val + rval
+    } else {
+      val = val - rval
+    }
+  }
+
+  mut out = []
+  push(out, val)
+  push(out, p)
+  out
+}
+
+fn eval(expr: str) {
+  trimmed = trim(expr)
+  if len(trimmed) == 0 {
+    fail "empty expression"
+  }
+  result = parse_expr(trimmed, 0)?
+  p = skip_spaces(trimmed, result[1])
+  if p < len(trimmed) {
+    fail "unexpected character '{trimmed[p]}' at position {p}"
+  }
+  result[0]
+}
+
+fn format_result(val) -> str {
+  if type_of(val) == "float" {
+    s = "{val}"
+    if ends_with(s, ".0") {
+      return slice(s, 0, len(s) - 2)
+    }
+    return s
+  }
+  "{val}"
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    eprintln("usage: calc <expression>")
+    eprintln("  examples: calc '2 + 3'  calc '(4 + 5) * 2'")
+    os.exit(1)
+  }
+
+  expr = join(args, " ")
+
+  result = eval(expr) or |err| {
+    eprintln("calc: {err}")
+    os.exit(1)
+  }
+
+  println(format_result(result))
+}

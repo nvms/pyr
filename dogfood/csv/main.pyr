@@ -1,0 +1,268 @@
+imp std/fs
+imp std/os
+imp std/io { println, eprintln, print }
+
+fn user_args() -> []str {
+  args = os.args()
+  mut i = 0
+  for arg in args {
+    if arg == "--" {
+      return slice(args, i + 1, len(args))
+    }
+    i = i + 1
+  }
+  if len(args) > 3 {
+    return slice(args, 3, len(args))
+  }
+  return []
+}
+
+fn usage() {
+  eprintln("usage: csv [options] <file>")
+  eprintln("  -c col1,col2    select columns")
+  eprintln("  -f col=val      filter rows where col equals val")
+  eprintln("  -s col          sort by column")
+  eprintln("  -H              no header (treat first row as data)")
+  eprintln("  --count         print row count only")
+  os.exit(1)
+}
+
+fn parse_csv_line(line: str) {
+  mut fields = []
+  mut current = ""
+  mut in_quotes = false
+  mut i = 0
+
+  for i in range(len(line)) {
+    ch = line[i]
+    if in_quotes {
+      if ch == "\"" {
+        if i + 1 < len(line) && line[i + 1] == "\"" {
+          current = current + "\""
+          i = i + 1
+        } else {
+          in_quotes = false
+        }
+      } else {
+        current = current + ch
+      }
+    } else {
+      if ch == "\"" {
+        in_quotes = true
+      } else if ch == "," {
+        push(fields, trim(current))
+        current = ""
+      } else {
+        current = current + ch
+      }
+    }
+  }
+
+  push(fields, trim(current))
+  fields
+}
+
+fn find_col(headers, name: str) {
+  for i in range(len(headers)) {
+    if headers[i] == name {
+      return i
+    }
+  }
+  fail "unknown column: {name}"
+}
+
+fn resolve_columns(headers, col_spec: str) {
+  names = split(col_spec, ",")
+  mut indices = []
+  for name in names {
+    idx = find_col(headers, trim(name))?
+    push(indices, idx)
+  }
+  indices
+}
+
+fn select_fields(row, indices) {
+  mut result = []
+  for idx in indices {
+    if idx < len(row) {
+      push(result, row[idx])
+    } else {
+      push(result, "")
+    }
+  }
+  result
+}
+
+fn parse_filter(headers, spec: str) {
+  eq_pos = index_of(spec, "=")
+  if eq_pos < 0 {
+    fail "invalid filter: {spec} (expected col=value)"
+  }
+  col_name = trim(slice(spec, 0, eq_pos))
+  value = trim(slice(spec, eq_pos + 1, len(spec)))
+  idx = find_col(headers, col_name)?
+  mut result = []
+  push(result, idx)
+  push(result, value)
+  result
+}
+
+fn matches_filter(row, filter) -> bool {
+  idx = int(filter[0])
+  value = filter[1]
+  if idx >= len(row) { return false }
+  row[idx] == value
+}
+
+fn print_row(fields) {
+  mut first = true
+  for f in fields {
+    if !first {
+      print(",")
+    }
+    if contains(f, ",") || contains(f, "\"") {
+      print("\"")
+      print(replace(f, "\"", "\"\""))
+      print("\"")
+    } else {
+      print(f)
+    }
+    first = false
+  }
+  println("")
+}
+
+fn less_than(a: str, b: str) -> bool {
+  a_num = int(a)
+  b_num = int(b)
+  if type_of(a_num) == "int" && type_of(b_num) == "int" {
+    return a_num < b_num
+  }
+  a < b
+}
+
+fn main() {
+  args = user_args()
+  if len(args) < 1 {
+    usage()
+  }
+
+  mut col_spec = nil
+  mut filter_spec = nil
+  mut sort_col = nil
+  mut no_header = false
+  mut count_only = false
+  mut filename = nil
+
+  mut i = 0
+  for i in range(len(args)) {
+    arg = args[i]
+    if arg == "-c" && i + 1 < len(args) {
+      col_spec = args[i + 1]
+      i = i + 1
+    } else if arg == "-f" && i + 1 < len(args) {
+      filter_spec = args[i + 1]
+      i = i + 1
+    } else if arg == "-s" && i + 1 < len(args) {
+      sort_col = args[i + 1]
+      i = i + 1
+    } else if arg == "-H" {
+      no_header = true
+    } else if arg == "--count" {
+      count_only = true
+    } else if !starts_with(arg, "-") {
+      filename = arg
+    }
+  }
+
+  if filename == nil {
+    usage()
+  }
+
+  if !fs.exists(filename) {
+    eprintln("csv: {filename}: no such file")
+    os.exit(1)
+  }
+
+  content = fs.read(filename)
+  lines = split(content, "\n")
+
+  mut rows = []
+  for line in lines {
+    if len(trim(line)) > 0 {
+      push(rows, parse_csv_line(line))
+    }
+  }
+
+  if len(rows) == 0 {
+    eprintln("csv: empty file")
+    os.exit(1)
+  }
+
+  mut headers = nil
+  mut data_rows = rows
+
+  if !no_header {
+    headers = rows[0]
+    data_rows = slice(rows, 1, len(rows))
+  }
+
+  row_filter = if filter_spec != nil && headers != nil {
+    parse_filter(headers, filter_spec) or |err| {
+      eprintln("csv: {err}")
+      os.exit(1)
+    }
+  } else {
+    nil
+  }
+
+  if row_filter != nil {
+    mut filtered = []
+    for row in data_rows {
+      if matches_filter(row, row_filter) {
+        push(filtered, row)
+      }
+    }
+    data_rows = filtered
+  }
+
+  col_indices = if col_spec != nil && headers != nil {
+    resolve_columns(headers, col_spec) or |err| {
+      eprintln("csv: {err}")
+      os.exit(1)
+    }
+  } else {
+    nil
+  }
+
+  if sort_col != nil && headers != nil {
+    sort_idx = find_col(headers, sort_col) or |err| {
+      eprintln("csv: {err}")
+      os.exit(1)
+    }
+    data_rows = sort_by(data_rows, fn(a, b) {
+      va = if sort_idx < len(a) { a[sort_idx] } else { "" }
+      vb = if sort_idx < len(b) { b[sort_idx] } else { "" }
+      less_than(va, vb)
+    })
+  }
+
+  if count_only {
+    println(len(data_rows))
+    return nil
+  }
+
+  if headers != nil && col_indices != nil {
+    print_row(select_fields(headers, col_indices))
+  } else if headers != nil {
+    print_row(headers)
+  }
+
+  for row in data_rows {
+    if col_indices != nil {
+      print_row(select_fields(row, col_indices))
+    } else {
+      print_row(row)
+    }
+  }
+}
