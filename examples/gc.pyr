@@ -1,0 +1,39 @@
+imp std/gc
+
+fn allocate_strings(n: int) {
+  for i in range(n) {
+    s = "item_{i}"
+    assert(len(s) > 0)
+  }
+}
+
+fn main() {
+  s1 = gc.stats()
+  println("collections before: {s1.collections}")
+
+  allocate_strings(1000)
+
+  gc.collect()
+  allocate_strings(1)
+
+  s2 = gc.stats()
+  println("collections after: {s2.collections}")
+  assert(s2.collections > s1.collections)
+
+  gc.pause()
+  before = gc.stats().collections
+  allocate_strings(1000)
+  allocate_strings(1)
+  after = gc.stats().collections
+  assert_eq(before, after)
+  println("paused: no new collections")
+
+  gc.resume()
+  println("gc resumed")
+
+  final = gc.stats()
+  assert(final.bytes_allocated >= 0)
+  assert(final.objects >= 0)
+  println("bytes: ok")
+  println("objects: ok")
+}

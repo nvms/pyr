@@ -1,0 +1,57 @@
+---
+title: Garbage Collection
+order: 20
+description: Pyr uses a mark-sweep garbage collector for heap-allocated objects. The std/gc module gives you control over collection timing and visibility into memory usage.
+---
+// Pyr's GC runs automatically at loop back-edges when
+// memory usage crosses a threshold. For most code, you
+// never think about it. The `std/gc` module is for when
+// you need control.
+imp std/gc
+
+// `gc.stats()` returns a struct with three fields:
+// bytes_allocated, collections, objects.
+fn show_stats(label: str) {
+  s = gc.stats()
+  println("{label}: {s.bytes_allocated} bytes, {s.collections} collections, {s.objects} objects")
+}
+
+fn main() {
+  show_stats("start")
+
+// Allocate a bunch of strings in a loop.
+// The GC collects unreachable objects automatically.
+  for i in range(1000) {
+    s = "item_{i}"
+    assert(len(s) > 0)
+  }
+  show_stats("after loop")
+
+// `gc.collect()` requests a collection at the next
+// safepoint. It doesn't collect immediately - it
+// sets the threshold to zero so the next loop
+// back-edge triggers collection.
+  gc.collect()
+  for i in range(1) {}
+  show_stats("after collect")
+
+// `gc.pause()` and `gc.resume()` disable and
+// re-enable automatic collection. Useful for
+// latency-sensitive sections where you don't
+// want GC pauses.
+  gc.pause()
+  before = gc.stats().collections
+  for i in range(1000) {
+    s = "paused_{i}"
+  }
+  after = gc.stats().collections
+  assert_eq(before, after)
+  println("paused: no collections during sensitive work")
+  gc.resume()
+
+// For server workloads, combine arenas for
+// per-request memory with GC for long-lived state.
+// Arenas handle the fast path (bulk free on request
+// end), GC handles everything else.
+  show_stats("final")
+}

@@ -18,13 +18,30 @@ fn user_args() -> []str {
 }
 
 fn parse_count(args: []str) -> int {
-  for arg in args {
-    if starts_with(arg, "-") && len(arg) > 1 && !starts_with(arg, "--") {
-      n = slice(arg, 1, len(arg))
-      return int(n)
+  for i in range(len(args)) {
+    if args[i] == "-n" && i + 1 < len(args) {
+      return int(args[i + 1])
+    }
+    if starts_with(args[i], "-") && len(args[i]) > 1 && !starts_with(args[i], "--") {
+      return int(slice(args[i], 1, len(args[i])))
     }
   }
-  return 10
+  10
+}
+
+fn parse_files(args: []str) -> []str {
+  mut files = []
+  mut skip_next = false
+  for i in range(len(args)) {
+    if skip_next {
+      skip_next = false
+    } else if args[i] == "-n" {
+      skip_next = true
+    } else if !starts_with(args[i], "-") {
+      push(files, args[i])
+    }
+  }
+  files
 }
 
 fn head_file(filename: str, n: int) {
@@ -45,16 +62,10 @@ fn head_file(filename: str, n: int) {
 
 fn main() {
   args = user_args()
-
-  mut files = []
-  for arg in args {
-    if !starts_with(arg, "-") {
-      push(files, arg)
-    }
-  }
+  files = parse_files(args)
 
   if len(files) == 0 {
-    eprintln("usage: head [-N] <file> [file...]")
+    eprintln("usage: head [-n N | -N] <file> [file...]")
     os.exit(1)
   }
 

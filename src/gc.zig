@@ -11,6 +11,7 @@ const ObjError = @import("value.zig").ObjError;
 
 pub const GC = struct {
     objects: std.ArrayListUnmanaged(GcObj),
+    ptr_map: std.AutoHashMapUnmanaged(usize, u32),
     mark_stack: std.ArrayListUnmanaged(Value),
     alloc: std.mem.Allocator,
     bytes_allocated: usize,
@@ -31,6 +32,7 @@ pub const GC = struct {
     pub fn init(alloc: std.mem.Allocator) GC {
         return .{
             .objects = .{},
+            .ptr_map = .{},
             .mark_stack = .{},
             .alloc = alloc,
             .bytes_allocated = 0,
@@ -43,6 +45,7 @@ pub const GC = struct {
 
     pub fn deinit(self: *GC) void {
         self.objects.deinit(self.alloc);
+        self.ptr_map.deinit(self.alloc);
         self.mark_stack.deinit(self.alloc);
     }
 
@@ -50,11 +53,14 @@ pub const GC = struct {
         const tag = val.tag();
         const size = objSize(val, tag);
         if (size == 0) return;
+        const ptr = val.payload();
+        const idx: u32 = @intCast(self.objects.items.len);
         self.objects.append(self.alloc, .{
-            .ptr = val.payload(),
+            .ptr = ptr,
             .tag = tag,
             .marked = false,
         }) catch {};
+        self.ptr_map.put(self.alloc, ptr, idx) catch {};
         self.bytes_allocated += size;
     }
 
@@ -69,7 +75,6 @@ pub const GC = struct {
             .enum_ => @sizeOf(ObjEnum) + val.asEnum().payloads.len * @sizeOf(Value),
             .closure => @sizeOf(ObjClosure) + val.asClosure().upvalues.len * @sizeOf(Value),
             .error_val => @sizeOf(ObjError),
-            // functions and native_fns are constant pool objects, never gc-managed
             else => 0,
         };
     }
@@ -116,14 +121,11 @@ pub const GC = struct {
             else => return,
         }
         const ptr = val.payload();
-        for (self.objects.items) |*obj| {
-            if (obj.ptr == ptr and obj.tag == tag) {
-                if (!obj.marked) {
-                    obj.marked = true;
-                    self.mark_stack.append(self.alloc, val) catch {};
-                }
-                return;
-            }
+        const idx = self.ptr_map.get(ptr) orelse return;
+        const obj = &self.objects.items[idx];
+        if (!obj.marked) {
+            obj.marked = true;
+            self.mark_stack.append(self.alloc, val) catch {};
         }
     }
 
@@ -160,8 +162,14 @@ pub const GC = struct {
             if (self.objects.items[i].marked) {
                 i += 1;
             } else {
-                self.freeObj(self.objects.items[i]);
-                self.objects.items[i] = self.objects.items[self.objects.items.len - 1];
+                const obj = self.objects.items[i];
+                _ = self.ptr_map.remove(obj.ptr);
+                self.freeObj(obj);
+                const last = self.objects.items.len - 1;
+                if (i < last) {
+                    self.objects.items[i] = self.objects.items[last];
+                    self.ptr_map.put(self.alloc, self.objects.items[i].ptr, @intCast(i)) catch {};
+                }
                 self.objects.items.len -= 1;
             }
         }

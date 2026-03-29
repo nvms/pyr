@@ -1,7 +1,7 @@
 ---
 title: Arena Memory
 order: 17
-description: Arena blocks create a scoped memory region where all allocations are freed in bulk when the block exits. No garbage collector, no reference counting - just fast, deterministic cleanup.
+description: Arena blocks create a scoped memory region where all allocations are freed in bulk when the block exits. Faster than GC for hot paths - deterministic, zero overhead cleanup.
 ---
 // Integers, floats, and booleans live on the stack.
 // Structs, strings, and arrays are heap-allocated.
@@ -10,8 +10,8 @@ description: Arena blocks create a scoped memory region where all allocations ar
 // freed in one shot. Stack values are unaffected.
 
 // Without arenas, a loop that allocates on every iteration
-// leaks memory until the program ends. Pyr has no garbage
-// collector, so nothing is reclaimed automatically.
+// relies on the GC to reclaim memory. Arenas are faster -
+// bulk free on exit, no marking, no sweeping.
 struct Request {
   path: str
   body: str
