@@ -49,14 +49,14 @@ fn count_level(entries, level_str: str) -> int {
 }
 
 fn unique_values(entries, field: str) -> []str {
-  mut seen = []
+  mut seen = {}
   for e in entries {
     val = getattr(e, field)
-    if val != nil && !seen.contains(val) {
-      push(seen, val)
+    if val != nil && !contains(seen, val) {
+      seen[val] = true
     }
   }
-  seen
+  keys(seen)
 }
 
 fn avg_duration(entries, endpoint: str) -> int {

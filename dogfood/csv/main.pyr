@@ -107,9 +107,9 @@ fn parse_filter(headers, spec: str) {
   result
 }
 
-fn matches_filter(row, filter) -> bool {
-  idx = int(filter[0])
-  value = filter[1]
+fn matches_filter(row, criteria) -> bool {
+  idx = int(criteria[0])
+  value = criteria[1]
   if idx >= len(row) { return false }
   row[idx] == value
 }

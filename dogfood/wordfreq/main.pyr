@@ -43,22 +43,15 @@ fn tokenize(text: str) -> []str {
 }
 
 fn count_words(words) {
-  mut keys = []
-  mut counts = []
+  mut freq = {}
   for word in words {
-    idx = keys.index_of(word)
-    if idx >= 0 {
-      counts[idx] = counts[idx] + 1
+    if contains(freq, word) {
+      freq[word] = freq[word] + 1
     } else {
-      push(keys, word)
-      push(counts, 1)
+      freq[word] = 1
     }
   }
-  mut pairs = []
-  for i in range(len(keys)) {
-    push(pairs, [keys[i], counts[i]])
-  }
-  pairs
+  freq
 }
 
 fn main() {
@@ -78,13 +71,18 @@ fn main() {
 
   content = fs.read(filename)
   words = tokenize(content)
-  pairs = count_words(words)
+  freq = count_words(words)
 
+  k = keys(freq)
+  mut pairs = []
+  for word in k {
+    push(pairs, [word, freq[word]])
+  }
   sorted = pairs.sort_by(fn(a, b) a[1] > b[1])
 
   limit = if top_n < len(sorted) { top_n } else { len(sorted) }
 
-  println("{len(words)} words, {len(pairs)} unique")
+  println("{len(words)} words, {len(k)} unique")
   println("")
   for i in range(limit) {
     word = sorted[i][0]

@@ -23,16 +23,12 @@ fn pp(val, indent: int) {
   if t == "object" {
     println("\{")
     k = keys(val)
-    mut vals = []
-    for i in range(len(k)) {
-      push(vals, getattr(val, k[i]))
-    }
     for i in range(len(k)) {
       print_indent(indent + 2)
       print("\"")
       print(k[i])
       print("\": ")
-      pp(vals[i], indent + 2)
+      pp(getattr(val, k[i]), indent + 2)
       if i < len(k) - 1 {
         println(",")
       } else {
@@ -85,14 +81,14 @@ fn output(val) {
   }
 }
 
-fn eval_filter(val, filter: str) {
-  if filter == "." { return val }
-  if filter == "keys" { return keys(val) }
-  if filter == "length" { return eval_length(val) }
-  if filter == "type" { return type_of(val) }
+fn eval_query(val, query: str) {
+  if query == "." { return val }
+  if query == "keys" { return keys(val) }
+  if query == "length" { return eval_length(val) }
+  if query == "type" { return type_of(val) }
 
-  if starts_with(filter, ".") {
-    return eval_path(val, slice(filter, 1, len(filter)))
+  if starts_with(query, ".") {
+    return eval_path(val, slice(query, 1, len(query)))
   }
 
   return val
@@ -168,7 +164,7 @@ fn main() {
     os.exit(1)
   }
 
-  filter = args[0]
+  query = args[0]
 
   if len(args) < 2 {
     eprintln("jq: pass a file argument")
@@ -183,27 +179,27 @@ fn main() {
 
   data = json.decode(fs.read(filename))
 
-  if filter == ".[]" {
+  if query == ".[]" {
     iterate(data)
     return nil
   }
 
-  if contains(filter, " | ") {
-    parts = split(filter, " | ")
+  if contains(query, " | ") {
+    parts = split(query, " | ")
     mut current = data
     for part in parts {
       if part == ".[]" {
         iterate(current)
         return nil
       }
-      current = eval_filter(current, part)
+      current = eval_query(current, part)
     }
     output(current)
     return nil
   }
 
-  result = eval_filter(data, filter)
-  did_iterate = starts_with(filter, ".") && ends_with(filter, "[]")
+  result = eval_query(data, query)
+  did_iterate = starts_with(query, ".") && ends_with(query, "[]")
   if !did_iterate {
     output(result)
   }
