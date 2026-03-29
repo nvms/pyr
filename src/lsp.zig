@@ -434,6 +434,9 @@ pub const Server = struct {
                 self.completeStdlibModules(id);
                 return;
             }
+            // bare "imp " -> suggest "std/" prefix
+            self.completeImportRoots(id);
+            return;
         }
 
         // namespace dot completion: "io." or "fs."
@@ -456,6 +459,12 @@ pub const Server = struct {
 
         // general completion: builtins + keywords + user definitions + imported stdlib
         self.completeGeneral(id, alloc, doc.content, offset);
+    }
+
+    fn completeImportRoots(self: *Server, id: ?std.json.Value) void {
+        self.respondResult(id,
+            \\[{"label":"std/","kind":9}]
+        );
     }
 
     fn completeStdlibModules(self: *Server, id: ?std.json.Value) void {
