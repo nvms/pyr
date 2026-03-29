@@ -378,7 +378,7 @@ pub const Sema = struct {
 
     fn analyzeItem(self: *Sema, item: ast.Item) void {
         switch (item.kind) {
-            .fn_decl => |decl| self.analyzeFnDecl(decl),
+            .fn_decl => |decl| self.analyzeFnDecl(decl, item.span),
             .struct_decl => |decl| self.analyzeStructDecl(decl),
             .enum_decl => {},
             .trait_decl => {},
@@ -389,7 +389,7 @@ pub const Sema = struct {
         }
     }
 
-    fn analyzeFnDecl(self: *Sema, decl: ast.FnDecl) void {
+    fn analyzeFnDecl(self: *Sema, decl: ast.FnDecl, span: ast.Span) void {
         const return_ty = if (decl.return_type) |rt| self.resolveType(rt) else &t_void;
         const prev_return = self.fn_return_type;
         self.fn_return_type = return_ty;
@@ -399,6 +399,11 @@ pub const Sema = struct {
         defer self.popScope();
 
         for (decl.params) |param| {
+            if (self.scope.lookup(param.name)) |existing| {
+                if (existing.kind == .builtin) {
+                    self.emitError(span, "'{s}' shadows a builtin function", .{param.name});
+                }
+            }
             const ty = if (param.type_expr) |te| self.resolveType(te) else &t_err;
             const is_mut_ptr = ty.* == .pointer and ty.pointer.is_mut;
             self.define(param.name, .{
@@ -454,6 +459,11 @@ pub const Sema = struct {
             },
             .for_loop => |fl| {
                 self.analyzeExpr(fl.iterator);
+                if (self.scope.lookup(fl.binding)) |existing| {
+                    if (existing.kind == .builtin) {
+                        self.emitError(stmt.span, "'{s}' shadows a builtin function", .{fl.binding});
+                    }
+                }
                 self.pushScope();
                 self.define(fl.binding, .{
                     .ty = &t_err,
@@ -485,6 +495,10 @@ pub const Sema = struct {
         self.analyzeExpr(binding.value);
 
         if (self.scope.lookup(binding.name)) |existing| {
+            if (existing.kind == .builtin) {
+                self.emitError(span, "'{s}' shadows a builtin function", .{binding.name});
+                return;
+            }
             if (existing.is_mut) return;
         }
 
@@ -571,6 +585,11 @@ pub const Sema = struct {
             .closure => |cl| {
                 self.pushScope();
                 for (cl.params) |param| {
+                    if (self.scope.lookup(param.name)) |existing| {
+                        if (existing.kind == .builtin) {
+                            self.emitError(expr.span, "'{s}' shadows a builtin function", .{param.name});
+                        }
+                    }
                     self.define(param.name, .{
                         .ty = if (param.type_expr) |te| self.resolveType(te) else &t_err,
                         .is_mut = false,
@@ -1053,5 +1072,30 @@ test "sema: local variable push is ok" {
         \\  push(list, item)
         \\}
     );
+    try expectNoErrors(result);
+}
+
+test "sema: builtin shadow in binding" {
+    const result = testAnalyze("fn f() {\n  filter = 5\n}");
+    try expectError(result, "'filter' shadows a builtin function");
+}
+
+test "sema: builtin shadow in fn param" {
+    const result = testAnalyze("fn f(map: int) -> int = map + 1");
+    try expectError(result, "'map' shadows a builtin function");
+}
+
+test "sema: builtin shadow in for loop" {
+    const result = testAnalyze("fn f() {\n  for len in [1, 2, 3] {\n    println(len)\n  }\n}");
+    try expectError(result, "'len' shadows a builtin function");
+}
+
+test "sema: builtin shadow in closure" {
+    const result = testAnalyze("fn f() = fn(sort) sort + 1");
+    try expectError(result, "'sort' shadows a builtin function");
+}
+
+test "sema: non-builtin names are fine" {
+    const result = testAnalyze("fn f() {\n  x = 5\n  name = \"hello\"\n  count = 0\n}");
     try expectNoErrors(result);
 }

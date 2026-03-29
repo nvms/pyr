@@ -203,12 +203,11 @@ pyr is a fully functional bytecode VM language. 283 tests, 42 validated examples
 
 numbered by priority. the user may reference items by number or description. remove completed items, don't cross them out. update at end of every session.
 
-1. LSP type information for builtins/stdlib: hover on `slice`, `sort_by`, `map` etc shows no type signatures. builtins and stdlib functions need typed signatures so the LSP can surface them. the polymorphism (slice works on arrays and strings) should be expressed, not hidden
+1. LSP type information for stdlib: builtins have a structured type registry with overloads (done). stdlib module functions (std/io, std/fs, std/os, std/json, std/net, std/http, std/tls, std/gc) still need the same treatment so hover works on `io.println`, `fs.read`, etc
 2. sort_by comparator convention: currently takes a boolean predicate (true = already in order), which is surprising. either rename to `sort_when`/`sort_asc` to make the convention obvious, or switch to standard -1/0/1 comparator semantics
-3. builtin shadowing warnings: naming a variable `filter` silently shadows the builtin and you get a confusing runtime error. sema should warn or error when a local variable shadows a builtin
-4. type annotation enforcement: type annotations exist but aren't checked at compile time. either make them gradual (enforce what's annotated) or drop the pretense. the current state is annotations that can lie
-5. refactor dogfood programs to use maps where appropriate (wordfreq, logstat, jq use parallel arrays for key-value data)
-6. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat, wordfreq, csv, calc
+3. type annotation enforcement: type annotations exist but aren't checked at compile time. either make them gradual (enforce what's annotated) or drop the pretense. the current state is annotations that can lie
+4. refactor dogfood programs to use maps where appropriate (wordfreq, logstat, jq use parallel arrays for key-value data)
+5. dogfooding: continue building real programs in pyr to find rough edges. current dogfood programs: cat, grep, head, wc, jq, httpd, logstat, wordfreq, csv, calc
 
 ## implementation notes
 
