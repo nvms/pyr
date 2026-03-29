@@ -147,7 +147,7 @@ pub const Value = struct {
         return encode(.error_val, @intFromPtr(p));
     }
 
-    fn payload(self: Value) u64 {
+    pub fn payload(self: Value) u64 {
         return self.bits & PAYLOAD_MASK;
     }
 
@@ -448,7 +448,7 @@ pub const ObjStruct = struct {
     field_names: []const []const u8,
     field_count: u8,
 
-    const header_slots = (@sizeOf(ObjStruct) + @sizeOf(Value) - 1) / @sizeOf(Value);
+    pub const header_slots = (@sizeOf(ObjStruct) + @sizeOf(Value) - 1) / @sizeOf(Value);
 
     pub fn fieldValues(self: *ObjStruct) [*]Value {
         const base: [*]Value = @ptrCast(@alignCast(@as([*]u8, @ptrCast(self))));

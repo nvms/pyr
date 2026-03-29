@@ -315,4 +315,5 @@ test {
     _ = @import("pkg.zig");
     _ = @import("lsp.zig");
     _ = @import("bytecode_format.zig");
+    _ = @import("gc.zig");
 }

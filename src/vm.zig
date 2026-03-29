@@ -18,6 +18,7 @@ const ObjError = @import("value.zig").ObjError;
 const TaskState = @import("value.zig").TaskState;
 const stdlib = @import("stdlib.zig");
 const ffi_mod = @import("ffi.zig");
+const GC = @import("gc.zig").GC;
 
 pub const ConcatState = struct {
     buf: std.ArrayListUnmanaged(u8),
@@ -419,6 +420,7 @@ pub const VM = struct {
     arena_stack: *ArenaStack,
     sched: *Scheduler,
     ffi: ?*ffi_mod.FfiState,
+    gc: *GC,
 
     pub const CallFrame = struct {
         function: *ObjFunction,
@@ -436,6 +438,8 @@ pub const VM = struct {
         as.* = ArenaStack.init(alloc);
         const sc = alloc.create(Scheduler) catch @panic("oom");
         sc.* = Scheduler.init(alloc);
+        const gc_state = alloc.create(GC) catch @panic("oom");
+        gc_state.* = GC.init(alloc);
         return .{
             .frames = undefined,
             .frame_count = 0,
@@ -447,6 +451,7 @@ pub const VM = struct {
             .arena_stack = as,
             .sched = sc,
             .ffi = null,
+            .gc = gc_state,
         };
     }
 
