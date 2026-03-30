@@ -1,0 +1,44 @@
+---
+title: Polymorphism
+order: 7.5
+description: Pyr uses enums with payloads and pattern matching for polymorphic dispatch. Define variants, match on them, and use UFCS for method-style calls.
+---
+// enums model a closed set of types. each variant
+// can carry its own data.
+enum Animal {
+  Dog(str)
+  Cat(str)
+  Fish(str, int)
+}
+
+// a single function handles all variants via match.
+// the compiler enforces exhaustiveness - add a variant
+// and every match must handle it.
+fn speak(a: Animal) -> str {
+  match a {
+    Dog(name) -> "{name} says woof"
+    Cat(name) -> "{name} says meow"
+    Fish(name, bubbles) -> "{name} blows {bubbles} bubbles"
+  }
+}
+
+fn name(a: Animal) -> str {
+  match a {
+    Dog(n) -> n
+    Cat(n) -> n
+    Fish(n, _) -> n
+  }
+}
+
+fn main() {
+  // UFCS: pet.speak() calls speak(pet)
+  pet = Dog("Rex")
+  println(pet.speak())
+  println(pet.name())
+
+  // works with collections
+  pets = [Dog("Rex"), Cat("Whiskers"), Fish("Nemo", 3)]
+  for p in pets {
+    println(p.speak())
+  }
+}
