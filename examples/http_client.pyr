@@ -1,0 +1,29 @@
+imp std/http { get, post, fetch }
+imp std/io { println }
+imp std/json
+
+fn main() {
+  res = get("https://httpbin.org/get")
+  assert(res.status == 200)
+  body = json.decode(res.body)
+  assert(getattr(body, "url") == "https://httpbin.org/get")
+
+  res2 = post("https://httpbin.org/post", {
+    body: json.encode({ greeting: "hello" }),
+    headers: "Content-Type: application/json"
+  })
+  assert(res2.status == 200)
+  data2 = json.decode(res2.body)
+  echoed = getattr(data2, "data")
+  assert(contains(echoed, "greeting"))
+
+  res3 = fetch({
+    url: "https://httpbin.org/put",
+    method: "PUT",
+    headers: "Content-Type: text/plain",
+    body: "hello from pyr"
+  })
+  assert(res3.status == 200)
+
+  println("http client tests passed")
+}

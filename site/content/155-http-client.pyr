@@ -1,0 +1,31 @@
+---
+title: HTTP Client
+order: 15.5
+description: Make HTTP requests with get, post, and fetch. TLS is automatic for https URLs.
+---
+imp std/http { get, post, fetch }
+imp std/io { println }
+imp std/json
+
+fn main() {
+  // simple GET
+  res = get("https://httpbin.org/get")
+  println("status: {res.status}")
+
+  // POST with JSON body
+  res = post("https://httpbin.org/post", {
+    body: json.encode({ name: "pyr" }),
+    headers: "Content-Type: application/json"
+  })
+  data = json.decode(res.body)
+  println("echoed: {getattr(data, "data")}")
+
+  // full control with fetch
+  res = fetch({
+    url: "https://httpbin.org/put",
+    method: "PUT",
+    headers: "Content-Type: text/plain",
+    body: "hello"
+  })
+  println("put status: {res.status}")
+}

@@ -1766,6 +1766,9 @@ const stdlib_modules = [_]StdlibModule{
         .{ "json_response", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }}, .return_type = null }}, .description = "Send a JSON response with Content-Type: application/json." } },
         .{ "route", .{ .overloads = &.{.{ .params = &.{.{ .name = "method", .type_name = "str" }, .{ .name = "path", .type_name = "str" }, .{ .name = "request", .type_name = "request" }}, .return_type = "bool" }}, .description = "Check if a request matches a method and path." } },
         .{ "match_route", .{ .overloads = &.{.{ .params = &.{.{ .name = "method", .type_name = "str" }, .{ .name = "pattern", .type_name = "str" }, .{ .name = "request", .type_name = "request" }}, .return_type = "[]str?" }}, .description = "Match a request against a route pattern with `:param` segments. Returns captured values or nil." } },
+        .{ "get", .{ .overloads = &.{.{ .params = &.{.{ .name = "url", .type_name = "str" }}, .return_type = "response!" }}, .description = "Make an HTTP GET request. Returns a response with status, headers, and body." } },
+        .{ "post", .{ .overloads = &.{.{ .params = &.{.{ .name = "url", .type_name = "str" }, .{ .name = "opts", .type_name = "map" }}, .return_type = "response!" }}, .description = "Make an HTTP POST request. Options map supports body and headers fields." } },
+        .{ "fetch", .{ .overloads = &.{.{ .params = &.{.{ .name = "opts", .type_name = "map" }}, .return_type = "response!" }}, .description = "Make an HTTP request with full control. Options: url, method, headers, body." } },
     } },
     .{ .name = "tls", .functions = &.{
         .{ "upgrade", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }, .{ .name = "hostname", .type_name = "str" }}, .return_type = "tls_conn!" }}, .description = "Upgrade a TCP connection to TLS (client mode)." } },
