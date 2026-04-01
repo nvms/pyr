@@ -1,46 +1,49 @@
 imp std/term
 imp std/io { print, println }
 
-fn pin_update(lines: int, text: str) {
-  if lines > 0 {
-    term.up(lines)
-  }
-  term.clear_line()
-  print(text)
-  if lines > 0 {
-    term.down(lines)
-    term.move_to_col(0)
-  }
-}
-
 fn main() {
   if !term.is_tty() {
     println("pin demo requires a terminal")
     return nil
   }
 
+  rows = term.rows()
   term.hide_cursor()
 
-  // reserve 2 lines at the bottom for status
-  println("")
-  println("")
+  // set scroll region to everything except the bottom 2 lines
+  term.scroll_region(0, rows - 3)
+
+  // move cursor into the scroll region
+  term.move(0, 0)
 
   for i in range(50) {
-    // update pinned status (2 lines up from cursor)
-    pin_update(2, term.style("[{i}/50]", { fg: "cyan" }) + " processing...")
-    pin_update(1, "  current: item_{i}.dat")
-
-    // scroll log output above (move to line above pins, print, come back)
-    term.save()
-    term.up(3)
+    // print log line - scrolls within the region
     println("  processed item_{i}")
+
+    // update pinned status below the scroll region
+    term.save()
+    term.move(rows - 2, 0)
+    term.clear_line()
+    print(term.style("[{i}/50]", { fg: "cyan" }) + " processing...")
+    term.move(rows - 1, 0)
+    term.clear_line()
+    print("  current: item_{i}.dat")
     term.restore()
 
     for j in range(200000) {}
   }
 
-  pin_update(2, term.style("[50/50]", { fg: "green" }) + " complete")
-  pin_update(1, "")
+  // final status
+  term.save()
+  term.move(rows - 2, 0)
+  term.clear_line()
+  print(term.style("[50/50]", { fg: "green" }) + " complete")
+  term.move(rows - 1, 0)
+  term.clear_line()
+  term.restore()
+
+  term.reset_scroll()
+  term.move(rows - 1, 0)
   term.show_cursor()
   println("")
 }
