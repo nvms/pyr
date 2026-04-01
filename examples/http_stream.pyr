@@ -1,0 +1,25 @@
+imp std/http { stream_open, stream_read, stream_close }
+imp std/io { print, println }
+
+fn main() {
+  reader = stream_open({
+    url: "https://httpbin.org/stream/3",
+    method: "GET"
+  })
+
+  initial = getattr(reader, "initial")
+  if len(initial) > 0 {
+    print(initial)
+  }
+
+  mut chunks = 0
+  while true {
+    chunk = stream_read(reader)
+    if chunk == nil { break }
+    chunks = chunks + 1
+  }
+
+  stream_close(reader)
+  assert(chunks > 0)
+  println("streamed {chunks} chunks")
+}

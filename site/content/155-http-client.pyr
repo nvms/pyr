@@ -1,14 +1,14 @@
 ---
 title: HTTP Client
 order: 15.5
-description: Make HTTP requests with get, post, and fetch. TLS is automatic for https URLs.
+description: Make HTTP requests with get, post, and fetch. Streaming reads for SSE and chunked responses. TLS is automatic for https URLs.
 ---
-imp std/http { get, post, fetch }
-imp std/io { println }
+imp std/http { get, post, fetch, stream_open, stream_read, stream_close }
+imp std/io { print, println }
 imp std/json
 
 fn main() {
-  // simple GET
+  // simple GET - returns { status, headers, body }
   res = get("https://httpbin.org/get")
   println("status: {res.status}")
 
@@ -20,7 +20,7 @@ fn main() {
   data = json.decode(res.body)
   println("echoed: {getattr(data, "data")}")
 
-  // full control with fetch
+  // full control with fetch - any HTTP method
   res = fetch({
     url: "https://httpbin.org/put",
     method: "PUT",
@@ -28,4 +28,18 @@ fn main() {
     body: "hello"
   })
   println("put status: {res.status}")
+
+  // streaming - read chunks as they arrive
+  reader = stream_open({
+    url: "https://httpbin.org/stream/3",
+    method: "GET"
+  })
+  initial = getattr(reader, "initial")
+  if len(initial) > 0 { print(initial) }
+  while true {
+    chunk = stream_read(reader)
+    if chunk == nil { break }
+    print(chunk)
+  }
+  stream_close(reader)
 }
