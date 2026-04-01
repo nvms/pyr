@@ -1,0 +1,39 @@
+---
+title: Terminal
+order: 16.5
+description: Low-level terminal control - cursor movement, colors, raw input, scroll regions. All functions are TTY-aware and degrade gracefully when piped.
+---
+imp std/term
+imp std/io { print, println }
+
+fn main() {
+  // check if we're in a real terminal
+  if !term.is_tty() {
+    println("terminal demo requires a tty")
+    return nil
+  }
+
+  // terminal dimensions
+  s = term.size()
+  println("terminal: {s.cols}x{s.rows}")
+
+  // styled text - returns plain text if not a tty
+  err = term.style("error", { fg: "red", bold: true })
+  warn = term.style("warn", { fg: "yellow" })
+  ok = term.style("ok", { fg: "green" })
+  println("{err}: something broke")
+  println("{warn}: disk almost full")
+  println("{ok}: all systems go")
+
+  // cursor control for in-place updates
+  term.hide_cursor()
+  for i in range(11) {
+    term.clear_line()
+    pct = i * 10
+    print("[{pct}%] working...")
+    for j in range(200000) {}
+  }
+  term.clear_line()
+  println(term.style("done", { fg: "green", bold: true }))
+  term.show_cursor()
+}

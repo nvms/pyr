@@ -1,0 +1,33 @@
+imp std/term
+imp std/io { println }
+
+fn main() {
+  if !term.is_tty() {
+    println("style demo requires a terminal")
+    return nil
+  }
+
+  println(term.style("bold text", { bold: true }))
+  println(term.style("dim text", { dim: true }))
+  println(term.style("italic text", { italic: true }))
+  println(term.style("underlined text", { underline: true }))
+
+  println(term.style("red", { fg: "red" }))
+  println(term.style("green", { fg: "green" }))
+  println(term.style("blue", { fg: "blue" }))
+  println(term.style("yellow", { fg: "yellow" }))
+  println(term.style("cyan", { fg: "cyan" }))
+  println(term.style("magenta", { fg: "magenta" }))
+
+  println(term.style(" white on red ", { fg: "white", bg: "red", bold: true }))
+  println(term.style(" black on green ", { fg: "black", bg: "green" }))
+
+  err = term.style("error", { fg: "red", bold: true })
+  warn = term.style("warn", { fg: "yellow", bold: true })
+  info = term.style("info", { fg: "cyan" })
+  println("{err}: something broke")
+  println("{warn}: disk almost full")
+  println("{info}: server started on :8080")
+
+  println("style demo done")
+}

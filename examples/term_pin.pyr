@@ -1,0 +1,46 @@
+imp std/term
+imp std/io { print, println }
+
+fn pin_update(lines: int, text: str) {
+  if lines > 0 {
+    term.up(lines)
+  }
+  term.clear_line()
+  print(text)
+  if lines > 0 {
+    term.down(lines)
+    term.move_to_col(0)
+  }
+}
+
+fn main() {
+  if !term.is_tty() {
+    println("pin demo requires a terminal")
+    return nil
+  }
+
+  term.hide_cursor()
+
+  // reserve 2 lines at the bottom for status
+  println("")
+  println("")
+
+  for i in range(50) {
+    // update pinned status (2 lines up from cursor)
+    pin_update(2, term.style("[{i}/50]", { fg: "cyan" }) + " processing...")
+    pin_update(1, "  current: item_{i}.dat")
+
+    // scroll log output above (move to line above pins, print, come back)
+    term.save()
+    term.up(3)
+    println("  processed item_{i}")
+    term.restore()
+
+    for j in range(200000) {}
+  }
+
+  pin_update(2, term.style("[50/50]", { fg: "green" }) + " complete")
+  pin_update(1, "")
+  term.show_cursor()
+  println("")
+}

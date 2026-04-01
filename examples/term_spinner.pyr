@@ -1,0 +1,28 @@
+imp std/term
+imp std/io { print, println }
+
+fn spin(frames: []str, message: str, iterations: int) {
+  term.hide_cursor()
+  for i in range(iterations) {
+    frame = frames[i % len(frames)]
+    term.clear_line()
+    styled = term.style(frame, { fg: "cyan", bold: true })
+    print("{styled} {message}")
+    for j in range(300000) {}
+  }
+  term.clear_line()
+  done = term.style("done", { fg: "green", bold: true })
+  println("{done} {message}")
+  term.show_cursor()
+}
+
+fn main() {
+  if !term.is_tty() {
+    println("spinner requires a terminal")
+    return nil
+  }
+
+  spin(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], "connecting...", 40)
+  spin(["|", "/", "-", "\\"], "compiling...", 30)
+  spin([".", "..", "..."], "uploading...", 30)
+}

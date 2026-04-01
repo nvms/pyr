@@ -1,0 +1,40 @@
+imp std/term
+imp std/io { print, println }
+
+fn bar(current: int, total: int, width: int) -> str {
+  pct = current * 100 / total
+  filled = current * width / total
+  mut out = "["
+  for i in range(width) {
+    if i < filled {
+      out = out + "#"
+    } else {
+      out = out + " "
+    }
+  }
+  out = out + "] {pct}%"
+  out
+}
+
+fn pin_set(text: str) {
+  term.clear_line()
+  print(text)
+}
+
+fn main() {
+  if !term.is_tty() {
+    println("progress bar requires a terminal")
+    return nil
+  }
+
+  term.hide_cursor()
+
+  for i in range(101) {
+    pin_set(bar(i, 100, 30))
+    for j in range(200000) {}
+  }
+
+  term.show_cursor()
+  println("")
+  println("done")
+}
