@@ -25,6 +25,7 @@ pub const fns = [_]root.NativeDef{
     .{ .name = "raw", .arity = 0, .func = &termRaw },
     .{ .name = "cooked", .arity = 0, .func = &termCooked },
     .{ .name = "read_key", .arity = 0, .func = &termReadKey },
+    .{ .name = "cursor_row", .arity = 0, .func = &termCursorRow },
     .{ .name = "flush", .arity = 0, .func = &termFlush },
     .{ .name = "style", .arity = 2, .func = &termStyle },
 };
@@ -223,6 +224,37 @@ fn termReadKey(alloc: std.mem.Allocator, _: []const Value) Value {
     }
 
     return ObjString.create(alloc, alloc.dupe(u8, buf[0..n]) catch "").toValue();
+}
+
+fn termCursorRow(_: std.mem.Allocator, _: []const Value) Value {
+    if (!std.posix.isatty(std.posix.STDOUT_FILENO)) return Value.initInt(0);
+
+    const orig = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return Value.initInt(0);
+    var raw_attrs = orig;
+    raw_attrs.lflag.ECHO = false;
+    raw_attrs.lflag.ICANON = false;
+    raw_attrs.cc[@intFromEnum(std.posix.V.MIN)] = 0;
+    raw_attrs.cc[@intFromEnum(std.posix.V.TIME)] = 1;
+    std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw_attrs) catch return Value.initInt(0);
+    defer std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, orig) catch {};
+
+    _ = std.posix.write(std.posix.STDOUT_FILENO, "\x1b[6n") catch return Value.initInt(0);
+
+    var buf: [32]u8 = undefined;
+    var pos: usize = 0;
+    while (pos < buf.len) {
+        const n = std.posix.read(std.posix.STDIN_FILENO, buf[pos .. pos + 1]) catch break;
+        if (n == 0) break;
+        if (buf[pos] == 'R') break;
+        pos += 1;
+    }
+
+    // response is \x1b[row;colR
+    const resp = buf[0..pos];
+    const bracket = std.mem.indexOfScalar(u8, resp, '[') orelse return Value.initInt(0);
+    const semi = std.mem.indexOfScalar(u8, resp, ';') orelse return Value.initInt(0);
+    const row = std.fmt.parseInt(i64, resp[bracket + 1 .. semi], 10) catch return Value.initInt(0);
+    return Value.initInt(row - 1);
 }
 
 fn termFlush(_: std.mem.Allocator, _: []const Value) Value {

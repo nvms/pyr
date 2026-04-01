@@ -8,24 +8,28 @@ fn main() {
   }
 
   rows = term.rows()
+  start = term.cursor_row()
+  log_end = rows - 3
+  status_row = rows - 2
+
+  // push content down to make room if we're near the bottom
+  needed = rows - start
+  for i in range(needed) {
+    println("")
+  }
+
   term.hide_cursor()
-
-  // set scroll region to everything except the bottom 2 lines
-  term.scroll_region(0, rows - 3)
-
-  // move cursor into the scroll region
-  term.move(0, 0)
+  term.scroll_region(start, log_end)
+  term.move(start, 0)
 
   for i in range(50) {
-    // print log line - scrolls within the region
     println("  processed item_{i}")
 
-    // update pinned status below the scroll region
     term.save()
-    term.move(rows - 2, 0)
+    term.move(status_row, 0)
     term.clear_line()
     print(term.style("[{i}/50]", { fg: "cyan" }) + " processing...")
-    term.move(rows - 1, 0)
+    term.move(status_row + 1, 0)
     term.clear_line()
     print("  current: item_{i}.dat")
     term.restore()
@@ -33,17 +37,16 @@ fn main() {
     for j in range(200000) {}
   }
 
-  // final status
   term.save()
-  term.move(rows - 2, 0)
+  term.move(status_row, 0)
   term.clear_line()
   print(term.style("[50/50]", { fg: "green" }) + " complete")
-  term.move(rows - 1, 0)
+  term.move(status_row + 1, 0)
   term.clear_line()
   term.restore()
 
   term.reset_scroll()
-  term.move(rows - 1, 0)
   term.show_cursor()
+  term.move(status_row + 1, 0)
   println("")
 }
