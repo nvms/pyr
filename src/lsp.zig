@@ -1769,6 +1769,9 @@ const stdlib_modules = [_]StdlibModule{
         .{ "get", .{ .overloads = &.{.{ .params = &.{.{ .name = "url", .type_name = "str" }}, .return_type = "response!" }}, .description = "Make an HTTP GET request. Returns a response with status, headers, and body." } },
         .{ "post", .{ .overloads = &.{.{ .params = &.{.{ .name = "url", .type_name = "str" }, .{ .name = "opts", .type_name = "map" }}, .return_type = "response!" }}, .description = "Make an HTTP POST request. Options map supports body and headers fields." } },
         .{ "fetch", .{ .overloads = &.{.{ .params = &.{.{ .name = "opts", .type_name = "map" }}, .return_type = "response!" }}, .description = "Make an HTTP request with full control. Options: url, method, headers, body." } },
+        .{ "stream_open", .{ .overloads = &.{.{ .params = &.{.{ .name = "opts", .type_name = "map" }}, .return_type = "reader!" }}, .description = "Open a streaming HTTP connection. Returns a reader with conn and initial body data. Use with stream_read/stream_close." } },
+        .{ "stream_read", .{ .overloads = &.{.{ .params = &.{.{ .name = "reader", .type_name = "reader" }}, .return_type = "str?" }}, .description = "Read the next chunk from a streaming connection. Returns nil when done." } },
+        .{ "stream_close", .{ .overloads = &.{.{ .params = &.{.{ .name = "reader", .type_name = "reader" }}, .return_type = null }}, .description = "Close a streaming connection." } },
     } },
     .{ .name = "tls", .functions = &.{
         .{ "upgrade", .{ .overloads = &.{.{ .params = &.{.{ .name = "conn", .type_name = "socket" }, .{ .name = "hostname", .type_name = "str" }}, .return_type = "tls_conn!" }}, .description = "Upgrade a TCP connection to TLS (client mode)." } },

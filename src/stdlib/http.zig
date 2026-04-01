@@ -15,6 +15,9 @@ pub const fns = [_]root.NativeDef{
     .{ .name = "get", .arity = 1, .func = &httpGet },
     .{ .name = "post", .arity = 2, .func = &httpPost },
     .{ .name = "fetch", .arity = 1, .func = &httpFetch },
+    .{ .name = "stream_open", .arity = 1, .func = &httpStreamOpen },
+    .{ .name = "stream_read", .arity = 1, .func = &httpStreamRead },
+    .{ .name = "stream_close", .arity = 1, .func = &httpStreamClose },
 };
 
 fn httpParseRequest(alloc: std.mem.Allocator, args: []const Value) Value {
@@ -320,4 +323,145 @@ fn buildResponse(alloc: std.mem.Allocator, status: []const u8, content_type: []c
     resp.appendSlice(alloc, "\r\nConnection: close\r\n\r\n") catch return Value.initNil();
     resp.appendSlice(alloc, body) catch return Value.initNil();
     return ObjString.create(alloc, resp.items).toValue();
+}
+
+fn httpStreamOpen(alloc: std.mem.Allocator, args: []const Value) Value {
+    const opts = args[0];
+    const url_str = getStringField(opts, "url") orelse return root.makeIoError(alloc, "stream requires url field");
+    const method = getStringField(opts, "method") orelse "GET";
+    const extra_headers = getStringField(opts, "headers");
+    const body = getStringField(opts, "body");
+
+    const parsed = parseUrl(url_str) orelse return root.makeIoError(alloc, "invalid url");
+    const host_owned = alloc.dupe(u8, parsed.host) catch return root.makeIoError(alloc, "out of memory");
+    const host_val = ObjString.create(alloc, host_owned).toValue();
+    const port_val = Value.initInt(@intCast(parsed.port));
+    const connect_args = [_]Value{ host_val, port_val };
+    const conn_val = net.fns[2].func(alloc, &connect_args);
+    if (conn_val.tag() == .enum_) return conn_val;
+
+    var final_conn = conn_val;
+    if (parsed.is_tls) {
+        const hostname_val = ObjString.create(alloc, host_owned).toValue();
+        const tls_args = [_]Value{ conn_val, hostname_val };
+        final_conn = tls_mod.fns[0].func(alloc, &tls_args);
+        if (final_conn.tag() == .enum_) return final_conn;
+    }
+
+    var req = std.ArrayListUnmanaged(u8){};
+    req.appendSlice(alloc, method) catch return root.makeIoError(alloc, "out of memory");
+    req.appendSlice(alloc, " ") catch {};
+    req.appendSlice(alloc, parsed.path) catch {};
+    req.appendSlice(alloc, " HTTP/1.1\r\nHost: ") catch {};
+    req.appendSlice(alloc, parsed.host) catch {};
+    req.appendSlice(alloc, "\r\nConnection: close\r\n") catch {};
+    if (extra_headers) |hdrs| {
+        if (hdrs.len > 0) {
+            req.appendSlice(alloc, hdrs) catch {};
+            if (!std.mem.endsWith(u8, hdrs, "\r\n"))
+                req.appendSlice(alloc, "\r\n") catch {};
+        }
+    }
+    if (body) |b| {
+        var len_buf: [20]u8 = undefined;
+        const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{b.len}) catch "0";
+        req.appendSlice(alloc, "Content-Length: ") catch {};
+        req.appendSlice(alloc, len_str) catch {};
+        req.appendSlice(alloc, "\r\n") catch {};
+    }
+    req.appendSlice(alloc, "\r\n") catch {};
+    if (body) |b| req.appendSlice(alloc, b) catch {};
+
+    const req_str = ObjString.create(alloc, req.items).toValue();
+    const write_args = [_]Value{ final_conn, req_str };
+    _ = net.fns[4].func(alloc, &write_args);
+
+    // read until we get past the HTTP headers
+    var header_buf = std.ArrayListUnmanaged(u8){};
+    while (true) {
+        const read_args = [_]Value{final_conn};
+        const chunk = net.fns[3].func(alloc, &read_args);
+        if (chunk.tag() != .string) break;
+        header_buf.appendSlice(alloc, chunk.asString().chars) catch break;
+        if (std.mem.indexOf(u8, header_buf.items, "\r\n\r\n")) |_| break;
+    }
+
+    var initial_body: []const u8 = "";
+    if (std.mem.indexOf(u8, header_buf.items, "\r\n\r\n")) |hdr_end| {
+        const raw_body = header_buf.items[hdr_end + 4 ..];
+        initial_body = stripChunkedFraming(alloc, raw_body);
+    }
+
+    const field_names = alloc.alloc([]const u8, 2) catch return root.makeIoError(alloc, "out of memory");
+    field_names[0] = "conn";
+    field_names[1] = "initial";
+    var values: [2]Value = .{
+        final_conn,
+        ObjString.create(alloc, alloc.dupe(u8, initial_body) catch "").toValue(),
+    };
+    return ObjStruct.create(alloc, "_StreamState", field_names, &values).toValue();
+}
+
+fn httpStreamRead(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag() != .struct_) return Value.initNil();
+    const state = args[0].asStruct();
+    const conn = state.getField("conn") orelse return Value.initNil();
+    const read_args = [_]Value{conn};
+    const result = net.fns[3].func(alloc, &read_args);
+    if (result.tag() != .string) return Value.initNil();
+    const raw = result.asString().chars;
+    const cleaned = stripChunkedFraming(alloc, raw);
+    if (cleaned.len == 0) return Value.initNil();
+    return ObjString.create(alloc, cleaned).toValue();
+}
+
+fn stripChunkedFraming(alloc: std.mem.Allocator, data: []const u8) []const u8 {
+    if (data.len == 0) return data;
+    // if the data starts with a hex size line, strip chunked framing
+    if (isHexLine(data)) {
+        var result = std.ArrayListUnmanaged(u8){};
+        var pos: usize = 0;
+        while (pos < data.len) {
+            const line_end = std.mem.indexOf(u8, data[pos..], "\r\n") orelse break;
+            const size_str = std.mem.trimRight(u8, data[pos .. pos + line_end], " \t");
+            if (size_str.len == 0) {
+                pos += line_end + 2;
+                continue;
+            }
+            const chunk_size = std.fmt.parseInt(usize, size_str, 16) catch {
+                result.appendSlice(alloc, data[pos..]) catch {};
+                break;
+            };
+            if (chunk_size == 0) break;
+            pos += line_end + 2;
+            if (pos + chunk_size > data.len) {
+                result.appendSlice(alloc, data[pos..]) catch {};
+                break;
+            }
+            result.appendSlice(alloc, data[pos .. pos + chunk_size]) catch {};
+            pos += chunk_size;
+            if (pos + 2 <= data.len and data[pos] == '\r' and data[pos + 1] == '\n')
+                pos += 2;
+        }
+        return result.items;
+    }
+    return alloc.dupe(u8, data) catch data;
+}
+
+fn isHexLine(data: []const u8) bool {
+    const line_end = std.mem.indexOf(u8, data, "\r\n") orelse return false;
+    if (line_end == 0) return false;
+    for (data[0..line_end]) |c| {
+        if (!((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')))
+            return false;
+    }
+    return true;
+}
+
+fn httpStreamClose(alloc: std.mem.Allocator, args: []const Value) Value {
+    if (args[0].tag() != .struct_) return Value.initNil();
+    const state = args[0].asStruct();
+    const conn = state.getField("conn") orelse return Value.initNil();
+    const close_args = [_]Value{conn};
+    return net.fns[5].func(alloc, &close_args);
 }
