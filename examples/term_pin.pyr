@@ -7,46 +7,24 @@ fn main() {
     return nil
   }
 
-  rows = term.rows()
-  start = term.cursor_row()
-  log_end = rows - 3
-  status_row = rows - 2
-
-  // push content down to make room if we're near the bottom
-  needed = rows - start
-  for i in range(needed) {
-    println("")
-  }
-
   term.hide_cursor()
-  term.scroll_region(start, log_end)
-  term.move(start, 0)
 
   for i in range(50) {
+    // log line scrolls normally
     println("  processed item_{i}")
 
-    term.save()
-    term.move(status_row, 0)
+    // jump down 1 line, write status, jump back up 1 line
     term.clear_line()
-    print(term.style("[{i}/50]", { fg: "cyan" }) + " processing...")
-    term.move(status_row + 1, 0)
-    term.clear_line()
-    print("  current: item_{i}.dat")
-    term.restore()
+    print(term.style("  [{i + 1}/50]", { fg: "cyan" }) + " processing... item_{i}.dat")
+    term.up(1)
+    term.move_to_col(0)
 
     for j in range(200000) {}
   }
 
-  term.save()
-  term.move(status_row, 0)
+  // move to the status line and finalize
+  term.down(1)
   term.clear_line()
-  print(term.style("[50/50]", { fg: "green" }) + " complete")
-  term.move(status_row + 1, 0)
-  term.clear_line()
-  term.restore()
-
-  term.reset_scroll()
+  println(term.style("  [50/50]", { fg: "green" }) + " complete")
   term.show_cursor()
-  term.move(status_row + 1, 0)
-  println("")
 }
