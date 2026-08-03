@@ -62,6 +62,7 @@ fn parse_csv_line(line: str) {
   fields
 }
 
+// finds columns, of course
 fn find_col(headers, name: str) {
   for i in range(len(headers)) {
     if headers[i] == name {

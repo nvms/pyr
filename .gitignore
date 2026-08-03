@@ -6,6 +6,8 @@ zig-cache/
 zig-out/
 .zig-cache/
 .handoff/
+.claude/
+test_udp
 examples/*.zig
 site/dist/
 site/node_modules/

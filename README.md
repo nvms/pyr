@@ -1,3 +1,6 @@
+> [!NOTE]
+> This project is archived. It was an experiment that has run its course.
+
 <p align="center">
   <img src=".github/logo.svg" width="120" height="120" style="border-radius: 16px" />
 </p>
